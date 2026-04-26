@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceKind {
     Conversation,
+    ChannelProject,
     ChannelThread,
     DocumentAnalysis,
     PortalProject,
@@ -16,6 +17,7 @@ impl WorkspaceKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Conversation => "conversation",
+            Self::ChannelProject => "channel_project",
             Self::ChannelThread => "channel_thread",
             Self::DocumentAnalysis => "document_analysis",
             Self::PortalProject => "portal_project",

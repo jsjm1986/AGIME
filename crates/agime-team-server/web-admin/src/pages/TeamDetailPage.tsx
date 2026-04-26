@@ -24,6 +24,9 @@ const ChatPanel = lazy(() =>
 const CollaborationPanel = lazy(() =>
   import('../components/team/TeamChannelsPanel').then((module) => ({ default: module.TeamChannelsPanel })),
 );
+const ScheduledTasksSection = lazy(() =>
+  import('../components/team/ScheduledTasksSection').then((module) => ({ default: module.ScheduledTasksSection })),
+);
 const ToolkitSection = lazy(() =>
   import('../components/team/ToolkitSection').then((module) => ({ default: module.ToolkitSection })),
 );
@@ -243,6 +246,8 @@ export function TeamDetailPage() {
             />
           </div>
         );
+      case 'scheduled-tasks':
+        return <ScheduledTasksSection teamId={team.id} canManage={canManage} />;
       case 'agent':
         return (
           <AgentSection

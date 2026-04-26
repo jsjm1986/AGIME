@@ -53,6 +53,7 @@ export const PORTAL_STATUS_MAP: Record<string, StatusVariant> = {
 export const TASK_STATUS_MAP: Record<string, StatusVariant> = {
   pending: 'neutral',
   approved: 'info',
+  queued: 'warning',
   running: 'success',
   completed: 'success',
   rejected: 'error',

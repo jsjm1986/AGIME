@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
+import i18n from '../../i18n';
 import {
   Archive,
   ArrowLeft,
@@ -46,6 +47,8 @@ import {
   chatApi,
   type ChatChannelAgentAutonomyMode,
   type ChatChannelDetail,
+  type DelegationRuntime,
+  type DelegationRuntimeEventPayload,
   type ChatChannelDisplayKind,
   type ChatChannelDisplayStatus,
   type ChatChannelUserPrefs,
@@ -54,6 +57,8 @@ import {
   type ChatChannelMessage,
   type ChatChannelMessageSurface,
   type ChatChannelSummary,
+  type ChatChannelThread,
+  type ChatChannelType,
   type ChatChannelThreadState,
   type ChatChannelVisibility,
   type ChannelMention,
@@ -74,11 +79,16 @@ import type { TeamMember } from '../../api/types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 
+function bilingual(zh: string, en: string): string {
+  const lang = i18n.resolvedLanguage || i18n.language || 'zh';
+  return lang.toLowerCase().startsWith('en') ? en : zh;
+}
+
 type ChannelRenderMessage = ChatChannelMessage & {
   thinking?: string;
   toolCalls?: ToolCallInfo[];
   turn?: { current: number; max: number };
-  compaction?: { strategy: string; before: number; after: number };
+  compaction?: { strategy: string; before: number; after: number; phase?: string; reason?: string };
   isStreaming?: boolean;
 };
 
@@ -86,6 +96,7 @@ type ChannelDisplayView = 'work' | 'update';
 type CollaborationStatusFilter = 'all' | 'proposed' | 'active' | 'awaiting_confirmation' | 'adopted' | 'rejected';
 type CollaborationSurfaceFilter = 'all' | 'temporary' | 'issue';
 type InspectorTabKey = 'documents' | 'ai_outputs' | 'members' | 'settings';
+type SidePanelMode = InspectorTabKey | 'workspace' | 'thread';
 
 interface TeamChannelsPanelProps {
   teamId: string;
@@ -97,7 +108,10 @@ interface ChannelFormState {
   name: string;
   description: string;
   visibility: ChatChannelVisibility;
+  channelType: ChatChannelType;
   defaultAgentId: string;
+  workspaceDisplayName: string;
+  repoDefaultBranch: string;
   agentAutonomyMode: ChatChannelAgentAutonomyMode;
   channelGoal: string;
   participantNotes: string;
@@ -115,6 +129,11 @@ interface PendingCollaborationActionConfirm {
   note?: string;
   variant?: 'default' | 'destructive';
   onConfirm: () => Promise<void> | void;
+}
+
+function workspaceFileSupportsBrowserPreview(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+  return lower.endsWith('.html') || lower.endsWith('.htm');
 }
 
 type ComposerMentionComposer = 'root' | 'thread';
@@ -197,7 +216,7 @@ const FILE_ACCEPT = [
   '.svg',
 ].join(',');
 
-const CAPABILITY_BLOCK_HEADER = '请优先使用以下能力完成本轮任务：';
+const CAPABILITY_BLOCK_HEADER = bilingual('请优先使用以下能力完成本轮任务：', 'Please prioritize using the following capabilities in this turn:');
 const DEFAULT_CHANNEL_AGENT_VALUE = '__default_channel_agent__';
 
 function buildCapabilityDraft(refs: string[], remainder: string): string {
@@ -222,23 +241,23 @@ function inferCapabilityNameFromRef(ref: string): string {
 function renderAiWorkbenchGroupLabel(group?: string | null): string {
   switch (group) {
     case 'draft':
-      return '草稿';
+      return bilingual('草稿', 'Draft');
     case 'report':
-      return '报告';
+      return bilingual('报告', 'Report');
     case 'summary':
-      return '总结';
+      return bilingual('总结', 'Summary');
     case 'review':
-      return '审查';
+      return bilingual('审查', 'Review');
     case 'plan':
-      return '计划';
+      return bilingual('计划', 'Plan');
     case 'research':
-      return '研究';
+      return bilingual('研究', 'Research');
     case 'artifact':
-      return '产物';
+      return bilingual('产物', 'Artifact');
     case 'code':
-      return '代码';
+      return bilingual('代码', 'Code');
     default:
-      return '其他';
+      return bilingual('其他', 'Other');
   }
 }
 
@@ -261,7 +280,10 @@ function emptyForm(defaultAgentId = ''): ChannelFormState {
     name: '',
     description: '',
     visibility: 'team_public',
+    channelType: 'general',
     defaultAgentId,
+    workspaceDisplayName: '',
+    repoDefaultBranch: 'main',
     agentAutonomyMode: 'standard',
     channelGoal: '',
     participantNotes: '',
@@ -272,7 +294,186 @@ function emptyForm(defaultAgentId = ''): ChannelFormState {
 }
 
 function channelVisibilityLabel(visibility: ChatChannelVisibility) {
-  return visibility === 'team_private' ? '私密频道' : '公开频道';
+  return visibility === 'team_private'
+    ? bilingual('私密频道', 'Private channel')
+    : bilingual('公开频道', 'Public channel');
+}
+
+function channelTypeLabel(channelType: ChatChannelType) {
+  if (channelType === 'coding') return bilingual('编程项目频道', 'Coding project channel');
+  if (channelType === 'scheduled_task') return bilingual('定时任务频道', 'Scheduled task channel');
+  return bilingual('普通协作频道', 'General collaboration channel');
+}
+
+function workspaceLifecycleLabel(state?: string | null) {
+  switch (state) {
+    case 'detached':
+      return bilingual('已解绑', 'Detached');
+    case 'archived':
+      return bilingual('已归档', 'Archived');
+    case 'pending_delete':
+      return bilingual('待删除', 'Pending deletion');
+    case 'deleted':
+      return bilingual('已删除', 'Deleted');
+    case 'active_bound':
+      return bilingual('使用中', 'Active');
+    default:
+      return bilingual('未登记', 'Untracked');
+  }
+}
+
+function delegationRuntimeStatusTone(status?: string | null) {
+  switch ((status || '').toLowerCase()) {
+    case 'completed':
+      return 'bg-status-success-bg text-status-success-text';
+    case 'failed':
+      return 'bg-status-error-bg text-status-error-text';
+    case 'running':
+      return 'bg-status-info-bg text-status-info-text';
+    case 'pending':
+      return 'bg-status-warning-bg text-status-warning-text';
+    default:
+      return 'bg-muted text-muted-foreground';
+  }
+}
+
+function delegationRuntimeStatusLabel(status?: string | null) {
+  switch ((status || '').toLowerCase()) {
+    case 'completed':
+      return bilingual('已完成', 'Completed');
+    case 'failed':
+      return bilingual('失败', 'Failed');
+    case 'running':
+      return bilingual('运行中', 'Running');
+    case 'pending':
+      return bilingual('等待中', 'Pending');
+    default:
+      return bilingual('空闲', 'Idle');
+  }
+}
+
+function delegationWorkerRoleLabel(role?: string | null) {
+  switch ((role || '').toLowerCase()) {
+    case 'leader':
+      return bilingual('协调者', 'Leader');
+    case 'subagent':
+      return bilingual('独立任务', 'Single worker');
+    case 'swarm_worker':
+      return bilingual('并行任务', 'Parallel worker');
+    case 'validation_worker':
+      return bilingual('验证任务', 'Validation worker');
+    default:
+      return bilingual('任务', 'Worker');
+  }
+}
+
+function delegationWorkerTitle(worker: DelegationRuntime['workers'][number]) {
+  const raw = (worker.title || worker.worker_id || '').trim();
+  const index =
+    raw.match(/^worker_(\d+)(?:_|$)/i)?.[1] ||
+    (worker.worker_id || '').match(/^worker_(\d+)(?:_|$)/i)?.[1];
+  if (index) {
+    return `Worker ${index}`;
+  }
+  if ((!raw || raw === worker.worker_id) && worker.role === 'subagent') {
+    return 'Worker';
+  }
+  return raw || 'Worker';
+}
+
+function delegationLeaderTitle(title?: string | null) {
+  const raw = (title || '').trim();
+  if (!raw || raw === 'Leader') {
+    return bilingual('协调者', 'Leader');
+  }
+  return raw;
+}
+
+function buildDelegationRuntimeSummary(runtime: DelegationRuntime | null): string {
+  if (!runtime) return bilingual('无委托', 'No delegation');
+  const running = runtime.workers.filter((worker) => worker.status === 'running').length;
+  const pending = runtime.workers.filter((worker) => worker.status === 'pending').length;
+  const completed = runtime.workers.filter((worker) => worker.status === 'completed').length;
+  const failed = runtime.workers.filter((worker) => worker.status === 'failed').length;
+  if (running > 0) {
+    return bilingual(
+      `${running} worker(s) running${completed > 0 ? `, ${completed} completed` : ''}`,
+      `${running} worker(s) running${completed > 0 ? `, ${completed} completed` : ''}`,
+    );
+  }
+  if (pending > 0) {
+    return bilingual(`${pending} 个 worker 等待中`, `${pending} worker(s) pending`);
+  }
+  if (failed > 0) {
+    return completed > 0
+      ? bilingual(
+          `${completed} worker(s) completed, ${failed} failed`,
+          `${completed} worker(s) completed, ${failed} failed`,
+        )
+      : bilingual(`${failed} 个 worker 失败`, `${failed} worker(s) failed`);
+  }
+  return bilingual(
+    `${completed || runtime.workers.length} worker(s) completed`,
+    `${completed || runtime.workers.length} worker(s) completed`,
+  );
+}
+
+function applyDelegationRuntimePatch(
+  previous: DelegationRuntime | null,
+  payload: DelegationRuntimeEventPayload,
+): DelegationRuntime {
+  const base: DelegationRuntime = previous
+    ? { ...previous, workers: [...previous.workers] }
+    : {
+        active_run: true,
+        mode: payload.mode || 'subagent',
+        status: payload.status || 'running',
+        summary: payload.summary || null,
+        leader: null,
+        workers: [],
+      };
+
+  if (payload.mode) base.mode = payload.mode;
+  if (payload.status) base.status = payload.status;
+  if (typeof payload.summary === 'string') base.summary = payload.summary;
+
+  if (payload.worker) {
+    const workerIndex = base.workers.findIndex(
+      (worker) => worker.worker_id === payload.worker!.worker_id,
+    );
+    if (workerIndex >= 0) {
+      base.workers[workerIndex] = {
+        ...base.workers[workerIndex],
+        ...payload.worker,
+        summary: payload.worker.summary ?? base.workers[workerIndex].summary ?? undefined,
+        result_summary:
+          payload.worker.result_summary ??
+          base.workers[workerIndex].result_summary ??
+          undefined,
+        error: payload.worker.error ?? base.workers[workerIndex].error ?? undefined,
+      };
+    } else {
+      base.workers.push(payload.worker);
+    }
+  }
+
+  const hasRunning = base.workers.some((worker) => worker.status === 'running');
+  const hasPending = base.workers.some((worker) => worker.status === 'pending');
+  const hasFailed = base.workers.some((worker) => worker.status === 'failed');
+  if (hasRunning) {
+    base.status = 'running';
+  } else if (hasPending) {
+    base.status = 'pending';
+  } else if (hasFailed) {
+    base.status = 'failed';
+  } else {
+    base.status = 'completed';
+  }
+  base.active_run = base.status === 'running' || base.status === 'pending';
+  if (!base.summary?.trim()) {
+    base.summary = buildDelegationRuntimeSummary(base);
+  }
+  return base;
 }
 
 function channelLastActivity(channel: ChatChannelSummary) {
@@ -485,7 +686,7 @@ function detectMentionQuery(text: string, caret: number) {
 function summarizeCollaborationSubject(message?: Pick<ChannelRenderMessage, 'content_text' | 'summary_text'> | null) {
   const raw = message?.content_text?.trim() || message?.summary_text?.trim() || '';
   if (!raw) {
-    return '这条协作项';
+    return bilingual('这条协作项', 'This collaboration item');
   }
   const firstLine = raw.split('\n')[0]?.trim() || raw;
   return firstLine.length > 26 ? `${firstLine.slice(0, 26)}…` : firstLine;
@@ -506,21 +707,21 @@ const CHANNEL_AUTONOMY_OPTIONS: Array<{
 }> = [
   {
     mode: 'standard',
-    label: '标准模式',
-    shortLabel: '标准模式',
-    summary: 'Agent 主要负责提醒、建议和总结，不主动主导协作推进。',
+    label: bilingual('标准模式', 'Standard mode'),
+    shortLabel: bilingual('标准模式', 'Standard'),
+    summary: bilingual('Agent 主要负责提醒、建议和总结，不主动主导协作推进。', 'The agent focuses on reminders, suggestions, and summaries without actively driving collaboration.'),
   },
   {
     mode: 'proactive',
-    label: '主动推进模式',
-    shortLabel: '主动推进',
-    summary: 'Agent 会更积极提醒、建议，并推动协作项启动。',
+    label: bilingual('主动推进模式', 'Proactive mode'),
+    shortLabel: bilingual('主动推进', 'Proactive'),
+    summary: bilingual('Agent 会更积极提醒、建议，并推动协作项启动。', 'The agent proactively reminds, suggests, and helps kick off collaboration items.'),
   },
   {
     mode: 'agent_lead',
-    label: 'Agent 主导模式',
-    shortLabel: 'Agent 主导',
-    summary: 'Agent 可以主动创建协作项并推动讨论，但正式发布仍需人工确认。',
+    label: bilingual('Agent 主导模式', 'Agent-led mode'),
+    shortLabel: bilingual('Agent 主导', 'Agent-led'),
+    summary: bilingual('Agent 可以主动创建协作项并推动讨论，但正式发布仍需人工确认。', 'The agent can proactively create collaboration items and drive discussion, but formal publication still requires human confirmation.'),
   },
 ];
 
@@ -529,9 +730,9 @@ const COLLABORATION_SURFACE_FILTER_OPTIONS: Array<{
   label: string;
   tone: 'neutral' | 'temporary' | 'issue';
 }> = [
-  { key: 'all', label: '全部', tone: 'neutral' },
-  { key: 'temporary', label: '临时协作', tone: 'temporary' },
-  { key: 'issue', label: '正式协作', tone: 'issue' },
+  { key: 'all', label: bilingual('全部', 'All'), tone: 'neutral' },
+  { key: 'temporary', label: bilingual('临时协作', 'Temporary'), tone: 'temporary' },
+  { key: 'issue', label: bilingual('正式协作', 'Formal'), tone: 'issue' },
 ];
 
 const COLLABORATION_STATUS_FILTER_OPTIONS: Array<{
@@ -539,12 +740,12 @@ const COLLABORATION_STATUS_FILTER_OPTIONS: Array<{
   label: string;
   tone: 'neutral' | 'idea' | 'progress' | 'decision' | 'success' | 'muted';
 }> = [
-  { key: 'all', label: '全部', tone: 'neutral' },
-  { key: 'proposed', label: '建议', tone: 'idea' },
-  { key: 'active', label: '推进中', tone: 'progress' },
-  { key: 'awaiting_confirmation', label: '等你判断', tone: 'decision' },
-  { key: 'adopted', label: '已采用', tone: 'success' },
-  { key: 'rejected', label: '未采用', tone: 'muted' },
+  { key: 'all', label: bilingual('全部', 'All'), tone: 'neutral' },
+  { key: 'proposed', label: bilingual('建议', 'Proposed'), tone: 'idea' },
+  { key: 'active', label: bilingual('推进中', 'Active'), tone: 'progress' },
+  { key: 'awaiting_confirmation', label: bilingual('等你判断', 'Needs your decision'), tone: 'decision' },
+  { key: 'adopted', label: bilingual('已采用', 'Adopted'), tone: 'success' },
+  { key: 'rejected', label: bilingual('未采用', 'Rejected'), tone: 'muted' },
 ];
 
 function getChannelAutonomyMeta(mode?: ChatChannelAgentAutonomyMode | null) {
@@ -624,13 +825,13 @@ function collaborationStatusLabel(
   status?: ChatChannelDisplayStatus | null,
   fallbackSurface?: ChatChannelMessageSurface,
 ): string {
-  if (status === 'proposed') return '建议';
-  if (status === 'awaiting_confirmation') return '等你判断';
-  if (status === 'adopted') return '已采用';
-  if (status === 'rejected') return '未采用';
-  if (status === 'active') return '推进中';
-  if (fallbackSurface === 'activity') return '讨论';
-  return '推进中';
+  if (status === 'proposed') return bilingual('建议', 'Proposed');
+  if (status === 'awaiting_confirmation') return bilingual('等你判断', 'Needs your decision');
+  if (status === 'adopted') return bilingual('已采用', 'Adopted');
+  if (status === 'rejected') return bilingual('未采用', 'Rejected');
+  if (status === 'active') return bilingual('推进中', 'Active');
+  if (fallbackSurface === 'activity') return bilingual('讨论', 'Discussion');
+  return bilingual('推进中', 'Active');
 }
 
 function collaborationStatusTone(
@@ -653,10 +854,10 @@ function collaborationStatusTone(
 }
 
 function collaborationSurfaceLabel(surface?: ChatChannelMessageSurface | null): string {
-  if (surface === 'temporary') return '临时协作';
-  if (surface === 'issue') return '正式协作';
-  if (surface === 'activity') return '讨论';
-  return '协作';
+  if (surface === 'temporary') return bilingual('临时协作', 'Temporary');
+  if (surface === 'issue') return bilingual('正式协作', 'Formal');
+  if (surface === 'activity') return bilingual('讨论', 'Discussion');
+  return bilingual('协作', 'Collaboration');
 }
 
 function collaborationSurfaceTone(surface?: ChatChannelMessageSurface | null): string {
@@ -670,28 +871,28 @@ function collaborationSurfaceTone(surface?: ChatChannelMessageSurface | null): s
 }
 
 function collaborationSurfaceFilterLabel(filter: CollaborationSurfaceFilter): string {
-  if (filter === 'temporary') return '临时协作';
-  if (filter === 'issue') return '正式协作';
-  return '全部协作';
+  if (filter === 'temporary') return bilingual('临时协作', 'Temporary');
+  if (filter === 'issue') return bilingual('正式协作', 'Formal');
+  return bilingual('全部协作', 'All collaboration');
 }
 
 function collaborationSurfaceHint(surface?: ChatChannelMessageSurface | null): string {
   if (surface === 'temporary') {
-    return '先聊明白，确认后升级为正式协作';
+    return bilingual('先聊明白，确认后升级为正式协作', 'Clarify the discussion first, then promote it to formal collaboration.');
   }
   if (surface === 'issue') {
-    return '已进入正式推进，静默一段时间后会同步阶段进展到讨论区';
+    return bilingual('已进入正式推进，静默一段时间后会同步阶段进展到讨论区', 'This item is now in formal execution. Stage updates will sync back to the discussion area after a quiet period.');
   }
   return '';
 }
 
 function collaborationStatusFilterLabel(filter: CollaborationStatusFilter): string {
-  if (filter === 'proposed') return '建议';
-  if (filter === 'active') return '推进中';
-  if (filter === 'awaiting_confirmation') return '等你判断';
-  if (filter === 'adopted') return '已采用';
-  if (filter === 'rejected') return '未采用';
-  return '全部';
+  if (filter === 'proposed') return bilingual('建议', 'Proposed');
+  if (filter === 'active') return bilingual('推进中', 'Active');
+  if (filter === 'awaiting_confirmation') return bilingual('等你判断', 'Needs your decision');
+  if (filter === 'adopted') return bilingual('已采用', 'Adopted');
+  if (filter === 'rejected') return bilingual('未采用', 'Rejected');
+  return bilingual('全部', 'All');
 }
 
 function collaborationWorklistTitle(
@@ -699,15 +900,15 @@ function collaborationWorklistTitle(
   statusFilter: CollaborationStatusFilter,
 ): string {
   if (surfaceFilter === 'all' && statusFilter === 'all') {
-    return '还没有协作项';
+    return bilingual('还没有协作项', 'No collaboration items yet');
   }
   if (surfaceFilter === 'all') {
-    return `还没有${collaborationStatusFilterLabel(statusFilter)}的协作项`;
+    return bilingual(`还没有${collaborationStatusFilterLabel(statusFilter)}的协作项`, `No ${collaborationStatusFilterLabel(statusFilter).toLowerCase()} collaboration items yet`);
   }
   if (statusFilter === 'all') {
-    return `还没有${collaborationSurfaceFilterLabel(surfaceFilter)}`;
+    return bilingual(`还没有${collaborationSurfaceFilterLabel(surfaceFilter)}`, `No ${collaborationSurfaceFilterLabel(surfaceFilter).toLowerCase()} items yet`);
   }
-  return `还没有${collaborationStatusFilterLabel(statusFilter)}的${collaborationSurfaceFilterLabel(surfaceFilter)}`;
+  return bilingual(`还没有${collaborationStatusFilterLabel(statusFilter)}的${collaborationSurfaceFilterLabel(surfaceFilter)}`, `No ${collaborationStatusFilterLabel(statusFilter).toLowerCase()} ${collaborationSurfaceFilterLabel(surfaceFilter).toLowerCase()} items yet`);
 }
 
 function collaborationWorklistDescription(
@@ -715,18 +916,18 @@ function collaborationWorklistDescription(
   statusFilter: CollaborationStatusFilter,
 ): string {
   if (surfaceFilter === 'temporary' && statusFilter === 'all') {
-    return '这里集中显示先聊明白、补充上下文和试探方向的临时协作。它们还没有被提炼成正式协作项。';
+    return bilingual('这里集中显示先聊明白、补充上下文和试探方向的临时协作。它们还没有被提炼成正式协作项。', 'Temporary collaboration lives here for clarifying context and exploring direction before becoming a formal item.');
   }
   if (surfaceFilter === 'issue' && statusFilter === 'all') {
-    return '这里集中显示已经进入正式推进的协作项，适合查看重点工作、结果和后续判断。';
+    return bilingual('这里集中显示已经进入正式推进的协作项，适合查看重点工作、结果和后续判断。', 'Formal collaboration lives here for tracking important work, results, and next decisions.');
   }
   if (surfaceFilter === 'all' && statusFilter === 'all') {
-    return '先在讨论模式把事情说清楚，或者直接在下面新建一条协作项。';
+    return bilingual('先在讨论模式把事情说清楚，或者直接在下面新建一条协作项。', 'Clarify the work in discussion mode first, or create a new collaboration item directly below.');
   }
   if (surfaceFilter === 'all') {
-    return '换个状态筛选看看，或者直接新建一条新的协作项。';
+    return bilingual('换个状态筛选看看，或者直接新建一条新的协作项。', 'Try another status filter, or create a new collaboration item directly.');
   }
-  return `当前筛选的是${collaborationSurfaceFilterLabel(surfaceFilter)}，可以换个状态看看，或者先回到全部协作。`;
+  return bilingual(`当前筛选的是${collaborationSurfaceFilterLabel(surfaceFilter)}，可以换个状态看看，或者先回到全部协作。`, `You are filtering ${collaborationSurfaceFilterLabel(surfaceFilter).toLowerCase()} items. Try another status, or switch back to all collaboration.`);
 }
 
 function assistantCardMeta(message: ChannelRenderMessage): {
@@ -739,7 +940,7 @@ function assistantCardMeta(message: ChannelRenderMessage): {
   const cardPurpose = message.metadata?.card_purpose as string | undefined;
   if (cardPurpose === 'discussion_summary') {
     return {
-      label: '总结卡',
+    label: bilingual('总结卡', 'Summary card'),
       icon: ClipboardList,
       bubbleClass: 'bg-[hsl(var(--ui-surface-panel-strong))/0.52]',
       chipClass: 'bg-[hsl(var(--ui-surface-panel-strong))/0.65] text-muted-foreground',
@@ -751,7 +952,7 @@ function assistantCardMeta(message: ChannelRenderMessage): {
     cardPurpose === 'collaboration_stalled_reminder'
   ) {
     return {
-      label: '提醒卡',
+    label: bilingual('提醒卡', 'Reminder card'),
       icon: TriangleAlert,
       bubbleClass: 'bg-amber-500/8',
       chipClass: 'bg-amber-500/10 text-amber-800',
@@ -760,16 +961,25 @@ function assistantCardMeta(message: ChannelRenderMessage): {
   }
   if (cardPurpose === 'formal_collaboration_progress_sync') {
     return {
-      label: '进度卡',
+    label: bilingual('进度卡', 'Progress card'),
       icon: MessageSquareReply,
       bubbleClass: 'bg-indigo-500/8',
       chipClass: 'bg-indigo-500/10 text-indigo-800',
       iconClass: 'bg-indigo-100/60 text-indigo-800',
     };
   }
+  if (message.display_kind === 'onboarding') {
+    return {
+    label: bilingual('启动卡', 'Start card'),
+      icon: ClipboardList,
+      bubbleClass: 'bg-violet-500/8',
+      chipClass: 'bg-violet-500/10 text-violet-800',
+      iconClass: 'bg-violet-100/60 text-violet-800',
+    };
+  }
   if (message.display_kind === 'suggestion') {
     return {
-      label: '建议卡',
+    label: bilingual('建议卡', 'Suggestion card'),
       icon: Lightbulb,
       bubbleClass: 'bg-sky-500/8',
       chipClass: 'bg-sky-500/10 text-sky-800',
@@ -778,7 +988,7 @@ function assistantCardMeta(message: ChannelRenderMessage): {
   }
   if (message.display_kind === 'result') {
     return {
-      label: '结果卡',
+    label: bilingual('结果卡', 'Result card'),
       icon: CheckCheck,
       bubbleClass: 'bg-emerald-500/8',
       chipClass: 'bg-emerald-500/10 text-emerald-800',
@@ -786,7 +996,7 @@ function assistantCardMeta(message: ChannelRenderMessage): {
     };
   }
   return {
-    label: 'AI 回答',
+    label: bilingual('AI 回答', 'AI reply'),
     icon: Bot,
       bubbleClass: 'bg-[hsl(var(--ui-surface-panel-strong))/0.48]',
       chipClass: 'bg-[hsl(var(--ui-surface-panel-strong))/0.62] text-muted-foreground',
@@ -806,6 +1016,184 @@ function getAttachedDocumentIds(message: ChannelRenderMessage | null | undefined
     return [];
   }
   return raw.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
+interface CodingCardTests {
+  status?: string | null;
+  summary?: string | null;
+  passed?: number | null;
+  failed?: number | null;
+  skipped?: number | null;
+  last_command?: string | null;
+}
+
+interface CodingCardPayload {
+  workspace_display_name?: string | null;
+  workspace_path?: string | null;
+  repo_path?: string | null;
+  main_checkout_path?: string | null;
+  repo_default_branch?: string | null;
+  thread_worktree_path?: string | null;
+  thread_branch?: string | null;
+  thread_repo_ref?: string | null;
+  changed_files: string[];
+  tests?: CodingCardTests | null;
+  commands_run: string[];
+  artifacts: string[];
+  blockers: string[];
+  next_action?: string | null;
+}
+
+function getCodingCardPayload(
+  message: ChannelRenderMessage | null | undefined,
+): CodingCardPayload | null {
+  if (!message?.metadata || typeof message.metadata !== 'object') {
+    return null;
+  }
+  const metadata = message.metadata as Record<string, unknown>;
+  if (metadata.card_domain !== 'coding') {
+    return null;
+  }
+  const raw = metadata.coding_payload;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const value = raw as Record<string, unknown>;
+  const asStringArray = (input: unknown) =>
+    Array.isArray(input)
+      ? input.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+  const testsRaw =
+    value.tests && typeof value.tests === 'object' && !Array.isArray(value.tests)
+      ? (value.tests as Record<string, unknown>)
+      : null;
+  return {
+    workspace_display_name:
+      typeof value.workspace_display_name === 'string' ? value.workspace_display_name : null,
+    workspace_path: typeof value.workspace_path === 'string' ? value.workspace_path : null,
+    repo_path: typeof value.repo_path === 'string' ? value.repo_path : null,
+    main_checkout_path:
+      typeof value.main_checkout_path === 'string' ? value.main_checkout_path : null,
+    repo_default_branch:
+      typeof value.repo_default_branch === 'string' ? value.repo_default_branch : null,
+    thread_worktree_path:
+      typeof value.thread_worktree_path === 'string' ? value.thread_worktree_path : null,
+    thread_branch: typeof value.thread_branch === 'string' ? value.thread_branch : null,
+    thread_repo_ref: typeof value.thread_repo_ref === 'string' ? value.thread_repo_ref : null,
+    changed_files: asStringArray(value.changed_files),
+    tests: testsRaw
+      ? {
+          status: typeof testsRaw.status === 'string' ? testsRaw.status : null,
+          summary: typeof testsRaw.summary === 'string' ? testsRaw.summary : null,
+          passed: typeof testsRaw.passed === 'number' ? testsRaw.passed : null,
+          failed: typeof testsRaw.failed === 'number' ? testsRaw.failed : null,
+          skipped: typeof testsRaw.skipped === 'number' ? testsRaw.skipped : null,
+          last_command:
+            typeof testsRaw.last_command === 'string' ? testsRaw.last_command : null,
+        }
+      : null,
+    commands_run: asStringArray(value.commands_run),
+    artifacts: asStringArray(value.artifacts),
+    blockers: asStringArray(value.blockers),
+    next_action: typeof value.next_action === 'string' ? value.next_action : null,
+  };
+}
+
+function CodingCardDetails({ payload }: { payload: CodingCardPayload }) {
+  const changedFiles = payload.changed_files.slice(0, 8);
+  const commandsRun = payload.commands_run.slice(0, 4);
+  const artifacts = payload.artifacts.slice(0, 4);
+  const blockers = payload.blockers.slice(0, 3);
+  return (
+    <div className="mt-2 rounded-[12px] border border-[hsl(var(--ui-line-soft))/0.55] bg-background/60 px-3 py-2 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-foreground">
+          {payload.workspace_display_name || bilingual('项目工作区', 'Project workspace')}
+        </span>
+        {payload.thread_branch ? (
+          <span className="rounded-full bg-muted/60 px-2 py-0.5 text-[10px]">
+            {bilingual('分支：', 'Branch: ')}{payload.thread_branch}
+          </span>
+        ) : null}
+        {payload.repo_default_branch ? (
+          <span className="rounded-full bg-muted/60 px-2 py-0.5 text-[10px]">
+            {bilingual('默认分支：', 'Default branch: ')}{payload.repo_default_branch}
+          </span>
+        ) : null}
+      </div>
+      {payload.thread_worktree_path ? (
+        <div className="mt-1.5 break-all">{bilingual('线程现场：', 'Thread workspace: ')}{payload.thread_worktree_path}</div>
+      ) : payload.workspace_path ? (
+        <div className="mt-1.5 break-all">{bilingual('工作区：', 'Workspace: ')}{payload.workspace_path}</div>
+      ) : null}
+      {payload.repo_path ? <div className="mt-1 break-all">{bilingual('仓库：', 'Repo: ')}{payload.repo_path}</div> : null}
+      {payload.main_checkout_path ? (
+        <div className="mt-1 break-all">{bilingual('主检出：', 'Main checkout: ')}{payload.main_checkout_path}</div>
+      ) : null}
+      {changedFiles.length > 0 ? (
+        <div className="mt-2">
+          <div className="font-medium text-foreground">{bilingual('变更文件', 'Changed files')}</div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {changedFiles.map((file) => (
+              <span key={file} className="rounded-full bg-muted/60 px-2 py-0.5 text-[10px]">
+                {file}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {payload.tests && (payload.tests.status || payload.tests.summary) ? (
+        <div className="mt-2">
+          <div className="font-medium text-foreground">{bilingual('测试', 'Tests')}</div>
+          <div className="mt-1">
+            {payload.tests.status ? `${bilingual('状态：', 'Status: ')}${payload.tests.status}` : ''}
+            {payload.tests.status && payload.tests.summary ? ' · ' : ''}
+            {payload.tests.summary || ''}
+          </div>
+        </div>
+      ) : null}
+      {commandsRun.length > 0 ? (
+        <div className="mt-2">
+          <div className="font-medium text-foreground">{bilingual('最近命令', 'Recent commands')}</div>
+          <ul className="mt-1 space-y-1">
+            {commandsRun.map((command) => (
+              <li key={command} className="break-all">
+                {command}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {artifacts.length > 0 ? (
+        <div className="mt-2">
+          <div className="font-medium text-foreground">{bilingual('产物', 'Artifacts')}</div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {artifacts.map((artifact) => (
+              <span key={artifact} className="rounded-full bg-muted/60 px-2 py-0.5 text-[10px]">
+                {artifact}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {blockers.length > 0 ? (
+        <div className="mt-2">
+          <div className="font-medium text-foreground">{bilingual('当前阻塞', 'Current blockers')}</div>
+          <ul className="mt-1 space-y-1">
+            {blockers.map((blocker) => (
+              <li key={blocker}>{blocker}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {payload.next_action ? (
+        <div className="mt-2">
+          <div className="font-medium text-foreground">{bilingual('下一步', 'Next steps')}</div>
+          <div className="mt-1">{payload.next_action}</div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 interface RuntimeDiagnosticsMetadata {
@@ -850,17 +1238,17 @@ function getRuntimeDiagnostics(
 }
 
 function runtimeDiagnosticStatusLabel(status?: string | null) {
-  if (status === 'completed') return '已完成';
-  if (status === 'blocked') return '阻塞';
-  if (status === 'failed') return '失败';
-  return status || '执行详情';
+  if (status === 'completed') return bilingual('已完成', 'Completed');
+  if (status === 'blocked') return bilingual('阻塞', 'Blocked');
+  if (status === 'failed') return bilingual('失败', 'Failed');
+  return status || bilingual('执行详情', 'Execution details');
 }
 
 function runtimeDiagnosticFriendlySummary(diagnostics: RuntimeDiagnosticsMetadata) {
   if (diagnostics.status === 'completed') {
-    return '系统已记录这轮执行情况，可按需查看详细处理记录。';
+    return bilingual('系统已记录这轮执行情况，可按需查看详细处理记录。', 'This execution was recorded successfully. Open the detail view if you need the full trace.');
   }
-  return '系统记录到这轮协作未完整结束。可以补充背景、资料或更明确的目标后再试。';
+  return bilingual('系统记录到这轮协作未完整结束。可以补充背景、资料或更明确的目标后再试。', 'This collaboration did not finish cleanly. Add more context, documents, or a clearer goal and try again.');
 }
 
 function buildOptimisticUserMessage(
@@ -879,7 +1267,7 @@ function buildOptimisticUserMessage(
     team_id: '',
     author_type: 'user',
     author_user_id: user?.userId || null,
-    author_name: user?.displayName || '我',
+      author_name: user?.displayName || bilingual('我', 'Me'),
     agent_id: null,
     surface,
     thread_state: 'active',
@@ -975,7 +1363,7 @@ function ThreadSummaryRow({
         >
           <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-foreground">
             <MessageSquareReply className="h-3.5 w-3.5 text-muted-foreground" />
-            协作
+            {bilingual('协作', 'Collaboration')}
           </span>
           <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] ${
             collaborationSurfaceTone(surface)
@@ -990,20 +1378,20 @@ function ThreadSummaryRow({
             </span>
           ) : null}
           <span className="shrink-0 text-[10px] text-muted-foreground">
-            {replyCount} 条回复
+            {bilingual(`${replyCount} 条回复`, `${replyCount} replies`)}
           </span>
           {documentCount > 0 ? (
             <span className="shrink-0 text-[10px] text-muted-foreground">
-              {documentCount} 资料
+               {bilingual(`${documentCount} 资料`, `${documentCount} docs`)}
             </span>
           ) : null}
           {aiOutputCount > 0 ? (
             <span className="shrink-0 text-[10px] text-primary">
-              {aiOutputCount} 个 AI 产出
+               {bilingual(`${aiOutputCount} 个 AI 产出`, `${aiOutputCount} AI outputs`)}
             </span>
           ) : null}
           <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
-            {compactPreview || '打开线程查看完整回复'}
+            {compactPreview || bilingual('打开线程查看完整回复', 'Open the thread to view the full reply')}
           </span>
           <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         </button>
@@ -1020,7 +1408,7 @@ function ThreadSummaryRow({
                     onClick={onPromote}
                     className="inline-flex items-center rounded-full bg-primary/[0.08] px-2 py-0.5 text-[10px] font-medium text-primary"
                   >
-                    升级为正式协作
+                    {bilingual('升级为正式协作', 'Promote to formal collaboration')}
                   </button>
                 ) : null}
                 {onArchive ? (
@@ -1030,7 +1418,7 @@ function ThreadSummaryRow({
                     className="inline-flex items-center rounded-full bg-background/70 px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
                   >
                     <Archive className="mr-1 h-3 w-3" />
-                    标记未采用
+                    {bilingual('标记未采用', 'Mark as rejected')}
                   </button>
                 ) : null}
               </div>
@@ -1058,12 +1446,12 @@ function ChannelActivityBubble({
       {groupedWithPrevious ? (
         <div className="h-7 w-7 shrink-0" />
       ) : (
-        <DiscussionAvatar kind="user" label={isOwn ? '你' : message.author_name} />
+        <DiscussionAvatar kind="user" label={isOwn ? bilingual('你', 'You') : message.author_name} />
       )}
       <div className={`flex min-w-0 max-w-[96%] flex-col ${isOwn ? 'items-end md:max-w-[92%] xl:max-w-[82%]' : 'items-start md:max-w-[92%] xl:max-w-[84%]'}`}>
         {!groupedWithPrevious ? (
           <div className="mb-1 flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
-            <span className="font-medium text-foreground">{isOwn ? '你' : message.author_name}</span>
+            <span className="font-medium text-foreground">{isOwn ? bilingual('你', 'You') : message.author_name}</span>
             <span>{formatDateTime(message.created_at)}</span>
           </div>
         ) : null}
@@ -1126,12 +1514,12 @@ function ChannelUserBubble({
       {groupedWithPrevious ? (
         <div className="h-7 w-7 shrink-0" />
       ) : (
-        <DiscussionAvatar kind="user" label={isOwn ? '你' : message.author_name} />
+      <DiscussionAvatar kind="user" label={isOwn ? bilingual('你', 'You') : message.author_name} />
       )}
       <div className={`flex min-w-0 max-w-[96%] flex-col ${isOwn ? 'items-end md:max-w-[92%] xl:max-w-[82%]' : 'items-start md:max-w-[92%] xl:max-w-[84%]'}`}>
         {!groupedWithPrevious ? (
           <div className="mb-1 flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
-            <span className="font-medium text-foreground">{isOwn ? '你' : message.author_name}</span>
+            <span className="font-medium text-foreground">{isOwn ? bilingual('你', 'You') : message.author_name}</span>
             <span>{formatDateTime(message.created_at)}</span>
           </div>
         ) : null}
@@ -1154,7 +1542,7 @@ function ChannelUserBubble({
             </div>
           ) : null}
           <div className={`text-[11px] font-medium uppercase tracking-[0.04em] ${isOwn ? 'text-primary' : 'text-muted-foreground'}`}>
-            发起内容
+            {bilingual('发起内容', 'Original request')}
           </div>
           <div className="mt-1 line-clamp-3 whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">
             {renderMessageContentWithMentions(message.content_text, mentions, isOwn ? 'own' : 'default')}
@@ -1212,6 +1600,7 @@ function ChannelAssistantBubble({
 }) {
   const cardMeta = assistantCardMeta(message);
   const CardIcon = cardMeta.icon;
+  const codingPayload = getCodingCardPayload(message);
 
   return (
     <div className={`flex w-full items-start gap-2.5 ${groupedWithPrevious ? 'mt-1' : 'mt-3'}`}>
@@ -1237,6 +1626,7 @@ function ChannelAssistantBubble({
           <div className="whitespace-pre-wrap break-words text-[12px] leading-5 text-foreground">
             {message.content_text}
           </div>
+          {codingPayload ? <CodingCardDetails payload={codingPayload} /> : null}
           {((onPrimaryAction && primaryActionLabel) || (onSecondaryAction && secondaryActionLabel)) ? (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               {onPrimaryAction && primaryActionLabel ? (
@@ -1291,7 +1681,7 @@ function RuntimeDiagnosticDisclosure({
     return (
       <details className="collab-diagnostic-details">
         <summary>
-          <span>处理说明</span>
+                  <span>{bilingual('处理说明', 'Handling notes')}</span>
           {diagnostics.status ? (
             <span className="collab-diagnostic-status">
               {runtimeDiagnosticStatusLabel(diagnostics.status)}
@@ -1310,7 +1700,7 @@ function RuntimeDiagnosticDisclosure({
   return (
     <details className="collab-diagnostic-details">
       <summary>
-        <span>执行详情</span>
+                  <span>{bilingual('执行详情', 'Execution details')}</span>
         {diagnostics.status ? (
           <span className="collab-diagnostic-status">
             {runtimeDiagnosticStatusLabel(diagnostics.status)}
@@ -1320,7 +1710,7 @@ function RuntimeDiagnosticDisclosure({
       <div className="collab-diagnostic-body">
         {diagnostics.summary ? (
           <div className="collab-diagnostic-line">
-            <span className="collab-diagnostic-label">摘要</span>
+                  <span className="collab-diagnostic-label">{bilingual('摘要', 'Summary')}</span>
             <span>{diagnostics.summary}</span>
           </div>
         ) : null}
@@ -1401,16 +1791,16 @@ function ThreadStatusBar({
   return (
     <div className={compact ? 'collab-thread-stats-row' : 'flex flex-wrap items-center gap-1.5'}>
       <span className="collab-thread-stat" data-compact={compact ? 'true' : undefined}>
-        {replyCount} 条回复
+            {bilingual(`${replyCount} 条回复`, `${replyCount} replies`)}
       </span>
       {documentCount > 0 ? (
         <span className="collab-thread-stat" data-compact={compact ? 'true' : undefined}>
-          {documentCount} 份资料
+              {bilingual(`${documentCount} 份资料`, `${documentCount} docs`)}
         </span>
       ) : null}
       {aiOutputCount > 0 ? (
         <span className="collab-thread-stat" data-compact={compact ? 'true' : undefined}>
-          {aiOutputCount} 个 AI 产出
+              {bilingual(`${aiOutputCount} 个 AI 产出`, `${aiOutputCount} AI outputs`)}
         </span>
       ) : null}
     </div>
@@ -1425,7 +1815,7 @@ function ThreadRootCard({ message }: { message: ChannelRenderMessage }) {
   return (
     <div className="rounded-[12px] bg-[hsl(var(--ui-surface-panel-strong))/0.34] px-3 py-2.5">
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-        <span className="font-medium uppercase tracking-[0.08em]">协作起点</span>
+            <span className="font-medium uppercase tracking-[0.08em]">{bilingual('协作起点', 'Collaboration start')}</span>
         <span>·</span>
         <span className="truncate">{authorLabel}</span>
         <span className="ml-auto shrink-0">{formatDateTime(message.created_at)}</span>
@@ -1452,21 +1842,29 @@ function ThreadFlowMessage({
   }
 
   if (message.author_type === 'agent') {
+    const codingPayload = getCodingCardPayload(message);
     return (
       <div>
-        <ChatMessageBubble
-          role="assistant"
-          content={message.content_text}
+      <ChatMessageBubble
+        role="assistant"
+        content={message.content_text}
           thinking={message.thinking}
           toolCalls={message.toolCalls}
           turn={message.turn}
           compaction={message.compaction}
           isStreaming={message.isStreaming}
-          timestamp={new Date(message.created_at)}
-          agentName={normalizeAgentDisplayName(message.author_name)}
-        />
-        {diagnostics ? (
-          <div className="mt-2 flex justify-start">
+        timestamp={new Date(message.created_at)}
+        agentName={normalizeAgentDisplayName(message.author_name)}
+          />
+          {codingPayload ? (
+            <div className="mt-2 flex justify-start">
+              <div className="max-w-[86%]">
+                <CodingCardDetails payload={codingPayload} />
+              </div>
+            </div>
+          ) : null}
+          {diagnostics ? (
+            <div className="mt-2 flex justify-start">
             <div className="collab-diagnostic-note">
               <RuntimeDiagnosticDisclosure diagnostics={diagnostics} showFull={showFullDiagnostics} />
             </div>
@@ -1522,6 +1920,14 @@ export function TeamChannelsPanel({
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const [threadMessages, setThreadMessages] = useState<ChannelRenderMessage[]>([]);
   const [threadRootMessage, setThreadRootMessage] = useState<ChannelRenderMessage | null>(null);
+  const [threadRuntime, setThreadRuntime] = useState<ChatChannelThread['thread_runtime'] | null>(null);
+  const [threadDelegationRuntime, setThreadDelegationRuntime] =
+    useState<DelegationRuntime | null>(null);
+  const [workspaceCodeFiles, setWorkspaceCodeFiles] = useState<string[]>([]);
+  const [workspaceCodeFilesRootPath, setWorkspaceCodeFilesRootPath] = useState<string | null>(null);
+  const [workspaceCodeFilesTruncated, setWorkspaceCodeFilesTruncated] = useState(false);
+  const [workspaceCodeFilesLoading, setWorkspaceCodeFilesLoading] = useState(false);
+  const [workspaceCodeFilesError, setWorkspaceCodeFilesError] = useState<string | null>(null);
   const [threadRootExpanded, setThreadRootExpanded] = useState(false);
   const [members, setMembers] = useState<ChatChannelMember[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
@@ -1529,7 +1935,7 @@ export function TeamChannelsPanel({
   const [loadingChannelDocuments, setLoadingChannelDocuments] = useState(false);
   const [channelAiOutputs, setChannelAiOutputs] = useState<DocumentSummary[]>([]);
   const [loadingChannelAiOutputs, setLoadingChannelAiOutputs] = useState(false);
-  const [sidePanelMode, setSidePanelMode] = useState<'documents' | 'ai_outputs' | 'members' | 'settings' | 'thread' | null>(null);
+  const [sidePanelMode, setSidePanelMode] = useState<SidePanelMode | null>(null);
   const [promotingDocId, setPromotingDocId] = useState<string | null>(null);
   const [publishingDocId, setPublishingDocId] = useState<string | null>(null);
   const [publishDialogOpen, setPublishDialogOpen] = useState(false);
@@ -1561,7 +1967,9 @@ export function TeamChannelsPanel({
   const [composerToolsOpen, setComposerToolsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [workspaceGovernanceAction, setWorkspaceGovernanceAction] = useState<"restore" | "archive" | "delete" | null>(null);
   const [autonomyGuideOpen, setAutonomyGuideOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteMode, setDeleteMode] = useState<ChatChannelDeleteMode>('preserve_documents');
@@ -1725,7 +2133,7 @@ export function TeamChannelsPanel({
   const currentThreadSummary = useMemo(() => {
     const raw = threadRootMessage?.content_text?.trim() || '';
     if (!raw) {
-      return '围绕这件事继续协作';
+      return bilingual('围绕这件事继续协作', 'Continue collaborating on this work');
     }
     return raw.length > 88 ? `${raw.slice(0, 88)}…` : raw;
   }, [threadRootMessage?.content_text]);
@@ -1774,7 +2182,7 @@ export function TeamChannelsPanel({
       setError(null);
     } catch (loadError) {
       console.error('Failed to load team channels:', loadError);
-      setError('当前无法读取团队频道，请稍后再试。');
+      setError(bilingual('当前无法读取团队频道，请稍后再试。', 'Unable to load team channels right now. Please try again later.'));
     } finally {
       setLoadingChannels(false);
     }
@@ -1863,7 +2271,7 @@ export function TeamChannelsPanel({
       }
     } catch (loadError) {
       console.error('Failed to load channel:', loadError);
-      setError('当前无法读取频道详情，请稍后再试。');
+      setError(bilingual('当前无法读取频道详情，请稍后再试。', 'Unable to load channel details right now. Please try again later.'));
     } finally {
       if (!options?.silent) {
         setLoadingMessages(false);
@@ -1882,6 +2290,8 @@ export function TeamChannelsPanel({
         : threadReplies;
       setThreadRootMessage(rootMessage);
       setThreadMessages(mergedReplies);
+      setThreadRuntime(thread.thread_runtime || null);
+      setThreadDelegationRuntime(thread.delegation_runtime || null);
       setThreadRootId(rootId);
     } catch (loadError) {
       console.error('Failed to load channel thread:', loadError);
@@ -1943,6 +2353,8 @@ export function TeamChannelsPanel({
       setThreadRootId(null);
       setThreadRootMessage(null);
       setThreadMessages([]);
+      setThreadRuntime(null);
+      setThreadDelegationRuntime(null);
       setThreadRootExpanded(false);
       setSelectedAgentId(DEFAULT_CHANNEL_AGENT_VALUE);
       setAttachedDocs([]);
@@ -1956,6 +2368,8 @@ export function TeamChannelsPanel({
     setThreadRootId(null);
     setThreadRootMessage(null);
     setThreadMessages([]);
+    setThreadRuntime(null);
+    setThreadDelegationRuntime(null);
     setThreadRootExpanded(false);
     setSelectedAgentId(DEFAULT_CHANNEL_AGENT_VALUE);
     setAttachedDocs([]);
@@ -2005,6 +2419,8 @@ export function TeamChannelsPanel({
       setThreadRootId(null);
       setThreadRootMessage(null);
       setThreadMessages([]);
+      setThreadRuntime(null);
+      setThreadDelegationRuntime(null);
       return;
     }
     if (
@@ -2037,7 +2453,7 @@ export function TeamChannelsPanel({
       mention_type: 'member' as const,
       target_id: member.userId,
       label: member.displayName || member.userId,
-      subtitle: `成员 · ${member.displayName || member.userId}`,
+      subtitle: bilingual(`成员 · ${member.displayName || member.userId}`, `Member · ${member.displayName || member.userId}`),
     }));
     const agentOptions = visibleAgents.map((agent) => ({
       mention_type: 'agent' as const,
@@ -2055,7 +2471,7 @@ export function TeamChannelsPanel({
       ...item,
       insertLabel:
         (labelCounts.get(item.label) || 0) > 1
-          ? `${item.label}${item.mention_type === 'agent' ? '（Agent）' : '（成员）'}`
+          ? `${item.label}${item.mention_type === 'agent' ? bilingual('（Agent）', ' (Agent)') : bilingual('（成员）', ' (Member)')}`
           : item.label,
     }));
   }, [selectableRecipientMembers, visibleAgents]);
@@ -2064,7 +2480,7 @@ export function TeamChannelsPanel({
     key: option.key,
     value: option.key,
     kind: option.mention_type,
-    label: `${option.mention_type === 'agent' ? 'AI' : '成员'} · ${option.insertLabel}`,
+    label: `${option.mention_type === 'agent' ? bilingual('AI', 'AI') : bilingual('成员', 'Member')} · ${option.insertLabel}`,
   })), [mentionOptions]);
 
   const threadComposerPickerOptions = rootComposerPickerOptions;
@@ -2097,17 +2513,17 @@ export function TeamChannelsPanel({
   const rootComposerTargetLabel = useMemo(() => {
     const latest = findLatestMentionOptionInText(composeText, mentionOptions);
     if (!latest) {
-      return '@成员 / Agent';
+      return bilingual('@成员 / Agent', '@Member / Agent');
     }
-    return `${latest.mention_type === 'agent' ? 'AI' : '成员'} · ${latest.insertLabel}`;
+    return `${latest.mention_type === 'agent' ? bilingual('AI', 'AI') : bilingual('成员', 'Member')} · ${latest.insertLabel}`;
   }, [composeText, mentionOptions]);
 
   const threadComposerTargetLabel = useMemo(() => {
     const latest = findLatestMentionOptionInText(threadComposeText, mentionOptions);
     if (!latest) {
-      return '@成员 / Agent';
+      return bilingual('@成员 / Agent', '@Member / Agent');
     }
-    return `${latest.mention_type === 'agent' ? 'AI' : '成员'} · ${latest.insertLabel}`;
+    return `${latest.mention_type === 'agent' ? bilingual('AI', 'AI') : bilingual('成员', 'Member')} · ${latest.insertLabel}`;
   }, [mentionOptions, threadComposeText]);
 
   const updateComposerMention = useCallback((
@@ -2354,7 +2770,7 @@ export function TeamChannelsPanel({
     const items = mentionState
       ? mentionState.options.map((option) => ({
           key: option.key,
-          label: `${option.mention_type === 'agent' ? 'AI' : '成员'} · ${option.insertLabel}`,
+          label: `${option.mention_type === 'agent' ? bilingual('AI', 'AI') : bilingual('成员', 'Member')} · ${option.insertLabel}`,
           onSelect: () => insertComposerMention(composer, option),
         }))
       : (pickerState?.options || []).map((option) => ({
@@ -2501,7 +2917,7 @@ export function TeamChannelsPanel({
         console.error('Failed to load channel composer capabilities:', capabilityLoadError);
         if (!active) return;
         setCapabilityCatalog(null);
-        setCapabilityError('当前无法读取可用技能和扩展，请稍后再试。');
+        setCapabilityError(bilingual('当前无法读取可用技能和扩展，请稍后再试。', 'Unable to load available skills and extensions right now. Please try again later.'));
       })
       .finally(() => {
         if (active) {
@@ -2730,6 +3146,20 @@ export function TeamChannelsPanel({
         );
       });
 
+      es.addEventListener('delegation', (event) => {
+        updateEventCursor(event as MessageEvent);
+        const data = safeParse((event as MessageEvent).data) as DelegationRuntimeEventPayload | null;
+        if (!data) return;
+        const selectedThread = targetThreadRoot || activeThreadRootIdRef.current;
+        if (selectedThread && data.thread_root_id && data.thread_root_id !== selectedThread) {
+          return;
+        }
+        if (!selectedThread && data.thread_root_id) {
+          return;
+        }
+        setThreadDelegationRuntime((prev) => applyDelegationRuntimePatch(prev, data));
+      });
+
       es.addEventListener('turn', (event) => {
         updateEventCursor(event as MessageEvent);
         const data = safeParse((event as MessageEvent).data);
@@ -2754,6 +3184,8 @@ export function TeamChannelsPanel({
               strategy: data.strategy,
               before: data.before_tokens,
               after: data.after_tokens,
+              phase: data.phase,
+              reason: data.reason,
             },
           }),
           targetThreadRoot,
@@ -2813,33 +3245,47 @@ export function TeamChannelsPanel({
       return;
     }
     try {
-      const created = await chatApi.createChannel(teamId, {
-        name: form.name,
-        description: form.description || null,
-        visibility: form.visibility,
-        default_agent_id: form.defaultAgentId,
-        member_user_ids: form.visibility === 'team_private' ? form.memberUserIds : [],
-      });
+        const created = await chatApi.createChannel(teamId, {
+          name: form.name,
+          description: form.description || null,
+          visibility: form.visibility,
+          channel_type: form.channelType,
+          default_agent_id: form.defaultAgentId,
+          member_user_ids: form.visibility === 'team_private' ? form.memberUserIds : [],
+          workspace_display_name:
+            form.channelType === 'coding' ? (form.workspaceDisplayName || form.name) : null,
+          repo_default_branch:
+            form.channelType === 'coding' ? (form.repoDefaultBranch || 'main') : null,
+        });
       setCreateOpen(false);
       resetCreateForm();
       await loadChannels();
       setSelectedChannelId(created.channel_id);
     } catch (createError) {
       console.error('Failed to create channel:', createError);
-      setError('创建频道失败，请稍后再试。');
+      setError(bilingual('创建频道失败，请稍后再试。', 'Failed to create the channel. Please try again later.'));
     }
   }, [form, loadChannels, resetCreateForm, teamId]);
 
   const handleSaveChannel = useCallback(async () => {
     if (!channelDetail) return;
     try {
-      const updated = await chatApi.updateChannel(channelDetail.channel_id, {
-        name: form.name,
-        description: form.description || null,
-        visibility: form.visibility,
-        default_agent_id: form.defaultAgentId,
-        agent_autonomy_mode: form.agentAutonomyMode,
-        channel_goal: form.channelGoal || null,
+        const updated = await chatApi.updateChannel(channelDetail.channel_id, {
+          name: form.name,
+          description: form.description || null,
+          visibility: form.visibility,
+          channel_type: form.channelType,
+          default_agent_id: form.defaultAgentId,
+          workspace_display_name:
+            form.channelType === 'coding'
+              ? (form.workspaceDisplayName || channelDetail.workspace_display_name || channelDetail.name)
+              : null,
+          repo_default_branch:
+            form.channelType === 'coding'
+              ? (form.repoDefaultBranch || channelDetail.repo_default_branch || 'main')
+              : null,
+          agent_autonomy_mode: form.agentAutonomyMode,
+          channel_goal: form.channelGoal || null,
         participant_notes: form.participantNotes || null,
         expected_outputs: form.expectedOutputs || null,
         collaboration_style: form.collaborationStyle || null,
@@ -2851,9 +3297,64 @@ export function TeamChannelsPanel({
       );
     } catch (saveError) {
       console.error('Failed to update channel:', saveError);
-      setError('保存频道设置失败，请稍后再试。');
+      setError(bilingual('保存频道设置失败，请稍后再试。', 'Failed to save channel settings. Please try again later.'));
     }
   }, [channelDetail, form]);
+
+  const handleRestoreDetachedWorkspace = useCallback(async () => {
+    const workspaceId = channelDetail?.workspace_governance?.detached_workspace_id;
+    if (!workspaceId || workspaceGovernanceAction) return;
+    setWorkspaceGovernanceAction('restore');
+    try {
+      const restored = await chatApi.restoreChannelWorkspace(workspaceId);
+      setChannelDetail(restored);
+      setChannels((prev) =>
+        prev.map((item) => (item.channel_id === restored.channel_id ? restored : item)),
+      );
+      setSelectedChannelId(restored.channel_id);
+      addToast('success', '已恢复原项目工作区并切回编程项目频道');
+    } catch (restoreError) {
+      console.error('Failed to restore detached workspace:', restoreError);
+      setError(bilingual('恢复项目工作区失败，请稍后再试。', 'Failed to restore the project workspace. Please try again later.'));
+    } finally {
+      setWorkspaceGovernanceAction(null);
+    }
+  }, [addToast, channelDetail, workspaceGovernanceAction]);
+
+  const handleArchiveDetachedWorkspace = useCallback(async () => {
+    const workspaceId = channelDetail?.workspace_governance?.detached_workspace_id;
+    if (!workspaceId || workspaceGovernanceAction) return;
+    setWorkspaceGovernanceAction('archive');
+    try {
+      await chatApi.archiveChannelWorkspace(workspaceId);
+      await loadChannel(channelDetail.channel_id, { silent: true, preserveSelectedAgent: true });
+      addToast('success', '已归档解绑的项目工作区');
+    } catch (archiveError) {
+      console.error('Failed to archive detached workspace:', archiveError);
+      setError(bilingual('归档项目工作区失败，请稍后再试。', 'Failed to archive the project workspace. Please try again later.'));
+    } finally {
+      setWorkspaceGovernanceAction(null);
+    }
+  }, [addToast, channelDetail, loadChannel, workspaceGovernanceAction]);
+
+  const handleDeleteDetachedWorkspace = useCallback(async () => {
+    const workspaceId = channelDetail?.workspace_governance?.detached_workspace_id;
+    if (!workspaceId || workspaceGovernanceAction) return;
+    if (!window.confirm(bilingual('这会删除解绑后保留的底层项目工作区、repo 和 worktree。确认继续吗？', 'This will delete the detached workspace, repo, and worktree that were kept after unbinding. Continue?'))) {
+      return;
+    }
+    setWorkspaceGovernanceAction('delete');
+    try {
+      await chatApi.deleteChannelWorkspace(workspaceId);
+      await loadChannel(channelDetail.channel_id, { silent: true, preserveSelectedAgent: true });
+      addToast('success', '已删除解绑的项目工作区');
+    } catch (deleteError) {
+      console.error('Failed to delete detached workspace:', deleteError);
+      setError(bilingual('删除项目工作区失败，请确认当前没有活跃线程或会话占用后再试。', 'Failed to delete the project workspace. Make sure no active thread or session is using it, then try again.'));
+    } finally {
+      setWorkspaceGovernanceAction(null);
+    }
+  }, [addToast, channelDetail, loadChannel, workspaceGovernanceAction]);
 
   const handleDeleteChannel = useCallback(async () => {
     if (!channelDetail || deletingChannel) return;
@@ -2865,6 +3366,8 @@ export function TeamChannelsPanel({
       setThreadRootId(null);
       setThreadRootMessage(null);
       setThreadMessages([]);
+      setThreadRuntime(null);
+      setThreadDelegationRuntime(null);
       setChannelDetail(null);
       setMessages([]);
       setMembers([]);
@@ -2874,11 +3377,11 @@ export function TeamChannelsPanel({
       await loadChannels();
       addToast(
         'success',
-        deleteMode === 'full_delete' ? '频道已彻底删除' : '频道已删除，文档已保留',
+        deleteMode === 'full_delete' ? bilingual('频道已彻底删除', 'Channel permanently deleted') : bilingual('频道已删除，文档已保留', 'Channel deleted, documents preserved'),
       );
     } catch (deleteError) {
       console.error('Failed to delete channel:', deleteError);
-      setError(deleteMode === 'full_delete' ? '彻底删除频道失败，请稍后再试。' : '删除频道失败，请稍后再试。');
+      setError(deleteMode === 'full_delete' ? bilingual('彻底删除频道失败，请稍后再试。', 'Failed to permanently delete the channel. Please try again later.') : bilingual('删除频道失败，请稍后再试。', 'Failed to delete the channel. Please try again later.'));
     } finally {
       setDeletingChannel(false);
     }
@@ -2895,7 +3398,7 @@ export function TeamChannelsPanel({
       setNewMemberId('');
     } catch (memberError) {
       console.error('Failed to add channel member:', memberError);
-      setError('添加成员失败，请稍后再试。');
+      setError(bilingual('添加成员失败，请稍后再试。', 'Failed to add the member. Please try again later.'));
     }
   }, [channelDetail, newMemberId, newMemberRole]);
 
@@ -2909,7 +3412,7 @@ export function TeamChannelsPanel({
         setMembers(nextMembers);
       } catch (memberError) {
         console.error('Failed to update member role:', memberError);
-        setError('更新成员角色失败，请稍后再试。');
+      setError(bilingual('更新成员角色失败，请稍后再试。', 'Failed to update the member role. Please try again later.'));
       }
     },
     [channelDetail],
@@ -2923,7 +3426,7 @@ export function TeamChannelsPanel({
         setMembers(nextMembers);
       } catch (memberError) {
         console.error('Failed to remove member:', memberError);
-        setError('移除成员失败，请稍后再试。');
+      setError(bilingual('移除成员失败，请稍后再试。', 'Failed to remove the member. Please try again later.'));
       }
     },
     [channelDetail],
@@ -2947,6 +3450,8 @@ export function TeamChannelsPanel({
     setThreadRootId(null);
     setThreadRootMessage(null);
     setThreadMessages([]);
+    setThreadRuntime(null);
+    setThreadDelegationRuntime(null);
     setThreadRootExpanded(false);
     if (isMobile) {
       setSidePanelMode(null);
@@ -2989,7 +3494,7 @@ export function TeamChannelsPanel({
       return;
     }
     if (message.surface !== 'temporary') {
-      setError('只有临时协作可以升级为正式协作。');
+      setError(bilingual('只有临时协作可以升级为正式协作。', 'Only temporary collaboration items can be promoted to formal collaboration.'));
       return;
     }
     try {
@@ -3012,10 +3517,10 @@ export function TeamChannelsPanel({
         display_status: currentRootFilter.display_status,
         preserveSelectedAgent: true,
       });
-      addToast('success', '已升级为正式协作');
+      addToast('success', bilingual('已升级为正式协作', 'Promoted to formal collaboration'));
     } catch (promoteError) {
       console.error('Failed to mark work thread highlighted:', promoteError);
-      setError('升级为正式协作失败，请稍后再试。');
+      setError(bilingual('升级为正式协作失败，请稍后再试。', 'Failed to promote this item to formal collaboration. Please try again later.'));
     }
   }, [addToast, channelDetail, currentRootFilter.display_status, loadChannel, threadRootId]);
 
@@ -3049,7 +3554,7 @@ export function TeamChannelsPanel({
       }
     } catch (statusError) {
       console.error('Failed to update collaboration status:', statusError);
-      setError('更新协作项状态失败，请稍后再试。');
+      setError(bilingual('更新协作项状态失败，请稍后再试。', 'Failed to update the collaboration status. Please try again later.'));
     }
   }, [addToast, channelDetail, currentRootFilter.display_kind, currentRootFilter.display_status, loadChannel, threadRootId]);
 
@@ -3066,12 +3571,12 @@ export function TeamChannelsPanel({
       addToast('success', '已同步结果到讨论区');
     } catch (syncError) {
       console.error('Failed to sync collaboration result:', syncError);
-      setError('同步结果到讨论区失败，请稍后再试。');
+      setError(bilingual('同步结果到讨论区失败，请稍后再试。', 'Failed to sync the result back to the discussion area. Please try again later.'));
     }
   }, [addToast, channelDetail, currentRootFilter.display_kind, currentRootFilter.display_status, loadChannel]);
 
   const handleArchiveThread = useCallback(async (message: ChannelRenderMessage) => {
-    void handleUpdateThreadStatus(message, 'rejected', '协作项已标记为未采用');
+    void handleUpdateThreadStatus(message, 'rejected', bilingual('协作项已标记为未采用', 'Collaboration item marked as rejected'));
   }, [handleUpdateThreadStatus]);
 
   const openCollaborationWorkspace = useCallback(
@@ -3128,7 +3633,7 @@ export function TeamChannelsPanel({
       ).trim();
 
       if (!derivedContent) {
-        setError('当前卡片没有可继续推进的内容。');
+      setError(bilingual('当前卡片没有可继续推进的内容。', 'There is nothing actionable to continue from this card.'));
         return;
       }
 
@@ -3153,7 +3658,7 @@ export function TeamChannelsPanel({
         addToast('success', '已从讨论区卡片创建协作项');
       } catch (startError) {
         console.error('Failed to start collaboration from card:', startError);
-        setError('开始协作失败，请稍后再试。');
+      setError(bilingual('开始协作失败，请稍后再试。', 'Failed to start collaboration. Please try again later.'));
       } finally {
         setSending(false);
       }
@@ -3170,6 +3675,39 @@ export function TeamChannelsPanel({
       sending,
     ],
   );
+
+  const openOnboardingForm = useCallback(() => {
+    if (!channelDetail) return;
+    setForm((prev) => ({
+      ...prev,
+      channelGoal: channelDetail.orchestrator_state?.channel_goal || '',
+      participantNotes: channelDetail.orchestrator_state?.participant_notes || '',
+      expectedOutputs: channelDetail.orchestrator_state?.expected_outputs || '',
+      collaborationStyle: channelDetail.orchestrator_state?.collaboration_style || '',
+    }));
+    setOnboardingOpen(true);
+  }, [channelDetail]);
+
+  const handleSaveOnboarding = useCallback(async () => {
+    if (!channelDetail) return;
+    try {
+      const updated = await chatApi.updateChannel(channelDetail.channel_id, {
+        channel_goal: form.channelGoal || null,
+        participant_notes: form.participantNotes || null,
+        expected_outputs: form.expectedOutputs || null,
+        collaboration_style: form.collaborationStyle || null,
+      });
+      setOnboardingOpen(false);
+      setChannelDetail(updated);
+      setChannels((prev) =>
+        prev.map((item) => (item.channel_id === updated.channel_id ? updated : item)),
+      );
+      addToast('success', bilingual('已写入频道目标、参与人、产出和协作方式', 'Channel goal, participants, outputs, and collaboration style saved'));
+    } catch (saveError) {
+      console.error('Failed to save onboarding fields:', saveError);
+      setError(bilingual('保存频道启动信息失败，请稍后再试。', 'Failed to save the channel kickoff details. Please try again later.'));
+    }
+  }, [addToast, channelDetail, form.channelGoal, form.collaborationStyle, form.expectedOutputs, form.participantNotes]);
 
   const handleRejectSuggestionCard = useCallback(
     async (message: ChannelRenderMessage) => {
@@ -3206,12 +3744,12 @@ export function TeamChannelsPanel({
         addToast(
           'success',
           linkedCollaborationId
-            ? '已拒绝建议，关联协作项已移入拒绝分类'
-            : '已拒绝建议，已移入拒绝分类',
+        ? bilingual('已拒绝建议，关联协作项已移入拒绝分类', 'Suggestion rejected. Linked collaboration items were also moved to rejected.')
+        : bilingual('已拒绝建议，已移入拒绝分类', 'Suggestion rejected and moved to rejected.'),
         );
       } catch (rejectError) {
         console.error('Failed to reject suggestion card:', rejectError);
-        setError('拒绝建议失败，请稍后再试。');
+      setError(bilingual('拒绝建议失败，请稍后再试。', 'Failed to reject the suggestion. Please try again later.'));
       }
     },
     [
@@ -3228,12 +3766,12 @@ export function TeamChannelsPanel({
   const requestMarkThreadHighlightedConfirm = useCallback((message: ChannelRenderMessage) => {
     const subject = summarizeCollaborationSubject(message);
     requestCollaborationActionConfirm({
-      title: '升级为正式协作',
-      description: '把这条临时协作升级为正式协作。',
-      confirmText: '确认升级',
-      actionLabel: '升级为正式协作',
+      title: bilingual('升级为正式协作', 'Promote to formal collaboration'),
+      description: bilingual('把这条临时协作升级为正式协作。', 'Promote this temporary collaboration item into a formal collaboration item.'),
+      confirmText: bilingual('确认升级', 'Confirm promotion'),
+      actionLabel: bilingual('升级为正式协作', 'Promote'),
       subject,
-      note: '升级后它会进入正式协作分类，作为需要持续推进的重点工作。',
+      note: bilingual('升级后它会进入正式协作分类，作为需要持续推进的重点工作。', 'After promotion it will move into formal collaboration as work that should continue to be driven forward.'),
       onConfirm: () => handleMarkThreadHighlighted(message),
     });
   }, [handleMarkThreadHighlighted, requestCollaborationActionConfirm]);
@@ -3241,12 +3779,12 @@ export function TeamChannelsPanel({
   const requestArchiveThreadConfirm = useCallback((message: ChannelRenderMessage) => {
     const subject = summarizeCollaborationSubject(message);
     requestCollaborationActionConfirm({
-      title: '标记未采用',
-      description: '把这条协作项移入未采用分类。',
-      confirmText: '确认未采用',
-      actionLabel: '未采用',
+      title: bilingual('标记未采用', 'Mark as rejected'),
+      description: bilingual('把这条协作项移入未采用分类。', 'Move this collaboration item into the rejected state.'),
+      confirmText: bilingual('确认未采用', 'Confirm rejection'),
+      actionLabel: bilingual('未采用', 'Rejected'),
       subject,
-      note: '这不会删除内容，只是把它从当前推进流转到未采用分类。',
+      note: bilingual('这不会删除内容，只是把它从当前推进流转到未采用分类。', 'This does not delete the content. It only moves the item out of the active flow into rejected.'),
       variant: 'destructive',
       onConfirm: () => handleArchiveThread(message),
     });
@@ -3255,45 +3793,49 @@ export function TeamChannelsPanel({
   const requestAwaitingConfirmationConfirm = useCallback((message: ChannelRenderMessage) => {
     const subject = summarizeCollaborationSubject(message);
     requestCollaborationActionConfirm({
-      title: '标记等判断',
-      description: '把这条协作项交回你来判断下一步。',
-      confirmText: '确认标记',
-      actionLabel: '等判断',
+      title: bilingual('标记等判断', 'Mark as needs your decision'),
+      description: bilingual('把这条协作项交回你来判断下一步。', 'Hand this collaboration item back to you for the next decision.'),
+      confirmText: bilingual('确认标记', 'Confirm'),
+      actionLabel: bilingual('等判断', 'Needs decision'),
       subject,
-      note: '适合当前需要人工拍板、决定采纳或继续推进的情况。',
+      note: bilingual('适合当前需要人工拍板、决定采纳或继续推进的情况。', 'Use this when human judgment is needed to decide whether to adopt or continue.'),
       onConfirm: () =>
-        handleUpdateThreadStatus(message, 'awaiting_confirmation', '已标记为等你判断'),
+        handleUpdateThreadStatus(message, 'awaiting_confirmation', bilingual('已标记为等你判断', 'Marked as needs your decision')),
     });
   }, [handleUpdateThreadStatus, requestCollaborationActionConfirm]);
 
   const requestAdoptThreadConfirm = useCallback((message: ChannelRenderMessage) => {
     const subject = summarizeCollaborationSubject(message);
     requestCollaborationActionConfirm({
-      title: '标记采用',
-      description: '把这条协作结果正式标记为已采用。',
-      confirmText: '确认采用',
-      actionLabel: '已采用',
+      title: bilingual('标记采用', 'Mark as adopted'),
+      description: bilingual('把这条协作结果正式标记为已采用。', 'Mark this collaboration result as formally adopted.'),
+      confirmText: bilingual('确认采用', 'Confirm adoption'),
+      actionLabel: bilingual('已采用', 'Adopted'),
       subject,
-      note: '采用后可继续在 AI 产出中整理并发布到团队文档。',
+      note: bilingual('采用后可继续在 AI 产出中整理并发布到团队文档。', 'After adoption you can refine it in AI outputs and publish it to team docs.'),
       onConfirm: () =>
-        handleUpdateThreadStatus(message, 'adopted', '协作结果已标记为已采用'),
+        handleUpdateThreadStatus(message, 'adopted', bilingual('协作结果已标记为已采用', 'Collaboration result marked as adopted')),
     });
   }, [handleUpdateThreadStatus, requestCollaborationActionConfirm]);
 
   const requestSyncThreadResultConfirm = useCallback((message: ChannelRenderMessage) => {
     const subject = summarizeCollaborationSubject(message);
     requestCollaborationActionConfirm({
-      title: '同步到讨论',
-      description: '把当前结果同步回讨论区，便于团队成员查看。',
-      confirmText: '确认同步',
-      actionLabel: '同步到讨论',
+      title: bilingual('同步到讨论', 'Sync back to discussion'),
+      description: bilingual('把当前结果同步回讨论区，便于团队成员查看。', 'Sync the current result back to the discussion area so the team can review it.'),
+      confirmText: bilingual('确认同步', 'Confirm sync'),
+      actionLabel: bilingual('同步到讨论', 'Sync to discussion'),
       subject,
-      note: '同步后会在讨论区生成结果卡，方便团队继续跟进。',
+      note: bilingual('同步后会在讨论区生成结果卡，方便团队继续跟进。', 'A result card will be generated in the discussion area so the team can continue following up.'),
       onConfirm: () => handleSyncThreadResult(message),
     });
   }, [handleSyncThreadResult, requestCollaborationActionConfirm]);
 
   const requestStartCollaborationConfirm = useCallback((message: ChannelRenderMessage) => {
+    if (message.display_kind === 'onboarding' || message.metadata?.card_purpose === 'channel_onboarding') {
+      openOnboardingForm();
+      return;
+    }
     const linkedCollaborationId =
       typeof message.metadata?.linked_collaboration_id === 'string'
         ? message.metadata.linked_collaboration_id
@@ -3304,25 +3846,25 @@ export function TeamChannelsPanel({
     }
     const subject = summarizeCollaborationSubject(message);
     requestCollaborationActionConfirm({
-      title: '开始协作',
-      description: '基于这张建议卡创建一条新的协作项。',
-      confirmText: '确认开始',
-      actionLabel: '开始协作',
+      title: bilingual('开始协作', 'Start collaboration'),
+      description: bilingual('基于这张建议卡创建一条新的协作项。', 'Create a new collaboration item from this suggestion card.'),
+      confirmText: bilingual('确认开始', 'Confirm start'),
+      actionLabel: bilingual('开始协作', 'Start collaboration'),
       subject,
-      note: '创建后会直接进入协作模式，围绕这件事继续推进。',
+      note: bilingual('创建后会直接进入协作模式，围绕这件事继续推进。', 'Once created, it will enter collaboration mode and continue advancing this work.'),
       onConfirm: () => handleStartCollaborationFromCard(message),
     });
-  }, [handleStartCollaborationFromCard, requestCollaborationActionConfirm]);
+  }, [handleStartCollaborationFromCard, openOnboardingForm, requestCollaborationActionConfirm]);
 
   const requestRejectSuggestionConfirm = useCallback((message: ChannelRenderMessage) => {
     const subject = summarizeCollaborationSubject(message);
     requestCollaborationActionConfirm({
-      title: '拒绝建议',
-      description: '把这张建议卡移入拒绝分类。',
-      confirmText: '确认拒绝',
-      actionLabel: '拒绝建议',
+      title: bilingual('拒绝建议', 'Reject suggestion'),
+      description: bilingual('把这张建议卡移入拒绝分类。', 'Move this suggestion card into the rejected state.'),
+      confirmText: bilingual('确认拒绝', 'Confirm rejection'),
+      actionLabel: bilingual('拒绝建议', 'Reject suggestion'),
       subject,
-      note: '如果它关联了协作项，关联协作项也会一起进入拒绝分类。',
+      note: bilingual('如果它关联了协作项，关联协作项也会一起进入拒绝分类。', 'If it is linked to collaboration items, those linked items will also move into rejected.'),
       variant: 'destructive',
       onConfirm: () => handleRejectSuggestionCard(message),
     });
@@ -3331,7 +3873,7 @@ export function TeamChannelsPanel({
   const handleSend = useCallback(
     async (
       threadTarget?: string | null,
-      submitMode?: 'discussion' | 'work' | 'execution',
+      submitMode?: 'discussion' | 'work',
     ) => {
       if (!channelDetail) return;
       const rawComposerText = threadTarget ? threadComposeText : composeText;
@@ -3343,7 +3885,7 @@ export function TeamChannelsPanel({
       const parsedMentions = deriveMentionsFromText(rawComposerText, mentionOptions);
       const agentMentions = parsedMentions.filter((item) => item.mention_type === 'agent');
       if (!threadTarget && agentMentions.length > 1) {
-        const message = '一条讨论消息只能 @ 一个 Agent。请只保留一个 Agent 后再发送。';
+        const message = bilingual('一条讨论消息只能 @ 一个 Agent。请只保留一个 Agent 后再发送。', 'A discussion message can mention only one agent. Keep just one agent mention before sending.');
         setError(message);
         addToast('error', message);
         return;
@@ -3354,13 +3896,12 @@ export function TeamChannelsPanel({
         !threadTarget && agentMentions.length === 1
           ? visibleAgents.find((agent) => agent.id === agentMentions[0].target_id) || null
           : null;
-      const executionAgent =
+      const collaborationAgent =
         mentionedAgent ||
         visibleAgents.find((agent) => agent.id === resolvedComposerAgentId) ||
         visibleAgents.find((agent) => agent.id === channelDetail.default_agent_id) ||
         null;
-      const selectedAgent =
-        executionAgent;
+      const selectedAgent = collaborationAgent;
       const rootMentions = [...parsedMentions];
       const explicitSubmitMode = submitMode;
       const hasExplicitAiIntent = Boolean(
@@ -3378,10 +3919,7 @@ export function TeamChannelsPanel({
         : wantsWorkAtRoot
           ? 'temporary'
           : 'activity';
-      const requiresAiExecution = threadTarget ? true : rootSurface !== 'activity';
-      const interactionMode = requiresAiExecution
-        ? (submitMode === 'execution' ? 'execution' as const : 'conversation' as const)
-        : undefined;
+      const requiresAgentReply = threadTarget ? true : rootSurface !== 'activity';
       const optimisticUser = buildOptimisticUserMessage(
         channelDetail.channel_id,
         currentMember,
@@ -3403,7 +3941,7 @@ export function TeamChannelsPanel({
       } else {
         stickMainToBottomRef.current = true;
       }
-      const shouldEnterCollaborationWorkspace = !threadTarget && requiresAiExecution;
+      const shouldEnterCollaborationWorkspace = !threadTarget && requiresAgentReply;
       if (shouldEnterCollaborationWorkspace) {
         setSurfaceView('work');
         setWorkSurfaceFilter(rootSurface === 'issue' ? 'issue' : 'temporary');
@@ -3426,7 +3964,7 @@ export function TeamChannelsPanel({
       if (threadTarget) {
         setThreadMessages((prev) => [...prev, optimisticUser, optimisticAssistant]);
         setThreadComposeText('');
-      } else if (requiresAiExecution) {
+      } else if (requiresAgentReply) {
         setMessages((prev) => [...prev, optimisticUser, optimisticAssistant]);
         setComposeText('');
       } else {
@@ -3439,7 +3977,6 @@ export function TeamChannelsPanel({
         if (threadTarget) {
           await chatApi.sendChannelThreadMessage(channelDetail.channel_id, threadTarget, {
             content: finalContent,
-            interaction_mode: interactionMode,
             agent_id: resolvedComposerAgentId || channelDetail.default_agent_id,
             // Thread replies currently target the root thread, not arbitrary nested messages.
             // Sending a local optimistic id here makes the backend look up a message that doesn't exist yet.
@@ -3451,8 +3988,7 @@ export function TeamChannelsPanel({
           const response = await chatApi.sendChannelMessage(channelDetail.channel_id, {
             content: finalContent,
             surface: rootSurface,
-            interaction_mode: interactionMode,
-            agent_id: requiresAiExecution ? (executionAgent?.id || channelDetail.default_agent_id) : null,
+            agent_id: requiresAgentReply ? (collaborationAgent?.id || channelDetail.default_agent_id) : null,
             parent_message_id: null,
             attached_document_ids: pendingDocIdsSnapshot,
             mentions: rootMentions,
@@ -3460,7 +3996,7 @@ export function TeamChannelsPanel({
           setAttachedDocs([]);
           setPendingDocIds([]);
           setSelectedCapabilityRefs([]);
-          if (!requiresAiExecution || !response.streaming) {
+          if (!requiresAgentReply || !response.streaming) {
             await loadChannel(channelDetail.channel_id, {
               silent: true,
               preserveSelectedAgent: true,
@@ -3516,7 +4052,7 @@ export function TeamChannelsPanel({
       } catch (sendError) {
         console.error('Failed to send channel message:', sendError);
         setSending(false);
-        setError('发送频道消息失败，请稍后再试。');
+        setError(bilingual('发送频道消息失败，请稍后再试。', 'Failed to send the channel message. Please try again later.'));
         if (threadTarget) {
           await loadThread(channelDetail.channel_id, threadTarget);
         } else {
@@ -3555,10 +4091,13 @@ export function TeamChannelsPanel({
       return;
     }
     setForm({
-      name: channelDetail.name,
-      description: channelDetail.description || '',
-      visibility: channelDetail.visibility,
-      defaultAgentId: channelDetail.default_agent_id,
+        name: channelDetail.name,
+        description: channelDetail.description || '',
+        visibility: channelDetail.visibility,
+        channelType: channelDetail.channel_type || 'general',
+        defaultAgentId: channelDetail.default_agent_id,
+      workspaceDisplayName: channelDetail.workspace_display_name || channelDetail.name,
+      repoDefaultBranch: channelDetail.repo_default_branch || 'main',
       agentAutonomyMode: channelDetail.orchestrator_state?.agent_autonomy_mode || 'standard',
       channelGoal: channelDetail.orchestrator_state?.channel_goal || '',
       participantNotes: channelDetail.orchestrator_state?.participant_notes || '',
@@ -3628,7 +4167,7 @@ export function TeamChannelsPanel({
         }
       } catch (uploadError) {
         console.error('Failed to upload channel documents:', uploadError);
-        setError('上传到频道文档目录失败，请稍后再试。');
+        setError(bilingual('上传到频道文档目录失败，请稍后再试。', 'Failed to upload into the channel document directory. Please try again later.'));
       } finally {
         setUploadingDocument(false);
         if (fileInputRef.current) {
@@ -3731,7 +4270,7 @@ export function TeamChannelsPanel({
       await refreshChannelDocumentViews();
     } catch (error) {
       console.error('Failed to promote AI output to channel docs:', error);
-      setError('加入频道资料失败，请稍后再试。');
+      setError(bilingual('加入频道资料失败，请稍后再试。', 'Failed to add this item to channel documents. Please try again later.'));
     } finally {
       setPromotingDocId(null);
     }
@@ -3779,7 +4318,7 @@ export function TeamChannelsPanel({
       await refreshChannelDocumentViews();
     } catch (error) {
       console.error('Failed to publish AI output to team docs:', error);
-      setError('发布到团队文档失败，请稍后再试。');
+      setError(bilingual('发布到团队文档失败，请稍后再试。', 'Failed to publish to team documents. Please try again later.'));
     } finally {
       setPublishingDocId(null);
     }
@@ -3814,20 +4353,31 @@ export function TeamChannelsPanel({
           />
         );
       }
-      if (message.author_type === 'agent' || message.display_kind === 'suggestion' || message.display_kind === 'result') {
+      if (
+        message.author_type === 'agent'
+        || message.display_kind === 'onboarding'
+        || message.display_kind === 'suggestion'
+        || message.display_kind === 'result'
+      ) {
           const linkedCollaborationId =
             typeof message.metadata?.linked_collaboration_id === 'string'
               ? message.metadata.linked_collaboration_id
               : null;
           const cardPurpose = message.metadata?.card_purpose as string | undefined;
-          const primaryActionLabel = linkedCollaborationId
-            ? '查看协作项'
+          const isOnboardingCard =
+            message.display_kind === 'onboarding'
+            || cardPurpose === 'channel_onboarding';
+          const primaryActionLabel = isOnboardingCard
+            ? bilingual('填写信息', 'Fill in details')
+            : linkedCollaborationId
+              ? bilingual('查看协作项', 'View collaboration item')
+              : cardPurpose === 'discussion_summary' || message.display_kind === 'suggestion'
+                ? bilingual('开始协作', 'Start collaboration')
+                : null;
+          const secondaryActionLabel = isOnboardingCard
+            ? null
             : cardPurpose === 'discussion_summary' || message.display_kind === 'suggestion'
-              ? '开始协作'
-              : null;
-          const secondaryActionLabel =
-            cardPurpose === 'discussion_summary' || message.display_kind === 'suggestion'
-              ? '快速拒绝'
+              ? bilingual('快速拒绝', 'Quick reject')
               : null;
           return (
             <ChannelAssistantBubble
@@ -3885,16 +4435,16 @@ export function TeamChannelsPanel({
           <div className="collab-inspector-section-head">
             <div className="min-w-0 flex-1">
               <div className="collab-inspector-section-header-row">
-                <div className="collab-inspector-section-title">频道资料</div>
+                <div className="collab-inspector-section-title">{bilingual('频道资料', 'Channel documents')}</div>
                 <span className="collab-inspector-count">{channelDocuments.length}</span>
               </div>
               <div className="collab-inspector-section-meta">
-                已上传到频道目录的资料，需要按需附加到当前消息或线程。
+                {bilingual('已上传到频道目录的资料，需要按需附加到当前消息或线程。', 'Documents uploaded into the channel directory can be attached to the current message or thread when needed.')}
               </div>
             </div>
           </div>
           <div className="collab-inspector-meta-rail">
-            <span className="collab-inspector-meta-label">目录</span>
+            <span className="collab-inspector-meta-label">{bilingual('目录', 'Directory')}</span>
             <span
               className="collab-inspector-inline-meta collab-inspector-mono"
               title={channelDetail.document_folder_path || '/'}
@@ -3910,7 +4460,7 @@ export function TeamChannelsPanel({
                 className="h-8 rounded-[10px] px-2.5 text-[12px]"
                 onClick={() => openChannelDocuments(channelDetail.document_folder_path)}
               >
-                打开文档
+                {bilingual('打开文档', 'Open docs')}
               </Button>
             ) : null}
             <Button
@@ -3920,13 +4470,13 @@ export function TeamChannelsPanel({
               onClick={() => fileInputRef.current?.click()}
               disabled={uploadingDocument}
             >
-              {uploadingDocument ? '上传中…' : '上传资料'}
+              {uploadingDocument ? bilingual('上传中…', 'Uploading…') : bilingual('上传资料', 'Upload docs')}
             </Button>
           </div>
         </section>
         <div className="collab-inspector-list">
           {loadingChannelDocuments ? (
-            <div className="collab-inspector-empty">正在读取频道资料…</div>
+            <div className="collab-inspector-empty">{bilingual('正在读取频道资料…', 'Loading channel documents…')}</div>
           ) : channelDocuments.length > 0 ? (
             <div className="space-y-2.5">
               {channelDocuments.map((doc) => (
@@ -3949,7 +4499,7 @@ export function TeamChannelsPanel({
                       className="h-8 rounded-[10px] px-2.5 text-[12px]"
                       onClick={() => attachDocsToComposer([doc])}
                     >
-                      附加
+                      {bilingual('附加', 'Attach')}
                     </Button>
                     <Button
                       variant="ghost"
@@ -3957,14 +4507,14 @@ export function TeamChannelsPanel({
                       className="h-8 rounded-[10px] px-2.5 text-[12px]"
                       onClick={() => openChannelDocuments(channelDetail.document_folder_path)}
                     >
-                      打开
+                      {bilingual('打开', 'Open')}
                     </Button>
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="collab-inspector-empty">这个频道还没有资料。先上传到频道目录，再按需附加到当前消息。</div>
+            <div className="collab-inspector-empty">{bilingual('这个频道还没有资料。先上传到频道目录，再按需附加到当前消息。', 'This channel has no documents yet. Upload them into the channel directory first, then attach them when needed.')}</div>
           )}
         </div>
       </div>
@@ -3979,18 +4529,18 @@ export function TeamChannelsPanel({
           <div className="collab-inspector-section-head">
             <div className="min-w-0 flex-1">
               <div className="collab-inspector-section-header-row">
-                <div className="collab-inspector-section-title">AI 产出</div>
+                <div className="collab-inspector-section-title">{bilingual('AI 产出', 'AI outputs')}</div>
                 <span className="collab-inspector-count">{channelAiOutputs.length}</span>
               </div>
               <div className="collab-inspector-section-meta">
-                频道里的草稿、总结和结果。先附加使用，再决定是否加入频道资料或发布。
+                {bilingual('频道里的草稿、总结和结果。先附加使用，再决定是否加入频道资料或发布。', 'Drafts, summaries, and results generated in this channel. Attach them first, then decide whether to add them to channel docs or publish them.')}
               </div>
             </div>
           </div>
         </section>
         <div className="collab-inspector-list">
         {loadingChannelAiOutputs ? (
-          <div className="collab-inspector-empty">正在读取 AI 产出…</div>
+          <div className="collab-inspector-empty">{bilingual('正在读取 AI 产出…', 'Loading AI outputs…')}</div>
         ) : channelAiOutputs.length > 0 ? (
           <div className="space-y-2.5">
             {channelAiOutputs.map((doc) => (
@@ -4011,7 +4561,7 @@ export function TeamChannelsPanel({
                       ) : null}
                     </div>
                     <div className="collab-inspector-item-meta">
-                      {doc.source_thread_root_id ? '来自当前频道某条线程' : '来自当前频道'}
+                      {doc.source_thread_root_id ? bilingual('来自当前频道某条线程', 'From a thread in this channel') : bilingual('来自当前频道', 'From this channel')}
                     </div>
                   </div>
                   {doc.source_thread_root_id ? (
@@ -4021,7 +4571,7 @@ export function TeamChannelsPanel({
                       className="h-8 rounded-[10px] px-2.5 text-[12px]"
                       onClick={() => void loadThread(channelDetail.channel_id, doc.source_thread_root_id!)}
                     >
-                      来源线程
+                      {bilingual('来源线程', 'Source thread')}
                     </Button>
                     ) : null}
                 </div>
@@ -4032,7 +4582,7 @@ export function TeamChannelsPanel({
                     className="h-8 rounded-[10px] px-2.5 text-[12px]"
                     onClick={() => attachDocsToComposer([doc])}
                   >
-                    附加
+                    {bilingual('附加', 'Attach')}
                   </Button>
                   <Button
                     variant="outline"
@@ -4042,10 +4592,10 @@ export function TeamChannelsPanel({
                     disabled={promotingDocId === doc.id || doc.folder_path === channelDetail.document_folder_path}
                   >
                     {doc.folder_path === channelDetail.document_folder_path
-                      ? '已在频道资料'
+                      ? bilingual('已在频道资料', 'Already in channel docs')
                       : promotingDocId === doc.id
-                        ? '处理中…'
-                        : '加入频道资料'}
+                        ? bilingual('处理中…', 'Processing…')
+                        : bilingual('加入频道资料', 'Add to channel docs')}
                   </Button>
                   <Button
                     variant="outline"
@@ -4054,14 +4604,14 @@ export function TeamChannelsPanel({
                     onClick={() => void openPublishDialog(doc)}
                     disabled={publishingDocId === doc.id || doc.status === 'accepted'}
                   >
-                    {doc.status === 'accepted' ? '已发布' : '发布到团队文档'}
+                    {doc.status === 'accepted' ? bilingual('已发布', 'Published') : bilingual('发布到团队文档', 'Publish to team docs')}
                   </Button>
                 </div>
               </div>
             ))}
           </div>
         ) : (
-          <div className="collab-inspector-empty">当前频道还没有 AI 产出。让 Agent 生成草稿、总结或报告后，这里会自动出现。</div>
+          <div className="collab-inspector-empty">{bilingual('当前频道还没有 AI 产出。让 Agent 生成草稿、总结或报告后，这里会自动出现。', 'There are no AI outputs in this channel yet. After the agent generates drafts, summaries, or reports, they will appear here automatically.')}</div>
         )}
       </div>
     </div>
@@ -4074,16 +4624,16 @@ export function TeamChannelsPanel({
         <div className="collab-inspector-section-head">
           <div className="min-w-0 flex-1">
             <div className="collab-inspector-section-header-row">
-              <div className="collab-inspector-section-title">成员管理</div>
+              <div className="collab-inspector-section-title">{bilingual('成员管理', 'Member management')}</div>
               <span className="collab-inspector-count">{members.length}</span>
             </div>
-            <div className="collab-inspector-section-meta">公开频道默认可见；私密频道需要手动维护成员与角色。</div>
+            <div className="collab-inspector-section-meta">{bilingual('公开频道默认可见；私密频道需要手动维护成员与角色。', 'Public channels are visible by default. Private channels require manual member and role management.')}</div>
           </div>
         </div>
         <div className="collab-inspector-member-add">
           <Select value={newMemberId} onValueChange={setNewMemberId}>
             <SelectTrigger className="h-9 rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] text-[12px] shadow-none">
-              <SelectValue placeholder="选择成员" />
+              <SelectValue placeholder={bilingual('选择成员', 'Select member')} />
             </SelectTrigger>
             <SelectContent>
               {memberOptions.map((member) => (
@@ -4097,8 +4647,8 @@ export function TeamChannelsPanel({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="member">成员</SelectItem>
-                <SelectItem value="manager">管理者</SelectItem>
+                <SelectItem value="member">{bilingual('成员', 'Member')}</SelectItem>
+                <SelectItem value="manager">{bilingual('管理者', 'Manager')}</SelectItem>
               </SelectContent>
             </Select>
             <Button
@@ -4107,11 +4657,11 @@ export function TeamChannelsPanel({
               onClick={() => void handleAddMember()}
               disabled={!newMemberId}
             >
-              添加成员
+              {bilingual('添加成员', 'Add member')}
             </Button>
           </div>
         </div>
-        <div className="collab-inspector-helper">先选成员，再设角色并添加。成员标识默认截断显示，悬停可查看完整 ID。</div>
+        <div className="collab-inspector-helper">{bilingual('先选成员，再设角色并添加。成员标识默认截断显示，悬停可查看完整 ID。', 'Select a member first, then choose a role and add them. Member identifiers are truncated by default; hover to view the full ID.')}</div>
       </section>
       <div className="space-y-2.5">
         {members.map((member) => (
@@ -4133,9 +4683,9 @@ export function TeamChannelsPanel({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="owner">所有者</SelectItem>
-                <SelectItem value="manager">管理者</SelectItem>
-                <SelectItem value="member">成员</SelectItem>
+                <SelectItem value="owner">{bilingual('所有者', 'Owner')}</SelectItem>
+                <SelectItem value="manager">{bilingual('管理者', 'Manager')}</SelectItem>
+                <SelectItem value="member">{bilingual('成员', 'Member')}</SelectItem>
               </SelectContent>
             </Select>
             <Button
@@ -4144,7 +4694,7 @@ export function TeamChannelsPanel({
               className="h-8 rounded-[10px] px-2.5 text-[12px]"
               onClick={() => void handleRemoveMember(member.user_id)}
             >
-              移除
+              {bilingual('移除', 'Remove')}
             </Button>
             </div>
           </div>
@@ -4158,46 +4708,46 @@ export function TeamChannelsPanel({
       <section className="collab-inspector-section">
         <div className="collab-inspector-section-head">
           <div className="min-w-0">
-            <div className="collab-inspector-section-title">基本信息</div>
-            <div className="collab-inspector-section-meta">维护频道名称、说明、可见范围与默认 Agent。</div>
+            <div className="collab-inspector-section-title">{bilingual('基本信息', 'Basic info')}</div>
+            <div className="collab-inspector-section-meta">{bilingual('维护频道名称、说明、可见范围与默认 Agent。', 'Manage the channel name, description, visibility, and default agent.')}</div>
           </div>
         </div>
         <div className="space-y-3">
           <label className="collab-inspector-field">
-            <span className="collab-inspector-field-label">频道名称</span>
+            <span className="collab-inspector-field-label">{bilingual('频道名称', 'Channel name')}</span>
             <Input
               value={form.name}
               onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-              placeholder="频道名称"
+              placeholder={bilingual('频道名称', 'Channel name')}
               className="h-9 rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] text-[12px] shadow-none"
             />
           </label>
           <label className="collab-inspector-field">
-            <span className="collab-inspector-field-label">频道说明</span>
+            <span className="collab-inspector-field-label">{bilingual('频道说明', 'Channel description')}</span>
             <Textarea
               value={form.description}
               onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
-              placeholder="频道说明"
+              placeholder={bilingual('频道说明', 'Channel description')}
               className="min-h-[92px] rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] text-[12px] shadow-none"
             />
           </label>
           <label className="collab-inspector-field">
-            <span className="collab-inspector-field-label">可见范围</span>
+            <span className="collab-inspector-field-label">{bilingual('可见范围', 'Visibility')}</span>
             <Select value={form.visibility} onValueChange={(value) => setForm((prev) => ({ ...prev, visibility: value as ChatChannelVisibility }))}>
               <SelectTrigger className="h-9 rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] text-[12px] shadow-none">
                 <SelectValue />
               </SelectTrigger>
         <SelectContent>
-          <SelectItem value="team_public">公开频道</SelectItem>
-          <SelectItem value="team_private">私密频道</SelectItem>
+          <SelectItem value="team_public">{bilingual('公开频道', 'Public channel')}</SelectItem>
+          <SelectItem value="team_private">{bilingual('私密频道', 'Private channel')}</SelectItem>
         </SelectContent>
             </Select>
           </label>
           <label className="collab-inspector-field">
-            <span className="collab-inspector-field-label">默认 Agent</span>
+            <span className="collab-inspector-field-label">{bilingual('默认 Agent', 'Default agent')}</span>
       <Select value={form.defaultAgentId} onValueChange={(value) => setForm((prev) => ({ ...prev, defaultAgentId: value }))}>
         <SelectTrigger className="h-9 rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] text-[12px] shadow-none">
-          <SelectValue placeholder="默认 Agent" />
+          <SelectValue placeholder={bilingual('默认 Agent', 'Default agent')} />
         </SelectTrigger>
         <SelectContent>
           {visibleAgents.map((agent) => (
@@ -4211,12 +4761,12 @@ export function TeamChannelsPanel({
       <section className="collab-inspector-section">
         <div className="collab-inspector-section-head">
           <div className="min-w-0">
-            <div className="collab-inspector-section-title">协作策略</div>
-            <div className="collab-inspector-section-meta">设置管理 Agent 在这个频道里的主动度和推进方式。</div>
+            <div className="collab-inspector-section-title">{bilingual('协作策略', 'Collaboration policy')}</div>
+            <div className="collab-inspector-section-meta">{bilingual('设置管理 Agent 在这个频道里的主动度和推进方式。', 'Configure how proactively the managing agent participates and drives work in this channel.')}</div>
           </div>
         </div>
         <label className="collab-inspector-field">
-          <span className="collab-inspector-field-label">Agent 主动度</span>
+          <span className="collab-inspector-field-label">{bilingual('Agent 主动度', 'Agent autonomy')}</span>
         <Select
           value={form.agentAutonomyMode}
           onValueChange={(value) =>
@@ -4227,9 +4777,9 @@ export function TeamChannelsPanel({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="standard">标准模式</SelectItem>
-            <SelectItem value="proactive">主动推进模式</SelectItem>
-            <SelectItem value="agent_lead">Agent 主导模式</SelectItem>
+            <SelectItem value="standard">{bilingual('标准模式', 'Standard mode')}</SelectItem>
+            <SelectItem value="proactive">{bilingual('主动推进模式', 'Proactive mode')}</SelectItem>
+            <SelectItem value="agent_lead">{bilingual('Agent 主导模式', 'Agent-led mode')}</SelectItem>
           </SelectContent>
         </Select>
         <div className="collab-inspector-helper">
@@ -4240,50 +4790,50 @@ export function TeamChannelsPanel({
       <section className="collab-inspector-section">
         <div className="collab-inspector-section-head">
           <div className="min-w-0">
-            <div className="collab-inspector-section-title">频道记忆</div>
-            <div className="collab-inspector-section-meta">管理 Agent 会长期参考这里的目标、参与人和产出物。</div>
+            <div className="collab-inspector-section-title">{bilingual('频道记忆', 'Channel memory')}</div>
+            <div className="collab-inspector-section-meta">{bilingual('管理 Agent 会长期参考这里的目标、参与人和产出物。', 'The managing agent will keep using these goals, participants, and outputs over time.')}</div>
           </div>
         </div>
         <div className="space-y-3">
         <label className="collab-inspector-field">
-          <span className="collab-inspector-field-label">频道目标</span>
+          <span className="collab-inspector-field-label">{bilingual('频道目标', 'Channel goal')}</span>
           <Textarea
             value={form.channelGoal}
             onChange={(event) => setForm((prev) => ({ ...prev, channelGoal: event.target.value }))}
-            placeholder="这个频道主要围绕什么事情建立？"
+            placeholder={bilingual('这个频道主要围绕什么事情建立？', 'What is this channel mainly created for?')}
             className="min-h-[76px] rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] text-[12px] shadow-none"
           />
         </label>
         <label className="collab-inspector-field">
-          <span className="collab-inspector-field-label">参与人</span>
+          <span className="collab-inspector-field-label">{bilingual('参与人', 'Participants')}</span>
           <Textarea
             value={form.participantNotes}
             onChange={(event) => setForm((prev) => ({ ...prev, participantNotes: event.target.value }))}
-            placeholder="主要谁会参与协作？谁是关键判断人？"
+            placeholder={bilingual('主要谁会参与协作？谁是关键判断人？', 'Who mainly participates? Who makes the key decisions?')}
             className="min-h-[76px] rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] text-[12px] shadow-none"
           />
         </label>
         <label className="collab-inspector-field">
-          <span className="collab-inspector-field-label">产出物</span>
+          <span className="collab-inspector-field-label">{bilingual('产出物', 'Outputs')}</span>
           <Textarea
             value={form.expectedOutputs}
             onChange={(event) => setForm((prev) => ({ ...prev, expectedOutputs: event.target.value }))}
-            placeholder="最终希望形成什么结果、文档、方案或交付物？"
+            placeholder={bilingual('最终希望形成什么结果、文档、方案或交付物？', 'What result, document, plan, or deliverable do you want in the end?')}
             className="min-h-[76px] rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] text-[12px] shadow-none"
           />
         </label>
         <label className="collab-inspector-field">
-          <span className="collab-inspector-field-label">协作方式</span>
+          <span className="collab-inspector-field-label">{bilingual('协作方式', 'Collaboration style')}</span>
           <Input
             value={form.collaborationStyle}
             onChange={(event) => setForm((prev) => ({ ...prev, collaborationStyle: event.target.value }))}
-            placeholder="例如：偏讨论 / 偏方案 / 偏执行 / 偏评审 / 混合"
+            placeholder={bilingual('例如：偏讨论 / 偏方案 / 偏执行 / 偏评审 / 混合', 'For example: discussion-heavy / planning-heavy / execution-heavy / review-heavy / mixed')}
             className="h-9 rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] text-[12px] shadow-none"
           />
         </label>
         {channelDetail?.orchestrator_state?.last_heartbeat_at ? (
           <div className="collab-inspector-inline-note">
-            最近心跳：{formatDateTime(channelDetail.orchestrator_state.last_heartbeat_at)}
+            {bilingual('最近心跳：', 'Latest heartbeat: ')}{formatDateTime(channelDetail.orchestrator_state.last_heartbeat_at)}
             {channelDetail.orchestrator_state.last_heartbeat_reason
               ? ` · ${channelDetail.orchestrator_state.last_heartbeat_reason}`
               : ''}
@@ -4293,50 +4843,305 @@ export function TeamChannelsPanel({
       </section>
       <div className="flex justify-end">
         <Button className="h-9 rounded-[12px] px-3 text-[12px]" onClick={() => void handleSaveChannel()}>
-          <Save className="mr-1 h-4 w-4" />保存频道设置
+          <Save className="mr-1 h-4 w-4" />{bilingual('保存频道设置', 'Save channel settings')}
         </Button>
       </div>
       <section className="collab-inspector-danger">
-        <div className="collab-inspector-section-title">危险操作</div>
+        <div className="collab-inspector-section-title">{bilingual('危险操作', 'Danger zone')}</div>
         <div className="collab-inspector-section-meta">
-          可以选择只删除频道，保留所有文档；或者彻底删除频道和相关文档。
+          {bilingual('可以选择只删除频道，保留所有文档；或者彻底删除频道和相关文档。', 'You can delete only the channel and keep all documents, or permanently delete the channel and related documents.')}
         </div>
         <div className="mt-3 flex justify-end">
           <Button variant="destructive" className="h-9 rounded-[12px] px-3 text-[12px]" onClick={() => setDeleteDialogOpen(true)}>
-            删除频道
+            {bilingual('删除频道', 'Delete channel')}
           </Button>
         </div>
       </section>
     </div>
   );
 
+  const renderWorkspacePanelContent = () => {
+    if (!channelDetail) return null;
+
+    const currentThreadLabel = threadRootMessage
+      ? currentThreadSummary
+      : bilingual('当前还没有打开具体协作线程', 'No collaboration thread is currently open');
+    const currentDelegationSummary = buildDelegationRuntimeSummary(
+      threadDelegationRuntime,
+    );
+
+    return (
+      <div className="collab-inspector-pane">
+        <section className="collab-inspector-section">
+          <div className="collab-inspector-section-head">
+            <div className="min-w-0 flex-1">
+              <div className="collab-inspector-section-header-row">
+                <div className="collab-inspector-section-title">{bilingual('项目空间', 'Project space')}</div>
+                <span className="collab-inspector-count">coding</span>
+              </div>
+              <div className="collab-meta mt-1 text-[11px] leading-5">
+                {bilingual('编程项目频道会把协作线程放到服务器工作区里执行。信息面板继续保留资料、AI 产出、成员和设置，这里只看代码现场。', 'Coding channels execute collaboration threads in a server workspace. The info panel still keeps docs, AI outputs, members, and settings; this view focuses only on the code context.')}
+              </div>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="rounded-[14px] border border-border/70 bg-background/80 px-3 py-3">
+              <div className="text-[11px] font-medium text-foreground">
+                {channelDetail.workspace_display_name || channelDetail.name}
+              </div>
+              <div className="mt-1 text-[11px] text-muted-foreground">
+                {channelTypeLabel(channelDetail.channel_type)}
+              </div>
+              <div className="mt-3 space-y-2 text-[11px] text-muted-foreground">
+                <div>
+                  <div className="font-medium text-foreground/80">{bilingual('项目空间路径', 'Project space path')}</div>
+                  <div className="mt-0.5 break-all font-mono">{channelDetail.workspace_path || bilingual('未绑定', 'Not bound')}</div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground/80">{bilingual('仓库路径', 'Repo path')}</div>
+                  <div className="mt-0.5 break-all font-mono">{channelDetail.repo_path || bilingual('未生成', 'Not created')}</div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground/80">{bilingual('主检出路径', 'Main checkout path')}</div>
+                  <div className="mt-0.5 break-all font-mono">
+                    {channelDetail.main_checkout_path || channelDetail.repo_root || bilingual('未生成', 'Not created')}
+                  </div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground/80">{bilingual('默认分支', 'Default branch')}</div>
+                  <div className="mt-0.5">{channelDetail.repo_default_branch || 'main'}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="collab-inspector-section">
+          <div className="collab-inspector-section-head">
+            <div className="min-w-0 flex-1">
+              <div className="collab-inspector-section-header-row">
+                <div className="collab-inspector-section-title">{bilingual('线程现场', 'Thread workspace')}</div>
+              </div>
+              <div className="collab-meta mt-1 text-[11px] leading-5">
+                {bilingual('当前线程会在独立 worktree 中继续推进；没有打开线程时，这里只显示频道级项目空间。', 'The current thread continues in an isolated worktree. When no thread is open, this view shows only the channel-level project space.')}
+              </div>
+            </div>
+          </div>
+          <div className="rounded-[14px] border border-border/70 bg-background/80 px-3 py-3">
+            <div className="text-[11px] font-medium text-foreground">{currentThreadLabel}</div>
+            {threadRuntime ? (
+              <div className="mt-3 space-y-2 text-[11px] text-muted-foreground">
+                <div>
+                  <div className="font-medium text-foreground/80">{bilingual('线程现场路径', 'Thread workspace path')}</div>
+                  <div className="mt-0.5 break-all font-mono">
+                    {threadRuntime.thread_worktree_path || threadRuntime.workspace_path || bilingual('未绑定', 'Not bound')}
+                  </div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground/80">{bilingual('线程分支', 'Thread branch')}</div>
+                  <div className="mt-0.5">{threadRuntime.thread_branch || bilingual('未分配', 'Unassigned')}</div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground/80">{bilingual('仓库引用', 'Repo ref')}</div>
+                  <div className="mt-0.5 break-all font-mono">{threadRuntime.thread_repo_ref || bilingual('未绑定', 'Not bound')}</div>
+                </div>
+                <div>
+                  <div className="font-medium text-foreground/80">{bilingual('运行时会话', 'Runtime session')}</div>
+                  <div className="mt-0.5 break-all font-mono">{threadRuntime.runtime_session_id || bilingual('未创建', 'Not created')}</div>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                {bilingual('还没有打开具体线程，进入协作项后这里会显示对应的 worktree、分支和运行时会话。', 'No specific thread is open yet. After entering a collaboration item, this panel will show the worktree, branch, and runtime session.')}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="collab-inspector-section">
+          <div className="collab-inspector-section-head">
+            <div className="min-w-0 flex-1">
+              <div className="collab-inspector-section-header-row">
+                <div className="collab-inspector-section-title">{bilingual('协作运行态', 'Collaboration runtime')}</div>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] ${delegationRuntimeStatusTone(
+                      threadDelegationRuntime?.status,
+                    )}`}
+                  >
+                    {delegationRuntimeStatusLabel(threadDelegationRuntime?.status)}
+                  </span>
+              </div>
+                <div className="collab-meta mt-1 text-[11px] leading-5">
+                  {bilingual('查看当前线程是否发生了委托执行，以及每个 worker 的推进状态。', 'Inspect whether delegation happened in the current thread and how each worker is progressing.')}
+                </div>
+            </div>
+          </div>
+          <div className="rounded-[14px] border border-border/70 bg-background/80 px-3 py-3">
+            <div className="text-[11px] leading-5 text-muted-foreground">
+              {currentDelegationSummary}
+            </div>
+            {threadDelegationRuntime?.leader ? (
+              <div className="mt-3 rounded-[12px] border border-border/60 bg-background px-3 py-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{bilingual('协调者', 'Leader')}</div>
+                      <div className="text-[13px] font-medium text-foreground">
+                        {delegationLeaderTitle(threadDelegationRuntime.leader.title)}
+                      </div>
+                  </div>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] ${delegationRuntimeStatusTone(
+                        threadDelegationRuntime.leader.status,
+                      )}`}
+                    >
+                      {delegationRuntimeStatusLabel(threadDelegationRuntime.leader.status)}
+                    </span>
+                </div>
+                {threadDelegationRuntime.leader.summary ? (
+                  <div className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                    {threadDelegationRuntime.leader.summary}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="mt-3 space-y-2">
+              {threadDelegationRuntime?.workers?.length ? (
+                threadDelegationRuntime.workers.map((worker) => (
+                  <div
+                    key={worker.worker_id}
+                    className="rounded-[12px] border border-border/60 bg-background px-3 py-2.5"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                          <div className="text-[13px] font-medium text-foreground">
+                            {delegationWorkerTitle(worker)}
+                          </div>
+                          <div className="mt-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                            {delegationWorkerRoleLabel(worker.role)}
+                          </div>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${delegationRuntimeStatusTone(
+                            worker.status,
+                          )}`}
+                        >
+                          {delegationRuntimeStatusLabel(worker.status)}
+                        </span>
+                    </div>
+                    {worker.summary ? (
+                      <div className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                        {worker.summary}
+                      </div>
+                    ) : null}
+                    {worker.result_summary ? (
+                      <div className="mt-2 text-[11px] leading-5 text-foreground">
+                        {worker.result_summary}
+                      </div>
+                    ) : null}
+                    {worker.error ? (
+                      <div className="mt-2 text-[11px] leading-5 text-status-error-text">
+                        {worker.error}
+                      </div>
+                    ) : null}
+                  </div>
+                ))
+              ) : (
+                <div className="text-[11px] leading-5 text-muted-foreground">
+                  {bilingual('当前线程还没有发生 subagent 或 swarm 运行。', 'No subagent or swarm execution has happened in this thread yet.')}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="collab-inspector-section">
+          <div className="collab-inspector-section-head">
+            <div className="min-w-0 flex-1">
+              <div className="collab-inspector-section-header-row">
+                <div className="collab-inspector-section-title">{bilingual('项目结构', 'Project structure')}</div>
+                <span className="collab-inspector-count">{workspaceCodeFiles.length}</span>
+              </div>
+              <div className="collab-meta mt-1 text-[11px] leading-5">
+                {bilingual('只显示当前代码现场里的文件夹和代码文件名。打开线程时优先读取 thread worktree，没有线程时回退到主检出目录。', 'Only folders and code filenames from the current code context are shown. When a thread is open, it reads the thread worktree first; otherwise it falls back to the main checkout.')}
+              </div>
+            </div>
+          </div>
+          <div className="rounded-[14px] border border-border/70 bg-background/80 px-3 py-3">
+            {workspaceCodeFilesRootPath ? (
+              <div className="mb-3 text-[11px] text-muted-foreground">
+                <div className="font-medium text-foreground/80">{bilingual('当前读取路径', 'Current path')}</div>
+                <div className="mt-0.5 break-all font-mono">{workspaceCodeFilesRootPath}</div>
+              </div>
+            ) : null}
+            {workspaceCodeFilesLoading ? (
+              <div className="text-[11px] text-muted-foreground">{bilingual('正在读取代码文件…', 'Loading code files…')}</div>
+            ) : workspaceCodeFilesError ? (
+              <div className="text-[11px] text-destructive">{workspaceCodeFilesError}</div>
+            ) : workspaceCodeFiles.length > 0 ? (
+              <div className="space-y-3">
+                <div className="max-h-[420px] space-y-1.5 overflow-y-auto pr-1">
+                  {workspaceCodeTree}
+                </div>
+                {workspaceCodeFilesTruncated ? (
+                  <div className="text-[11px] text-muted-foreground">
+                    {bilingual('文件较多，当前只显示前 800 个代码文件。', 'There are many files, so only the first 800 code files are shown right now.')}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="text-[11px] leading-5 text-muted-foreground">
+                {bilingual('当前代码现场里还没有识别到代码文件。', 'No code files were detected in the current code context yet.')}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="collab-inspector-section">
+          <div className="collab-inspector-section-head">
+            <div className="min-w-0 flex-1">
+              <div className="collab-inspector-section-header-row">
+                <div className="collab-inspector-section-title">{bilingual('治理说明', 'Governance notes')}</div>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-[14px] border border-border/70 bg-background/80 px-3 py-3 text-[11px] leading-5 text-muted-foreground">
+            {bilingual('切回普通协作频道时，只会解绑频道和项目工作区的使用关系，不会删除底层 repo/worktree。后续工作区恢复、归档和删除治理，会继续落在这个独立工作区面板里。', 'Switching back to a general collaboration channel only detaches the channel from the project workspace. It does not delete the underlying repo or worktree. Later restore, archive, and delete governance stays in this dedicated workspace panel.')}
+          </div>
+        </section>
+      </div>
+    );
+  };
+
   const renderDesktopInspector = () => {
     if (!channelDetail || isMobile) return null;
-    const inspectorTab = sidePanelMode && sidePanelMode !== 'thread' ? sidePanelMode : null;
+    const inspectorTab =
+      sidePanelMode && sidePanelMode !== 'thread' && sidePanelMode !== 'workspace'
+        ? sidePanelMode
+        : null;
     if (!inspectorTab) return null;
     const inspectorTabs: Array<{ key: InspectorTabKey; label: string; count?: number; summary: string }> = [
       {
         key: 'documents',
-        label: '资料',
+        label: bilingual('资料', 'Docs'),
         count: channelDocuments.length,
-        summary: '频道资料目录与已上传材料。只有附加到当前消息或线程的内容才会进入当前上下文。',
+        summary: bilingual('频道资料目录与已上传材料。只有附加到当前消息或线程的内容才会进入当前上下文。', 'Channel documents and uploaded material. Only content attached to the current message or thread enters the current context.'),
       },
       {
         key: 'ai_outputs',
-        label: 'AI 产出',
+        label: bilingual('AI 产出', 'AI outputs'),
         count: channelAiOutputs.length,
-        summary: 'Agent 在当前频道生成的草稿、总结和结果，可附加、归档或发布。',
+        summary: bilingual('Agent 在当前频道生成的草稿、总结和结果，可附加、归档或发布。', 'Drafts, summaries, and results generated by the agent in this channel. They can be attached, archived, or published.'),
       },
       {
         key: 'members',
-        label: '成员',
+        label: bilingual('成员', 'Members'),
         count: members.length,
-        summary: '维护谁能看到这个频道、谁负责判断，以及各成员在频道中的角色。',
+        summary: bilingual('维护谁能看到这个频道、谁负责判断，以及各成员在频道中的角色。', 'Manage who can see the channel, who makes decisions, and what role each member has inside it.'),
       },
       {
         key: 'settings',
-        label: '设置',
-        summary: '管理频道基本信息、Agent 主动度、频道记忆与删除策略。',
+        label: bilingual('设置', 'Settings'),
+        summary: bilingual('管理频道基本信息、Agent 主动度、频道记忆与删除策略。', 'Manage basic channel information, agent autonomy, channel memory, and deletion strategy.'),
       },
     ];
     const activeTab = inspectorTabs.find((item) => item.key === inspectorTab) || inspectorTabs[0];
@@ -4346,7 +5151,7 @@ export function TeamChannelsPanel({
           <div className="collab-shell-header collab-inspector-header px-4 py-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="collab-inspector-kicker">信息面板</div>
+                <div className="collab-inspector-kicker">{bilingual('信息面板', 'Info panel')}</div>
                 <div className="collab-inspector-header-row">
                   <div className="collab-inspector-title">{activeTab.label}</div>
                   {typeof activeTab.count === 'number' ? (
@@ -4385,6 +5190,42 @@ export function TeamChannelsPanel({
             {inspectorTab === 'ai_outputs' ? renderAiOutputsInspector() : null}
             {inspectorTab === 'members' ? renderMembersContent() : null}
             {inspectorTab === 'settings' ? renderSettingsContent() : null}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDesktopWorkspacePanel = () => {
+    if (!channelDetail || isMobile || sidePanelMode !== 'workspace' || channelDetail.channel_type !== 'coding') {
+      return null;
+    }
+
+    return (
+      <div className="collab-inspector-shell w-[368px] shrink-0">
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="collab-shell-header collab-inspector-header px-4 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="collab-inspector-kicker">{bilingual('工作区面板', 'Workspace panel')}</div>
+                <div className="collab-inspector-header-row">
+                  <div className="collab-inspector-title">{bilingual('代码现场', 'Code context')}</div>
+                </div>
+                <div className="collab-inspector-subtitle">
+                  {bilingual('查看频道绑定的项目空间、仓库主检出和当前线程现场。原来的信息面板保持不变，这里只承接编程相关上下文。', 'Inspect the channel-bound project space, main repo checkout, and current thread workspace. The original info panel stays unchanged; this panel handles only coding-related context.')}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSidePanelMode(null)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div className="collab-inspector-body min-h-0 flex-1 overflow-y-auto px-4 py-4">
+            {renderWorkspacePanelContent()}
           </div>
         </div>
       </div>
@@ -4442,7 +5283,7 @@ export function TeamChannelsPanel({
           muted: channel.muted,
           last_visited_at: channel.last_visited_at ?? null,
         });
-        setError('更新频道置顶状态失败，请稍后再试。');
+        setError(bilingual('更新频道置顶状态失败，请稍后再试。', 'Failed to update the pinned state. Please try again later.'));
       }
     },
     [applyChannelPrefs, user?.id],
@@ -4474,7 +5315,7 @@ export function TeamChannelsPanel({
           muted: channel.muted,
           last_visited_at: channel.last_visited_at ?? null,
         });
-        setError('更新频道静音状态失败，请稍后再试。');
+        setError(bilingual('更新频道静音状态失败，请稍后再试。', 'Failed to update the muted state. Please try again later.'));
       }
     },
     [applyChannelPrefs, user?.id],
@@ -4514,7 +5355,7 @@ export function TeamChannelsPanel({
       .map((message) => {
       const rootId = message.thread_root_id || message.message_id;
       const preview = (message.summary_text || pairedAssistantByRootId.get(rootId)?.content_text || '').trim();
-      const titleSource = message.content_text?.trim() || preview || '未命名协作项';
+      const titleSource = message.content_text?.trim() || preview || bilingual('未命名协作项', 'Untitled collaboration item');
       const firstLine = titleSource.split('\n')[0] || titleSource;
       const title = firstLine.length > 28 ? `${firstLine.slice(0, 28)}…` : firstLine;
       const fallbackAgentNames =
@@ -4626,7 +5467,134 @@ export function TeamChannelsPanel({
     !isMobile && desktopThreadMode && threadRootId && threadRootMessage,
   );
 
-  const inspectorTab = (sidePanelMode && sidePanelMode !== 'thread' ? sidePanelMode : null) as InspectorTabKey | null;
+  const inspectorTab = (
+    sidePanelMode && sidePanelMode !== 'thread' && sidePanelMode !== 'workspace'
+      ? sidePanelMode
+      : null
+  ) as InspectorTabKey | null;
+  const isCodingChannel = channelDetail?.channel_type === 'coding';
+  const openWorkspacePreview = useCallback((filePath: string) => {
+    if (!channelDetail?.channel_id) return;
+    const url = chatApi.getChannelWorkspacePreviewUrl(
+      channelDetail.channel_id,
+      filePath,
+      threadRootId,
+    );
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }, [channelDetail?.channel_id, threadRootId]);
+  const workspaceCodeTree = useMemo(() => {
+    type TreeNode = { name: string; children: Map<string, TreeNode>; files: string[] };
+    const root: TreeNode = { name: '', children: new Map(), files: [] };
+    for (const file of workspaceCodeFiles) {
+      const parts = file.split('/').filter(Boolean);
+      if (parts.length === 0) continue;
+      let current = root;
+      for (const segment of parts.slice(0, -1)) {
+        let next = current.children.get(segment);
+        if (!next) {
+          next = { name: segment, children: new Map(), files: [] };
+          current.children.set(segment, next);
+        }
+        current = next;
+      }
+      current.files.push(parts[parts.length - 1]);
+    }
+    const renderNode = (node: TreeNode, pathPrefix = ''): ReactNode => {
+      const folders = Array.from(node.children.values()).sort((a, b) => a.name.localeCompare(b.name));
+      const files = [...node.files].sort((a, b) => a.localeCompare(b));
+      return (
+        <>
+          {folders.map((folder) => {
+            const nextPath = pathPrefix ? `${pathPrefix}/${folder.name}` : folder.name;
+            return (
+              <div key={`dir:${nextPath}`} className="space-y-1">
+                <div className="rounded-[10px] bg-muted/[0.05] px-2.5 py-1.5 text-[11px] font-medium text-foreground">
+                  {folder.name}/
+                </div>
+                <div className="ml-3 space-y-1 border-l border-border/50 pl-2">
+                  {renderNode(folder, nextPath)}
+                </div>
+              </div>
+            );
+          })}
+          {files.map((file) => {
+            const filePath = pathPrefix ? `${pathPrefix}/${file}` : file;
+            const canPreview = workspaceFileSupportsBrowserPreview(filePath);
+            return (
+              <div
+                key={`file:${filePath}`}
+                className="rounded-[10px] border border-border/60 bg-background px-2.5 py-1.5 text-[11px] text-foreground"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="break-all font-mono">{file}</span>
+                  {canPreview ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-6 shrink-0 rounded-[8px] px-2 text-[10px]"
+                      onClick={() => openWorkspacePreview(filePath)}
+                    >
+                      {bilingual('打开预览', 'Open preview')}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      );
+    };
+    return renderNode(root);
+  }, [openWorkspacePreview, workspaceCodeFiles]);
+
+  useEffect(() => {
+    if (sidePanelMode === 'workspace' && !isCodingChannel) {
+      setSidePanelMode(null);
+    }
+  }, [isCodingChannel, sidePanelMode]);
+
+  useEffect(() => {
+    if (!selectedChannelId || !isCodingChannel) {
+      setWorkspaceCodeFiles([]);
+      setWorkspaceCodeFilesRootPath(null);
+      setWorkspaceCodeFilesTruncated(false);
+      setWorkspaceCodeFilesLoading(false);
+      setWorkspaceCodeFilesError(null);
+    }
+  }, [isCodingChannel, selectedChannelId]);
+
+  useEffect(() => {
+    if (sidePanelMode !== 'workspace' || !selectedChannelId || !isCodingChannel) {
+      return;
+    }
+    let cancelled = false;
+    setWorkspaceCodeFilesLoading(true);
+    setWorkspaceCodeFilesError(null);
+    void chatApi
+      .getChannelWorkspaceFiles(selectedChannelId, threadRootId)
+      .then((payload) => {
+        if (cancelled) return;
+        setWorkspaceCodeFiles(payload.code_files || []);
+        setWorkspaceCodeFilesRootPath(payload.root_path || null);
+        setWorkspaceCodeFilesTruncated(Boolean(payload.truncated));
+      })
+      .catch((loadError) => {
+        if (cancelled) return;
+        console.error('Failed to load workspace code files:', loadError);
+        setWorkspaceCodeFiles([]);
+        setWorkspaceCodeFilesRootPath(null);
+        setWorkspaceCodeFilesTruncated(false);
+        setWorkspaceCodeFilesError(bilingual('加载代码文件失败，请稍后再试。', 'Failed to load code files. Please try again later.'));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setWorkspaceCodeFilesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isCodingChannel, selectedChannelId, sidePanelMode, threadRootId]);
 
   const currentAutonomyMeta = useMemo(
     () => getChannelAutonomyMeta(channelDetail?.orchestrator_state?.agent_autonomy_mode || 'standard'),
@@ -4681,13 +5649,13 @@ export function TeamChannelsPanel({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="collab-kicker">{isDiscussionMode ? '讨论模式' : '新建协作项'}</span>
+              <span className="collab-kicker">{isDiscussionMode ? bilingual('讨论模式', 'Discussion mode') : bilingual('新建协作项', 'New collaboration item')}</span>
               <span className="collab-meta">
                 {isDiscussionMode
                   ? (rootStartsTemporaryCollaboration
-                      ? `已检测到 @${rootMentionedAgentLabel}，发送后会打开临时协作会话`
-                      : '先商量，再决定是否进入协作')
-                  : '这里只发送明确要推进的具体工作'}
+                      ? bilingual(`已检测到 @${rootMentionedAgentLabel}，发送后会打开临时协作会话`, `@${rootMentionedAgentLabel} detected. Sending will open a temporary collaboration session.`)
+                      : bilingual('先商量，再决定是否进入协作', 'Discuss first, then decide whether to enter collaboration'))
+                  : bilingual('这里只发送明确要推进的具体工作', 'Only send concrete work that should be actively driven here')}
               </span>
             </div>
           </div>
@@ -4709,7 +5677,7 @@ export function TeamChannelsPanel({
               setShowCapabilityPicker(true);
             }}
           >
-            技能
+            {bilingual('技能', 'Skills')}
           </Button>
           <Button
             type="button"
@@ -4717,7 +5685,7 @@ export function TeamChannelsPanel({
             className="h-8 rounded-[10px] px-2.5 text-[11px]"
             onClick={() => setShowDocPicker(true)}
           >
-            附件
+            {bilingual('附件', 'Attachments')}
           </Button>
           <Button
             type="button"
@@ -4726,7 +5694,7 @@ export function TeamChannelsPanel({
             onClick={() => fileInputRef.current?.click()}
             disabled={uploadingDocument}
           >
-            {uploadingDocument ? '上传中…' : '上传'}
+            {uploadingDocument ? bilingual('上传中…', 'Uploading…') : bilingual('上传', 'Upload')}
           </Button>
         </div>
 
@@ -4743,7 +5711,7 @@ export function TeamChannelsPanel({
                     setPendingDocIds((prev) => prev.filter((id) => id !== doc.id));
                   }}
                   className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
-                  title="移除文档"
+                  title={bilingual('移除文档', 'Remove document')}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -4757,7 +5725,7 @@ export function TeamChannelsPanel({
                   type="button"
                   onClick={() => removeCapabilityRef(item.ref)}
                   className="inline-flex h-4 w-4 items-center justify-center rounded-full text-primary/70 transition-colors hover:bg-background hover:text-primary"
-                  title="移除能力"
+                  title={bilingual('移除能力', 'Remove capability')}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -4778,9 +5746,9 @@ export function TeamChannelsPanel({
             placeholder={
               isDiscussionMode
                 ? (rootStartsTemporaryCollaboration
-                    ? `和 @${rootMentionedAgentLabel} 先聊清楚问题、背景和下一步…`
-                    : '把问题、判断、同步或 @成员发到讨论区…')
-                : '描述这条要推进的具体工作、预期结果和下一步…'
+                    ? bilingual(`和 @${rootMentionedAgentLabel} 先聊清楚问题、背景和下一步…`, `Talk with @${rootMentionedAgentLabel} first to clarify the problem, context, and next step…`)
+                    : bilingual('把问题、判断、同步或 @成员发到讨论区…', 'Send discussion content here to sync, decide, or @mention teammates…'))
+                : bilingual('描述这条要推进的具体工作、预期结果和下一步…', 'Describe the work to drive, the expected result, and the next step…')
             }
           />
           <div className="mt-0.5 flex flex-wrap items-center justify-end gap-1.5 px-1 pt-0.5">
@@ -4792,7 +5760,7 @@ export function TeamChannelsPanel({
                   className="h-8 rounded-[10px] px-3 text-[11px]"
                 >
                   <Send className="mr-1 h-3.5 w-3.5" />
-                  {rootStartsTemporaryCollaboration ? '开始临时协作' : '发送讨论'}
+                  {rootStartsTemporaryCollaboration ? bilingual('开始临时协作', 'Start temporary collaboration') : bilingual('发送讨论', 'Send discussion')}
                 </Button>
               </>
             ) : (
@@ -4804,7 +5772,7 @@ export function TeamChannelsPanel({
                   className="h-8 rounded-[10px] px-3 text-[11px]"
                 >
                   <Send className="mr-1 h-3.5 w-3.5" />
-                  {rootStartsTemporaryCollaboration ? '开始临时协作' : '发到讨论区'}
+                    {rootStartsTemporaryCollaboration ? bilingual('开始临时协作', 'Start temporary collaboration') : bilingual('发到讨论区', 'Send to discussion')}
                 </Button>
                 {!rootStartsTemporaryCollaboration ? (
                   <Button
@@ -4813,7 +5781,7 @@ export function TeamChannelsPanel({
                     className="h-8 rounded-[10px] px-3 text-[11px]"
                   >
                     <Sparkles className="mr-1 h-3.5 w-3.5" />
-                    创建协作项
+                    {bilingual('创建协作项', 'Create collaboration item')}
                   </Button>
                 ) : null}
               </>
@@ -4837,8 +5805,8 @@ export function TeamChannelsPanel({
       />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="collab-kicker">协作模式</span>
-          <span className="collab-meta">围绕当前协作项继续补充、修正和推进</span>
+          <span className="collab-kicker">{bilingual('协作模式', 'Collaboration mode')}</span>
+          <span className="collab-meta">{bilingual('围绕当前协作项继续补充、修正和推进', 'Continue adding context, corrections, and progress around the current collaboration item')}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-[180px]">
@@ -4848,13 +5816,13 @@ export function TeamChannelsPanel({
             )}
           </div>
           <Button type="button" variant="outline" className="h-8 rounded-[10px] px-2.5 text-[11px]" onClick={() => { setCapabilityDetailKey(null); setShowCapabilityPicker(true); }}>
-            技能
+            {bilingual('技能', 'Skills')}
           </Button>
           <Button type="button" variant="outline" className="h-8 rounded-[10px] px-2.5 text-[11px]" onClick={() => setShowDocPicker(true)}>
-            附件
+            {bilingual('附件', 'Attachments')}
           </Button>
           <Button type="button" variant="outline" className="h-8 rounded-[10px] px-2.5 text-[11px]" onClick={() => fileInputRef.current?.click()} disabled={uploadingDocument}>
-            {uploadingDocument ? '上传中…' : '上传'}
+            {uploadingDocument ? bilingual('上传中…', 'Uploading…') : bilingual('上传', 'Upload')}
           </Button>
         </div>
       </div>
@@ -4902,26 +5870,16 @@ export function TeamChannelsPanel({
             onKeyDown={(event) => handleComposerMentionKeyDown('thread', event)}
             rows={1}
             className="!min-h-0 max-h-[220px] resize-none border-0 bg-transparent px-1 py-0.5 text-[12px] leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-            placeholder="围绕这条协作线程继续对话、补充判断或澄清下一步…"
+            placeholder={bilingual('围绕这条协作线程继续对话、补充判断或澄清下一步…', 'Continue this collaboration thread, add judgment, or clarify the next step…')}
           />
           <div className="mt-0.5 flex items-center justify-end gap-2 px-1 pt-0.5">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void handleSend(threadRootId, 'execution')}
-              disabled={sending || (!threadComposeText.trim() && selectedCapabilityRefs.length === 0)}
-              className="h-8 rounded-[10px] px-3 text-[11px]"
-            >
-              <Sparkles className="mr-1 h-3.5 w-3.5" />
-              执行这一步
-            </Button>
             <Button
               onClick={() => void handleSend(threadRootId)}
               disabled={sending || (!threadComposeText.trim() && selectedCapabilityRefs.length === 0)}
               className="h-8 rounded-[10px] px-3 text-[11px]"
             >
               <MessageSquareReply className="mr-1 h-3.5 w-3.5" />
-              发送对话
+              {bilingual('继续推进', 'Continue')}
             </Button>
         </div>
       </div>
@@ -4931,7 +5889,7 @@ export function TeamChannelsPanel({
 
   const renderAutonomyGuide = () => (
     <div className="collab-autonomy-guide">
-      <div className="collab-autonomy-guide-title">协作方式说明</div>
+      <div className="collab-autonomy-guide-title">{bilingual('协作方式说明', 'Collaboration guide')}</div>
       <div className="collab-autonomy-guide-list">
         {CHANNEL_AUTONOMY_OPTIONS.map((item) => (
           <div
@@ -4942,7 +5900,7 @@ export function TeamChannelsPanel({
             <div className="collab-autonomy-guide-label-row">
               <span className="collab-autonomy-guide-label">{item.label}</span>
               {currentAutonomyMeta.mode === item.mode ? (
-                <span className="collab-autonomy-guide-current">当前频道</span>
+                <span className="collab-autonomy-guide-current">{bilingual('当前频道', 'Current channel')}</span>
               ) : null}
             </div>
             <div className="collab-autonomy-guide-summary">{item.summary}</div>
@@ -4962,13 +5920,13 @@ export function TeamChannelsPanel({
             <div className="collab-shell-header px-4 pb-1 pt-2">
             <div className="flex flex-wrap items-center gap-2">
               <div className="min-w-0 flex flex-1 items-center gap-2">
-                <span className="collab-kicker shrink-0">智能协作频道</span>
+                <span className="collab-kicker shrink-0">{bilingual('智能协作频道', 'AI collaboration channel')}</span>
                 <h1 className="collab-display-title min-w-0 truncate">
                   {channelDetail.name}
                 </h1>
                 {channelDetail.is_processing ? (
                   <span className="collab-toolbar-pill collab-micro shrink-0" data-active="true">
-                    处理中
+                    {bilingual('处理中', 'Processing')}
                   </span>
                 ) : null}
               </div>
@@ -4978,12 +5936,22 @@ export function TeamChannelsPanel({
                 className="h-8 shrink-0 rounded-[10px] px-2.5 text-[11px]"
                 onClick={() =>
                   setSidePanelMode((current) =>
-                    current && current !== 'thread' ? null : 'documents',
+                    current && current !== 'thread' && current !== 'workspace' ? null : 'documents',
                   )
                 }
               >
-                信息面板
+                {bilingual('信息面板', 'Info panel')}
               </Button>
+              {isCodingChannel ? (
+                <Button
+                  variant={sidePanelMode === 'workspace' ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-8 shrink-0 rounded-[10px] px-2.5 text-[11px]"
+                  onClick={() => setSidePanelMode((current) => (current === 'workspace' ? null : 'workspace'))}
+                >
+                  {bilingual('工作区', 'Workspace')}
+                </Button>
+              ) : null}
             </div>
 
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -4994,7 +5962,7 @@ export function TeamChannelsPanel({
                 {normalizeAgentDisplayName(channelDetail.default_agent_name)}
               </span>
               <span className="collab-toolbar-pill collab-micro">
-                {channelDetail.member_count} 位成员
+                {bilingual(`${channelDetail.member_count} 位成员`, `${channelDetail.member_count} members`)}
               </span>
               <span
                 className="collab-autonomy-pill"
@@ -5008,27 +5976,27 @@ export function TeamChannelsPanel({
                 className="collab-autonomy-trigger"
                 aria-expanded={autonomyGuideOpen}
               >
-                协作方式说明
+                {bilingual('协作方式说明', 'Collaboration guide')}
               </button>
               <span className="collab-meta truncate">
-                {channelDetail.description || '讨论模式负责团队商讨，协作模式负责单条工作的推进，协作列表负责统一查看全部协作项。'}
+                {channelDetail.description || bilingual('讨论模式负责团队商讨，协作模式负责单条工作的推进，协作列表负责统一查看全部协作项。', 'Discussion mode supports team planning, collaboration mode advances a single work item, and the worklist gives a unified view of all collaboration items.')}
               </span>
             </div>
             {autonomyGuideOpen ? renderAutonomyGuide() : null}
 
             <div className="collab-mode-switch mt-1">
               {([
-                { key: 'discussion', label: '讨论模式', hint: '团队群聊', count: discussionAreaMessages.length },
+                { key: 'discussion', label: bilingual('讨论模式', 'Discussion mode'), hint: bilingual('团队群聊', 'Team chat'), count: discussionAreaMessages.length },
                 {
                   key: 'work',
-                  label: '协作模式',
-                  hint: activeThread ? collaborationSurfaceLabel(activeThread.surface) : '当前工作',
+                  label: bilingual('协作模式', 'Collaboration mode'),
+                  hint: activeThread ? collaborationSurfaceLabel(activeThread.surface) : bilingual('当前工作', 'Current work'),
                   count: activeThread ? 1 : 0,
                 },
                 {
                   key: 'worklist',
-                  label: '协作列表',
-                  hint: workSurfaceFilter === 'all' ? '临时 + 正式' : collaborationSurfaceFilterLabel(workSurfaceFilter),
+                  label: bilingual('协作列表', 'Collaboration list'),
+                  hint: workSurfaceFilter === 'all' ? bilingual('临时 + 正式', 'Temporary + formal') : collaborationSurfaceFilterLabel(workSurfaceFilter),
                   count: collaborationSurfaceCounts[workSurfaceFilter],
                 },
               ] as Array<{ key: 'discussion' | 'work' | 'worklist'; label: string; hint: string; count: number }>).map((item) => {
@@ -5063,11 +6031,11 @@ export function TeamChannelsPanel({
                   <div className="collab-column-header px-4 py-0">
                     <div className="collab-header-rail">
                       <div className="collab-header-rail-main">
-                        <span className="collab-kicker">讨论模式</span>
-                        <span className="collab-header-title">团队群聊与商讨窗口</span>
-                        <span className="collab-header-description">用于商量方向、同步结果、提醒成员，并决定哪些事情进入协作。</span>
+                        <span className="collab-kicker">{bilingual('讨论模式', 'Discussion mode')}</span>
+                        <span className="collab-header-title">{bilingual('团队群聊与商讨窗口', 'Team chat and planning space')}</span>
+                        <span className="collab-header-description">{bilingual('用于商量方向、同步结果、提醒成员，并决定哪些事情进入协作。', 'Use this space to align on direction, sync results, remind members, and decide which work should enter collaboration.')}</span>
                       </div>
-                      <span className="collab-toolbar-pill collab-micro collab-header-count">{discussionAreaMessages.length} 条讨论</span>
+                      <span className="collab-toolbar-pill collab-micro collab-header-count">{bilingual(`${discussionAreaMessages.length} 条讨论`, `${discussionAreaMessages.length} discussions`)}</span>
                     </div>
                   </div>
                   <div
@@ -5084,9 +6052,9 @@ export function TeamChannelsPanel({
                     ) : discussionAreaMessages.length === 0 ? (
                       <div className="collab-empty-shell flex h-full min-h-[320px] items-center justify-center px-8 text-center">
                         <div>
-                          <div className="collab-section-title">讨论区还没有内容</div>
+                          <div className="collab-section-title">{bilingual('讨论区还没有内容', 'The discussion area is empty')}</div>
                           <div className="collab-meta mt-3 max-w-[460px] leading-6">
-                            先在这里发起团队讨论，确认方向、@相关成员，等事情清楚之后再转进协作模式。
+                            {bilingual('先在这里发起团队讨论，确认方向、@相关成员，等事情清楚之后再转进协作模式。', 'Start team discussion here first, confirm direction, @mention relevant members, and move into collaboration mode after the work is clear.')}
                           </div>
                         </div>
                       </div>
@@ -5110,9 +6078,9 @@ export function TeamChannelsPanel({
                   <div className="collab-column-header px-4 py-0">
                     <div className="collab-thread-rail">
                       <div className="collab-thread-rail-main">
-                        <span className="collab-kicker shrink-0">协作模式</span>
+                        <span className="collab-kicker shrink-0">{bilingual('协作模式', 'Collaboration mode')}</span>
                         <span className="collab-thread-title">
-                          {activeThread ? currentThreadSummary : '进入一条具体协作项继续推进'}
+                          {activeThread ? currentThreadSummary : bilingual('进入一条具体协作项继续推进', 'Enter a specific collaboration item to continue')}
                         </span>
                         {activeThread ? (
                           <span className={`collab-status-chip ${collaborationSurfaceTone(activeThread.surface)}`}>
@@ -5127,12 +6095,18 @@ export function TeamChannelsPanel({
                         {activeThread ? (
                           <ThreadStatusBar replyCount={currentThreadReplyCount} documentCount={currentThreadDocumentCount} aiOutputCount={currentThreadAiOutputCount} compact />
                         ) : null}
+                          {activeThread && threadRuntime ? (
+                            <div className="mt-2 rounded-[12px] border border-[hsl(var(--ui-line-soft))/0.6] bg-[hsl(var(--ui-surface-panel-strong))/0.22] px-3 py-2 text-[11px] text-muted-foreground">
+                              {bilingual('线程现场：', 'Thread workspace: ')}{threadRuntime.thread_worktree_path || threadRuntime.workspace_path || bilingual('未绑定', 'Not bound')}
+                              {threadRuntime.thread_branch ? ` · ${bilingual('分支：', 'Branch: ')}${threadRuntime.thread_branch}` : ''}
+                            </div>
+                          ) : null}
                           <span className="collab-thread-description">
                           {activeThread
                             ? activeThread.surface === 'temporary'
-                              ? '先围绕问题澄清、追问和试探方向，再决定是否升级成正式协作。'
-                              : '围绕一件正式协作项持续推进、补充判断；长时间静默后会自动同步阶段进展到讨论区。'
-                            : '协作模式一次只处理一条具体工作。'}
+                              ? bilingual('先围绕问题澄清、追问和试探方向，再决定是否升级成正式协作。', 'Clarify the problem, ask follow-up questions, and explore direction first before deciding whether to promote it into formal collaboration.')
+                              : bilingual('围绕一件正式协作项持续推进、补充判断；长时间静默后会自动同步阶段进展到讨论区。', 'Continue advancing a formal collaboration item and add judgment as needed. After long silence, stage progress syncs back to discussion automatically.')
+                            : bilingual('协作模式一次只处理一条具体工作。', 'Collaboration mode handles one concrete work item at a time.')}
                         </span>
                         {activeThread ? (
                           <button
@@ -5141,8 +6115,8 @@ export function TeamChannelsPanel({
                             className="collab-thread-origin-link"
                           >
                             <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${threadRootExpanded ? 'rotate-90' : ''}`} />
-                            <span className="collab-thread-origin-label">协作起点</span>
-                            <span className="collab-thread-origin-text">{activeThread.author_name} · 点击查看最初发起内容</span>
+                            <span className="collab-thread-origin-label">{bilingual('协作起点', 'Origin')}</span>
+                            <span className="collab-thread-origin-text">{activeThread.author_name} · {bilingual('点击查看最初发起内容', 'Click to view the original start message')}</span>
                           </button>
                         ) : null}
                       </div>
@@ -5152,15 +6126,15 @@ export function TeamChannelsPanel({
                       <div className="collab-thread-action-row">
                         {!['adopted', 'rejected'].includes(activeThread.display_status || '') ? (
                           <>
-                            <Button type="button" size="sm" className="h-7 rounded-full px-2.5 text-[11px]" onClick={() => requestAdoptThreadConfirm(activeThread)}>标记采用</Button>
+                            <Button type="button" size="sm" className="h-7 rounded-full px-2.5 text-[11px]" onClick={() => requestAdoptThreadConfirm(activeThread)}>{bilingual('标记采用', 'Mark as adopted')}</Button>
                             {activeThread.surface === 'temporary' ? (
-                              <Button type="button" size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-[11px]" onClick={() => requestMarkThreadHighlightedConfirm(activeThread)}>升级为正式协作</Button>
+                              <Button type="button" size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-[11px]" onClick={() => requestMarkThreadHighlightedConfirm(activeThread)}>{bilingual('升级为正式协作', 'Promote to formal collaboration')}</Button>
                             ) : null}
                             {activeThread.display_status !== 'awaiting_confirmation' ? (
-                              <Button type="button" size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-[11px]" onClick={() => requestAwaitingConfirmationConfirm(activeThread)}>等判断</Button>
+                              <Button type="button" size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-[11px]" onClick={() => requestAwaitingConfirmationConfirm(activeThread)}>{bilingual('等判断', 'Needs decision')}</Button>
                             ) : null}
-                            <Button type="button" size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-[11px]" onClick={() => requestSyncThreadResultConfirm(activeThread)}>同步到讨论</Button>
-                            <Button type="button" size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-[11px]" onClick={() => requestArchiveThreadConfirm(activeThread)}>未采用</Button>
+                            <Button type="button" size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-[11px]" onClick={() => requestSyncThreadResultConfirm(activeThread)}>{bilingual('同步到讨论', 'Sync to discussion')}</Button>
+                            <Button type="button" size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-[11px]" onClick={() => requestArchiveThreadConfirm(activeThread)}>{bilingual('未采用', 'Rejected')}</Button>
                           </>
                         ) : null}
                       </div>
@@ -5189,12 +6163,12 @@ export function TeamChannelsPanel({
                     ) : (
                       <div className="collab-empty-shell flex h-full min-h-[320px] items-center justify-center px-8 text-center">
                         <div>
-                          <div className="collab-section-title">还没有打开具体协作项</div>
-                          <div className="collab-meta mt-3 max-w-[460px] leading-6">协作模式一次只处理一条具体工作。直接用上方三态切换到协作列表，或者打开最近的协作项继续推进。</div>
+                          <div className="collab-section-title">{bilingual('还没有打开具体协作项', 'No collaboration item is open yet')}</div>
+                          <div className="collab-meta mt-3 max-w-[460px] leading-6">{bilingual('协作模式一次只处理一条具体工作。直接用上方三态切换到协作列表，或者打开最近的协作项继续推进。', 'Collaboration mode handles one concrete item at a time. Use the state switch above to open the worklist, or open the latest collaboration item to continue.')}</div>
                           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
                             {collaborationItems.length > 0 ? (
                               <Button type="button" onClick={() => void handleOpenThread(collaborationItems[0].message)}>
-                                打开最近协作项
+                                {bilingual('打开最近协作项', 'Open latest collaboration item')}
                               </Button>
                             ) : null}
                           </div>
@@ -5212,24 +6186,24 @@ export function TeamChannelsPanel({
                     <div className="space-y-1.5">
                       <div className="collab-worklist-header">
                         <div className="collab-header-rail-main">
-                          <span className="collab-kicker">协作列表</span>
+                          <span className="collab-kicker">{bilingual('协作列表', 'Collaboration list')}</span>
                           <span className="collab-header-title">
                             {workSurfaceFilter === 'temporary'
-                              ? '先聊明白的临时协作'
+                              ? bilingual('先聊明白的临时协作', 'Temporary collaboration for clarifying first')
                               : workSurfaceFilter === 'issue'
-                                ? '正在推进的正式协作'
-                                : '查看全部协作项，再决定进入哪条工作'}
+                                ? bilingual('正在推进的正式协作', 'Formal collaboration in progress')
+                                : bilingual('查看全部协作项，再决定进入哪条工作', 'Review all collaboration items, then choose which work to enter')}
                           </span>
                           <span className="collab-header-description">
                             {workSurfaceFilter === 'temporary'
-                              ? '这里集中查看 @Agent 打开的探讨线程和待澄清事项。'
+                              ? bilingual('这里集中查看 @Agent 打开的探讨线程和待澄清事项。', 'This area gathers exploratory threads opened with @Agent and items that still need clarification.')
                               : workSurfaceFilter === 'issue'
-                                ? '这里集中查看已经进入正式推进的工作；静默一段时间后，系统会把阶段进展同步到讨论区。'
-                                : '先按协作类型分区，再按状态筛选，选中后进入协作模式处理单条工作。'}
+                                ? bilingual('这里集中查看已经进入正式推进的工作；静默一段时间后，系统会把阶段进展同步到讨论区。', 'This area gathers work already in formal execution. After a quiet period, stage updates sync back to discussion.')
+                                : bilingual('先按协作类型分区，再按状态筛选，选中后进入协作模式处理单条工作。', 'Split items by collaboration type first, then filter by status and enter collaboration mode for a single item.')}
                           </span>
                         </div>
                         <span className="collab-toolbar-pill collab-micro collab-header-count">
-                          {currentWorkOrUpdateItems.length} 条
+                          {bilingual(`${currentWorkOrUpdateItems.length} 条`, `${currentWorkOrUpdateItems.length} items`)}
                         </span>
                       </div>
                       <div className="space-y-1.5">
@@ -5294,7 +6268,7 @@ export function TeamChannelsPanel({
                                     {workStatusLabel(item.message.display_status, item.message.surface)}
                                   </span>
                                   <span className="rounded-full border border-border/60 px-2 py-0.5 text-[10px] text-muted-foreground">
-                                    {item.message.source_kind === 'agent' ? 'Agent 发起' : '成员发起'}
+                                    {item.message.source_kind === 'agent' ? bilingual('Agent 发起', 'Started by agent') : bilingual('成员发起', 'Started by member')}
                                     </span>
                                   </div>
                                   <div className="mt-2 truncate text-[13px] font-semibold text-foreground">{item.title}</div>
@@ -5305,15 +6279,15 @@ export function TeamChannelsPanel({
                                     </div>
                                   ) : null}
                                   <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
-                                    <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">{item.message.reply_count} 条回复</span>
+                                    <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">{bilingual(`${item.message.reply_count} 条回复`, `${item.message.reply_count} replies`)}</span>
                                     {item.recentAgents.length > 0 ? (
                                       <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">{item.recentAgents.slice(0, 2).join(' · ')}</span>
                                     ) : null}
                                     {item.documentCount > 0 ? (
-                                      <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">{item.documentCount} 资料</span>
+                                      <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">{bilingual(`${item.documentCount} 资料`, `${item.documentCount} docs`)}</span>
                                     ) : null}
                                     {item.aiOutputCount > 0 ? (
-                                      <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">{item.aiOutputCount} 个 AI 产出</span>
+                                      <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">{bilingual(`${item.aiOutputCount} 个 AI 产出`, `${item.aiOutputCount} AI outputs`)}</span>
                                     ) : null}
                                   </div>
                                 </div>
@@ -5347,7 +6321,7 @@ export function TeamChannelsPanel({
           <div className="collab-shell-header px-6 py-4">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
-                <div className="collab-kicker">智能协作频道</div>
+                <div className="collab-kicker">{bilingual('智能协作频道', 'AI collaboration channel')}</div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <h1 className="collab-display-title min-w-0 truncate">
                     {channelDetail.name}
@@ -5359,16 +6333,16 @@ export function TeamChannelsPanel({
                     {normalizeAgentDisplayName(channelDetail.default_agent_name)}
                   </span>
                   <span className="collab-toolbar-pill collab-micro">
-                    {channelDetail.member_count} 位成员
+                    {bilingual(`${channelDetail.member_count} 位成员`, `${channelDetail.member_count} members`)}
                   </span>
                   {channelDetail.is_processing ? (
                     <span className="collab-toolbar-pill collab-micro" data-active="true">
-                      正在处理中
+                      {bilingual('正在处理中', 'Processing')}
                     </span>
                   ) : null}
                 </div>
                 <p className="collab-meta mt-3 max-w-4xl leading-6">
-                  {channelDetail.description || '讨论区负责商量、提醒、澄清与同步；协作项负责真正进入执行推进。频道资料和 AI 产出只在需要时展开查看。'}
+                  {channelDetail.description || bilingual('讨论区负责商量、提醒、澄清与同步；协作项负责真正进入执行推进。频道资料和 AI 产出只在需要时展开查看。', 'Discussion handles planning, reminders, clarification, and sync. Collaboration items handle real execution. Channel docs and AI outputs expand only when needed.')}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -5382,7 +6356,7 @@ export function TeamChannelsPanel({
                     )
                   }
                 >
-                  信息面板
+                  {bilingual('信息面板', 'Info panel')}
                 </Button>
               </div>
             </div>
@@ -5394,15 +6368,15 @@ export function TeamChannelsPanel({
                 <div className="collab-column-header px-5 py-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="collab-kicker">讨论区</div>
-                      <div className="collab-section-title mt-2">重点讨论与商量</div>
+                      <div className="collab-kicker">{bilingual('讨论区', 'Discussion')}</div>
+                      <div className="collab-section-title mt-2">{bilingual('重点讨论与商量', 'Main discussion and planning')}</div>
                       <div className="collab-meta mt-2 max-w-[560px] leading-5">
-                        频道里的主要对话窗口。这里承接成员讨论、Agent 建议、阶段总结和结果同步，不直接替代协作执行。
+                        {bilingual('频道里的主要对话窗口。这里承接成员讨论、Agent 建议、阶段总结和结果同步，不直接替代协作执行。', 'This is the main conversation area in the channel. It carries member discussion, agent suggestions, stage summaries, and result sync, but does not replace collaboration execution.')}
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="collab-toolbar-pill collab-micro">
-                        {discussionAreaMessages.length} 条消息
+                        {bilingual(`${discussionAreaMessages.length} 条消息`, `${discussionAreaMessages.length} messages`)}
                       </span>
                     </div>
                   </div>
@@ -5422,9 +6396,9 @@ export function TeamChannelsPanel({
                   ) : discussionAreaMessages.length === 0 ? (
                     <div className="collab-empty-shell flex h-full min-h-[280px] items-center justify-center px-8 text-center">
                       <div>
-                        <div className="collab-section-title">讨论区还没有内容</div>
+                        <div className="collab-section-title">{bilingual('讨论区还没有内容', 'The discussion area is empty')}</div>
                         <div className="collab-meta mt-3 max-w-[420px] leading-6">
-                          这里用于公开同步、提醒、@成员，以及由管理 Agent 发出的建议卡、总结卡和结果卡。
+                          {bilingual('这里用于公开同步、提醒、@成员，以及由管理 Agent 发出的建议卡、总结卡和结果卡。', 'Use this area for public sync, reminders, @mentions, and suggestion/summary/result cards generated by the managing agent.')}
                         </div>
                       </div>
                     </div>
@@ -5453,10 +6427,10 @@ export function TeamChannelsPanel({
                             className="collab-toolbar-pill collab-micro"
                           >
                             <ArrowLeft className="h-3.5 w-3.5" />
-                            返回协作项
+                            {bilingual('返回协作项', 'Back to collaboration')}
                           </button>
                           <div className="min-w-0 flex-1">
-                            <div className="collab-kicker">协作项</div>
+                            <div className="collab-kicker">{bilingual('协作项', 'Collaboration item')}</div>
                             <div className="collab-section-title mt-2 truncate">
                               {currentThreadSummary}
                             </div>
@@ -5487,7 +6461,7 @@ export function TeamChannelsPanel({
                             className="h-8 rounded-[999px] px-3 text-[11px]"
                             onClick={() => requestAdoptThreadConfirm(activeThread)}
                           >
-                            标记采用
+                            {bilingual('标记采用', 'Mark as adopted')}
                           </Button>
                           {activeThread.surface === 'temporary' ? (
                             <Button
@@ -5497,7 +6471,7 @@ export function TeamChannelsPanel({
                               className="h-8 rounded-[999px] px-3 text-[11px]"
                               onClick={() => requestMarkThreadHighlightedConfirm(activeThread)}
                             >
-                              升级为正式协作
+                              {bilingual('升级为正式协作', 'Promote to formal collaboration')}
                             </Button>
                           ) : null}
                           {activeThread.display_status !== 'awaiting_confirmation' ? (
@@ -5508,7 +6482,7 @@ export function TeamChannelsPanel({
                               className="h-8 rounded-[999px] px-3 text-[11px]"
                               onClick={() => requestAwaitingConfirmationConfirm(activeThread)}
                             >
-                              等你判断
+                              {bilingual('等你判断', 'Needs your decision')}
                             </Button>
                           ) : null}
                           <Button
@@ -5518,7 +6492,7 @@ export function TeamChannelsPanel({
                             className="h-8 rounded-[999px] px-3 text-[11px]"
                             onClick={() => requestSyncThreadResultConfirm(activeThread)}
                           >
-                            同步结果
+                            {bilingual('同步结果', 'Sync result')}
                           </Button>
                           <Button
                             type="button"
@@ -5527,7 +6501,7 @@ export function TeamChannelsPanel({
                             className="h-8 rounded-[999px] px-3 text-[11px]"
                             onClick={() => requestArchiveThreadConfirm(activeThread)}
                           >
-                            标记未采用
+                            {bilingual('标记未采用', 'Mark as rejected')}
                           </Button>
                         </div>
                       ) : null}
@@ -5539,9 +6513,9 @@ export function TeamChannelsPanel({
                       >
                         <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${threadRootExpanded ? 'rotate-90' : ''}`} />
                         <div className="min-w-0 flex-1">
-                          <div className="collab-kicker">协作起点</div>
+                          <div className="collab-kicker">{bilingual('协作起点', 'Origin')}</div>
                           <div className="collab-meta mt-1 truncate">
-                            {activeThread.author_name} · 点击查看这条协作项最初的发起内容
+                            {activeThread.author_name} · {bilingual('点击查看这条协作项最初的发起内容', 'Click to view the original starting message')}
                           </div>
                         </div>
                       </button>
@@ -5551,24 +6525,24 @@ export function TeamChannelsPanel({
                     <div className="space-y-3">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="collab-kicker">协作项</div>
+                          <div className="collab-kicker">{bilingual('协作项', 'Collaboration item')}</div>
                           <div className="collab-section-title mt-2">
                             {workSurfaceFilter === 'temporary'
-                              ? '先聊明白的临时协作'
+                              ? bilingual('先聊明白的临时协作', 'Temporary collaboration for clarification first')
                               : workSurfaceFilter === 'issue'
-                                ? '正在推进的正式协作'
-                                : '进入协作执行'}
+                                ? bilingual('正在推进的正式协作', 'Formal collaboration in progress')
+                                : bilingual('进入协作执行', 'Enter collaboration execution')}
                           </div>
                           <div className="collab-meta mt-2 max-w-[320px] leading-5">
                             {workSurfaceFilter === 'temporary'
-                              ? '这里集中查看 @Agent 打开的探讨线程、补充上下文和待澄清事项。'
+                              ? bilingual('这里集中查看 @Agent 打开的探讨线程、补充上下文和待澄清事项。', 'This view gathers exploratory threads opened with @Agent, supporting context, and items awaiting clarification.')
                               : workSurfaceFilter === 'issue'
-                                ? '这里集中查看已经进入正式推进的工作；静默 1 小时后，阶段进展会同步到讨论区。'
-                                : '先按协作类型分区，再按状态筛选，选中后进入协作模式处理单条工作。'}
+                                ? bilingual('这里集中查看已经进入正式推进的工作；静默 1 小时后，阶段进展会同步到讨论区。', 'This view gathers work already in formal execution. After one hour of silence, stage progress syncs back to discussion.')
+                                : bilingual('先按协作类型分区，再按状态筛选，选中后进入协作模式处理单条工作。', 'Split work by collaboration type first, then filter by status and enter collaboration mode for a single item.')}
                           </div>
                         </div>
                         <span className="collab-toolbar-pill collab-micro">
-                          {currentWorkOrUpdateItems.length} 条
+                          {bilingual(`${currentWorkOrUpdateItems.length} 条`, `${currentWorkOrUpdateItems.length} items`)}
                         </span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -5633,9 +6607,9 @@ export function TeamChannelsPanel({
                   ) : currentWorkOrUpdateItems.length === 0 ? (
                     <div className="collab-empty-shell flex h-full min-h-[280px] items-center justify-center px-8 text-center">
                       <div>
-                        <div className="collab-section-title">还没有协作项</div>
+                        <div className="collab-section-title">{bilingual('还没有协作项', 'No collaboration items yet')}</div>
                         <div className="collab-meta mt-3 max-w-[420px] leading-6">
-                          先在讨论区把事情商量清楚，再把真正要推进的事项送进协作项。
+                          {bilingual('先在讨论区把事情商量清楚，再把真正要推进的事项送进协作项。', 'Clarify the work in discussion first, then move the real execution items into collaboration.')}
                         </div>
                       </div>
                     </div>
@@ -5677,16 +6651,16 @@ export function TeamChannelsPanel({
                                 ) : null}
                                 <div className="mt-3 flex flex-wrap items-center gap-2">
                                   <span className="collab-toolbar-pill collab-micro">
-                                    {item.message.reply_count} 条回复
+                                    {bilingual(`${item.message.reply_count} 条回复`, `${item.message.reply_count} replies`)}
                                   </span>
                                   {item.documentCount > 0 ? (
                                     <span className="collab-toolbar-pill collab-micro">
-                                      {item.documentCount} 资料
+                                      {bilingual(`${item.documentCount} 资料`, `${item.documentCount} docs`)}
                                     </span>
                                   ) : null}
                                   {item.aiOutputCount > 0 ? (
                                     <span className="collab-toolbar-pill collab-micro">
-                                      {item.aiOutputCount} 个 AI 产出
+                                      {bilingual(`${item.aiOutputCount} 个 AI 产出`, `${item.aiOutputCount} AI outputs`)}
                                     </span>
                                   ) : null}
                                 </div>
@@ -5714,10 +6688,10 @@ export function TeamChannelsPanel({
                 />
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <div className="collab-kicker">消息输入区</div>
-                    <div className="collab-section-title mt-2">讨论先行，必要时进入协作</div>
+                    <div className="collab-kicker">{bilingual('消息输入区', 'Message composer')}</div>
+                    <div className="collab-section-title mt-2">{bilingual('讨论先行，必要时进入协作', 'Discuss first, enter collaboration only when needed')}</div>
                     <div className="collab-meta mt-2 max-w-[520px] leading-5">
-                      默认先发到讨论区；只有当你明确要推进执行时，再直接创建协作项。
+                      {bilingual('默认先发到讨论区；只有当你明确要推进执行时，再直接创建协作项。', 'By default messages go to discussion first. Only create a collaboration item directly when you clearly want to drive execution.')}
                     </div>
                   </div>
                 </div>
@@ -5738,7 +6712,7 @@ export function TeamChannelsPanel({
                       setShowCapabilityPicker(true);
                     }}
                   >
-                    技能
+                    {bilingual('技能', 'Skills')}
                   </Button>
                   <Button
                     type="button"
@@ -5746,7 +6720,7 @@ export function TeamChannelsPanel({
                     className="h-9 rounded-[999px] px-3 text-[11px]"
                     onClick={() => setShowDocPicker(true)}
                   >
-                    附件
+                    {bilingual('附件', 'Attachments')}
                   </Button>
                   <Button
                     type="button"
@@ -5755,7 +6729,7 @@ export function TeamChannelsPanel({
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploadingDocument}
                   >
-                    {uploadingDocument ? '上传中…' : '上传'}
+                    {uploadingDocument ? bilingual('上传中…', 'Uploading…') : bilingual('上传', 'Upload')}
                   </Button>
                 </div>
 
@@ -5772,7 +6746,7 @@ export function TeamChannelsPanel({
                             setPendingDocIds((prev) => prev.filter((id) => id !== doc.id));
                           }}
                           className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
-                          title="移除文档"
+                          title={bilingual('移除文档', 'Remove document')}
                         >
                           <X className="h-3 w-3" />
                         </button>
@@ -5786,7 +6760,7 @@ export function TeamChannelsPanel({
                           type="button"
                           onClick={() => removeCapabilityRef(item.ref)}
                           className="inline-flex h-4 w-4 items-center justify-center rounded-full text-primary/70 transition-colors hover:bg-background hover:text-primary"
-                          title="移除能力"
+                          title={bilingual('移除能力', 'Remove capability')}
                         >
                           <X className="h-3 w-3" />
                         </button>
@@ -5798,8 +6772,8 @@ export function TeamChannelsPanel({
                 <div className="relative mt-4 rounded-[24px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.92] p-2.5">
                   <div className="px-2 pb-1 collab-meta">
                     {rootStartsTemporaryCollaboration
-                      ? `将围绕 @${rootMentionedAgentLabel} 打开一条临时协作会话，先探讨和澄清，不直接当成正式协作项。`
-                      : '将发送到讨论区，适合同步、提醒、确认和 @成员；如果你要立即推进执行，可以直接创建协作项。'}
+                    ? `A temporary collaboration session will open around @${rootMentionedAgentLabel} first for discussion and clarification, without treating it as a formal collaboration item yet.`
+                        : bilingual('将发送到讨论区，适合同步、提醒、确认和 @成员；如果你要立即推进执行，可以直接创建协作项。', 'This will be sent to discussion, which is best for syncing, reminding, confirming, and @mentioning members. If you want to drive execution immediately, create a collaboration item directly.')}
                   </div>
                   <Textarea
                     ref={rootComposerTextareaRef}
@@ -5810,8 +6784,8 @@ export function TeamChannelsPanel({
                     className="min-h-[132px] resize-none border-0 bg-transparent px-2 py-2 pr-36 text-[13px] leading-6 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                     placeholder={
                       rootStartsTemporaryCollaboration
-                        ? `和 @${rootMentionedAgentLabel} 先聊清楚问题、背景和下一步…`
-                        : '发送讨论内容，和团队同步、提醒、澄清或 @成员…'
+                    ? `Talk with @${rootMentionedAgentLabel} first to clarify the problem, context, and next step…`
+                        : bilingual('发送讨论内容，和团队同步、提醒、澄清或 @成员…', 'Send a discussion message to sync, remind, clarify, or @mention team members…')
                     }
                   />
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
@@ -5823,7 +6797,7 @@ export function TeamChannelsPanel({
                         className="h-10 rounded-[999px] px-4 text-[12px]"
                       >
                         <Sparkles className="mr-1 h-3.5 w-3.5" />
-                        开始协作项
+                        {bilingual('开始协作项', 'Create collaboration item')}
                       </Button>
                     ) : null}
                     <Button
@@ -5832,7 +6806,7 @@ export function TeamChannelsPanel({
                       className="h-10 rounded-[999px] px-4 text-[12px]"
                     >
                       <Send className="mr-1 h-3.5 w-3.5" />
-                      {rootStartsTemporaryCollaboration ? '开始临时协作' : '发送讨论'}
+                      {rootStartsTemporaryCollaboration ? bilingual('开始临时协作', 'Start temporary collaboration') : bilingual('发送讨论', 'Send discussion')}
                     </Button>
                   </div>
                 </div>
@@ -5842,8 +6816,8 @@ export function TeamChannelsPanel({
               <div className="collab-composer-shell mt-4 px-5 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="collab-kicker">线程回复</span>
-                    <span className="collab-meta">围绕当前协作项继续补充、修正和推进</span>
+                    <span className="collab-kicker">{bilingual('线程回复', 'Thread reply')}</span>
+                    <span className="collab-meta">{bilingual('围绕当前协作项继续补充、修正和推进', 'Continue adding context, corrections, and progress around the current collaboration item')}</span>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="relative min-w-[180px]">
@@ -5853,13 +6827,13 @@ export function TeamChannelsPanel({
                       )}
                     </div>
                     <Button type="button" variant="outline" className="h-8 rounded-[999px] px-3 text-[11px]" onClick={() => { setCapabilityDetailKey(null); setShowCapabilityPicker(true); }}>
-                      技能
+                      {bilingual('技能', 'Skills')}
                     </Button>
                     <Button type="button" variant="outline" className="h-8 rounded-[999px] px-3 text-[11px]" onClick={() => setShowDocPicker(true)}>
-                      附件
+                      {bilingual('附件', 'Attachments')}
                     </Button>
                     <Button type="button" variant="outline" className="h-8 rounded-[999px] px-3 text-[11px]" onClick={() => fileInputRef.current?.click()} disabled={uploadingDocument}>
-                      {uploadingDocument ? '上传中…' : '上传'}
+                      {uploadingDocument ? bilingual('上传中…', 'Uploading…') : bilingual('上传', 'Upload')}
                     </Button>
                   </div>
                 </div>
@@ -5906,7 +6880,7 @@ export function TeamChannelsPanel({
                     onSelect={handleThreadComposerSelect}
                     onKeyDown={(event) => handleComposerMentionKeyDown('thread', event)}
                     className="min-h-[110px] resize-none border-0 bg-transparent px-2 py-2 pr-32 text-[13px] leading-6 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                    placeholder="围绕这条协作项继续推进、补充判断或提出下一步…"
+                    placeholder={bilingual('围绕这条协作项继续推进、补充判断或提出下一步…', 'Continue this collaboration item, add judgment, or propose the next step…')}
                   />
                   <div className="absolute bottom-3 right-3">
                     <Button
@@ -5915,7 +6889,7 @@ export function TeamChannelsPanel({
                       className="h-9 rounded-[999px] px-4 text-[12px]"
                     >
                       <MessageSquareReply className="mr-1 h-3.5 w-3.5" />
-                      回复协作项
+                      {bilingual('回复协作项', 'Reply to collaboration')}
                     </Button>
                   </div>
                 </div>
@@ -5936,16 +6910,16 @@ export function TeamChannelsPanel({
         <div className="collab-shell-header px-4 py-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="collab-kicker">频道列表</div>
-              <div className="collab-section-title mt-2">智能协作频道</div>
-              <div className="collab-meta mt-2 leading-5">从这里进入具体频道，在讨论区商量，在协作项里推进执行。</div>
+              <div className="collab-kicker">{bilingual('频道列表', 'Channel list')}</div>
+              <div className="collab-section-title mt-2">{bilingual('智能协作频道', 'AI collaboration channels')}</div>
+              <div className="collab-meta mt-2 leading-5">{bilingual('从这里进入具体频道，在讨论区商量，在协作项里推进执行。', 'Enter specific channels from here, discuss in the discussion area, and drive execution inside collaboration items.')}</div>
             </div>
             <Button
               size="icon"
               variant="outline"
               className="h-10 w-10 shrink-0 rounded-full border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.86] shadow-none"
               onClick={() => setCreateOpen(true)}
-              title="新建频道"
+              title={bilingual('新建频道', 'Create channel')}
             >
               <Plus className="h-4 w-4" />
             </Button>
@@ -5954,7 +6928,7 @@ export function TeamChannelsPanel({
             <Input
               value={channelSearch}
               onChange={(event) => setChannelSearch(event.target.value)}
-              placeholder="搜索频道、描述或最近消息"
+              placeholder={bilingual('搜索频道、描述或最近消息', 'Search channels, descriptions, or recent messages')}
               className="h-9 rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] px-3 text-[11px] shadow-none"
             />
             <Button
@@ -5962,13 +6936,13 @@ export function TeamChannelsPanel({
               className="h-9 shrink-0 rounded-[12px] border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--background))] px-3 text-[11px] shadow-none"
               onClick={() => setCreateOpen(true)}
             >
-              新建频道
+              {bilingual('新建频道', 'Create channel')}
             </Button>
           </div>
           <div className="mt-4 flex items-center justify-between">
-            <span className="collab-kicker">频道目录</span>
+            <span className="collab-kicker">{bilingual('频道目录', 'Directory')}</span>
             <span className="collab-toolbar-pill collab-micro">
-              {filteredChannels.length} 个结果
+              {bilingual(`${filteredChannels.length} 个结果`, `${filteredChannels.length} results`)}
             </span>
           </div>
         </div>
@@ -5979,12 +6953,12 @@ export function TeamChannelsPanel({
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : channels.length === 0 ? (
-            <div className="p-4 text-sm text-muted-foreground">还没有团队频道，先创建一个。</div>
+            <div className="p-4 text-sm text-muted-foreground">{bilingual('还没有团队频道，先创建一个。', 'There are no team channels yet. Create one first.')}</div>
           ) : filteredChannels.length === 0 ? (
             <div className="border-b border-dashed border-border/70 px-4 py-6 text-center">
-              <div className="text-[13px] font-semibold text-foreground">没有匹配的频道</div>
+              <div className="text-[13px] font-semibold text-foreground">{bilingual('没有匹配的频道', 'No matching channels')}</div>
               <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                试试换个关键词，或者直接创建一个新的协作频道。
+                {bilingual('试试换个关键词，或者直接创建一个新的协作频道。', 'Try another keyword, or create a new collaboration channel directly.')}
               </div>
             </div>
           ) : (
@@ -6048,7 +7022,7 @@ export function TeamChannelsPanel({
                               className={`inline-flex h-6 w-6 items-center justify-center rounded-[8px] transition-colors hover:bg-accent ${
                                 channel.pinned ? 'text-primary hover:text-primary' : 'text-muted-foreground hover:text-foreground'
                               }`}
-                              title={channel.pinned ? '取消置顶' : '置顶频道'}
+                              title={channel.pinned ? bilingual('取消置顶', 'Unpin') : bilingual('置顶频道', 'Pin channel')}
                             >
                               {channel.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
                             </button>
@@ -6061,7 +7035,7 @@ export function TeamChannelsPanel({
                               className={`inline-flex h-6 w-6 items-center justify-center rounded-[8px] transition-colors hover:bg-accent ${
                                 channel.muted ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
                               }`}
-                              title={channel.muted ? '取消静音' : '静音频道'}
+                              title={channel.muted ? bilingual('取消静音', 'Unmute') : bilingual('静音频道', 'Mute channel')}
                             >
                               <BellOff className="h-3.5 w-3.5" />
                             </button>
@@ -6097,7 +7071,7 @@ export function TeamChannelsPanel({
                         {normalizeAgentDisplayName(channelDetail.default_agent_name)}
                       </span>
                       <span className="rounded-full border border-border/70 px-2 py-0.5 text-[10px] text-muted-foreground">
-                        {channelDetail.member_count} 位成员
+                        {bilingual(`${channelDetail.member_count} 位成员`, `${channelDetail.member_count} members`)}
                       </span>
                       <span
                         className="collab-autonomy-pill collab-autonomy-pill-mobile"
@@ -6113,7 +7087,7 @@ export function TeamChannelsPanel({
                         className="collab-autonomy-trigger"
                         aria-expanded={autonomyGuideOpen}
                       >
-                        协作方式说明
+                        {bilingual('协作方式说明', 'Collaboration guide')}
                       </button>
                     </div>
                     {autonomyGuideOpen ? renderAutonomyGuide() : null}
@@ -6123,7 +7097,7 @@ export function TeamChannelsPanel({
                       </p>
                     ) : (
                       <p className="mt-1.5 text-[11px] leading-5 text-muted-foreground">
-                        讨论在公共区发生，持续推进在协作项内完成。
+                        {bilingual('讨论在公共区发生，持续推进在协作项内完成。', 'Discussion happens in the public area, while sustained execution happens inside collaboration items.')}
                       </p>
                     )}
                   </div>
@@ -6136,32 +7110,58 @@ export function TeamChannelsPanel({
                           onClick={() => setSidePanelMode((current) => current === 'documents' ? null : 'documents')}
                           className="h-8 rounded-[12px] px-2.5 text-[11px] shadow-none"
                         >
-                          资料
+                          {bilingual('资料', 'Docs')}
                         </Button>
+                        {isCodingChannel ? (
+                          <Button
+                            variant={sidePanelMode === 'workspace' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => setSidePanelMode((current) => current === 'workspace' ? null : 'workspace')}
+                            className="h-8 rounded-[12px] px-2.5 text-[11px] shadow-none"
+                          >
+                            {bilingual('工作区', 'Workspace')}
+                          </Button>
+                        ) : null}
                         <Button
                           variant={sidePanelMode === 'ai_outputs' ? 'default' : 'outline'}
                           size="sm"
                           onClick={() => setSidePanelMode((current) => current === 'ai_outputs' ? null : 'ai_outputs')}
                           className="h-8 rounded-[12px] px-2.5 text-[11px] shadow-none"
                         >
-                          AI 产出
+                          {bilingual('AI 产出', 'AI outputs')}
                         </Button>
                         <Button variant="ghost" size="sm" className="h-8 rounded-[12px] px-2.5 text-[11px]" onClick={() => setMembersOpen(true)}>
-                          成员
+                          {bilingual('成员', 'Members')}
                         </Button>
                         <Button variant="ghost" size="sm" className="h-8 rounded-[12px] px-2.5 text-[11px]" onClick={() => setSettingsOpen(true)}>
-                          频道设置
+                          {bilingual('频道设置', 'Channel settings')}
                         </Button>
                       </>
                     ) : (
-                      <Button
-                        variant={sidePanelMode && sidePanelMode !== 'thread' ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => setSidePanelMode((current) => (current && current !== 'thread' ? null : 'documents'))}
-                        className="h-8 rounded-[10px] border-border/70 px-3 text-[11px] shadow-none"
-                      >
-                        信息面板
-                      </Button>
+                      <>
+                        <Button
+                          variant={inspectorTab ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() =>
+                            setSidePanelMode((current) =>
+                              current && current !== 'thread' && current !== 'workspace' ? null : 'documents',
+                            )
+                          }
+                          className="h-8 rounded-[10px] border-border/70 px-3 text-[11px] shadow-none"
+                        >
+                          {bilingual('信息面板', 'Info panel')}
+                        </Button>
+                        {isCodingChannel ? (
+                          <Button
+                            variant={sidePanelMode === 'workspace' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => setSidePanelMode((current) => (current === 'workspace' ? null : 'workspace'))}
+                            className="h-8 rounded-[10px] border-border/70 px-3 text-[11px] shadow-none"
+                          >
+                            {bilingual('工作区', 'Workspace')}
+                          </Button>
+                        ) : null}
+                      </>
                     )}
                   </div>
                 </div>
@@ -6171,8 +7171,8 @@ export function TeamChannelsPanel({
                 <div className="flex flex-wrap items-center gap-4">
                   <div className="flex items-center gap-5">
                     {([
-                      { key: 'work', label: '协作项' },
-                      { key: 'update', label: '讨论区' },
+                      { key: 'work', label: bilingual('协作项', 'Collaboration') },
+                      { key: 'update', label: bilingual('讨论区', 'Discussion') },
                     ] as Array<{ key: ChannelDisplayView; label: string }>).map((item) => (
                       <button
                         key={item.key}
@@ -6257,7 +7257,7 @@ export function TeamChannelsPanel({
                           : 'border-border/70 bg-background hover:text-foreground'
                       }`}
                     >
-                      资料 {channelDocuments.length}
+                      {bilingual(`资料 ${channelDocuments.length}`, `Docs ${channelDocuments.length}`)}
                     </button>
                     <button
                       type="button"
@@ -6268,15 +7268,15 @@ export function TeamChannelsPanel({
                           : 'border-border/70 bg-background hover:text-foreground'
                       }`}
                     >
-                      AI 产出 {channelAiOutputs.length}
+                      {bilingual(`AI 产出 ${channelAiOutputs.length}`, `AI outputs ${channelAiOutputs.length}`)}
                     </button>
                     {threadRootId && !isMobile ? (
                       <span className="rounded-full border border-border/70 bg-background px-2 py-0.5">
-                        当前线程
+                        {bilingual('当前线程', 'Current thread')}
                       </span>
                     ) : null}
                     <span className="ml-auto hidden text-[10px] text-muted-foreground/75 xl:inline">
-                      默认仅读已附加资料
+                      {bilingual('默认仅读已附加资料', 'Only attached docs are read by default')}
                     </span>
                   </div>
                 </div>
@@ -6296,7 +7296,7 @@ export function TeamChannelsPanel({
                             className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
                         >
                           <ArrowLeft className="h-3.5 w-3.5" />
-                          返回协作项列表
+                          {bilingual('返回协作项列表', 'Back to collaboration list')}
                         </button>
                         <span className="hidden h-4 w-px shrink-0 bg-border/70 sm:inline-flex" />
                         <div className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-6 text-foreground">
@@ -6312,6 +7312,16 @@ export function TeamChannelsPanel({
                         }`}>
                           {workStatusLabel(activeThread.display_status, activeThread.surface)}
                         </span>
+                        {threadDelegationRuntime ? (
+                          <span
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${delegationRuntimeStatusTone(
+                              threadDelegationRuntime.status,
+                            )}`}
+                            title={buildDelegationRuntimeSummary(threadDelegationRuntime)}
+                          >
+                            {buildDelegationRuntimeSummary(threadDelegationRuntime)}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="flex flex-wrap items-center justify-end gap-1.5">
                         <ThreadStatusBar
@@ -6328,7 +7338,7 @@ export function TeamChannelsPanel({
                               className="h-8 rounded-[10px] px-3 text-[11px] shadow-none"
                               onClick={() => requestAdoptThreadConfirm(activeThread)}
                             >
-                              标记采用
+                              {bilingual('标记采用', 'Mark as adopted')}
                             </Button>
                             <details className="relative">
                               <summary className="flex h-8 cursor-pointer list-none items-center rounded-[10px] border border-border/70 bg-background px-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground">
@@ -6341,7 +7351,7 @@ export function TeamChannelsPanel({
                                     onClick={() => requestMarkThreadHighlightedConfirm(activeThread)}
                                     className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-[11px] text-foreground transition-colors hover:bg-accent/30"
                                   >
-                                    升级为正式协作
+                                    {bilingual('升级为正式协作', 'Promote to formal collaboration')}
                                   </button>
                                 ) : null}
                                 {activeThread.display_status !== 'awaiting_confirmation' ? (
@@ -6350,7 +7360,7 @@ export function TeamChannelsPanel({
                                     onClick={() => requestAwaitingConfirmationConfirm(activeThread)}
                                     className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-[11px] text-foreground transition-colors hover:bg-accent/30"
                                   >
-                                    等你判断
+                                    {bilingual('等你判断', 'Needs your decision')}
                                   </button>
                                 ) : null}
                                 <button
@@ -6358,14 +7368,14 @@ export function TeamChannelsPanel({
                                   onClick={() => requestSyncThreadResultConfirm(activeThread)}
                                   className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-[11px] text-foreground transition-colors hover:bg-accent/30"
                                 >
-                                  同步结果
+                                  {bilingual('同步结果', 'Sync result')}
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => requestArchiveThreadConfirm(activeThread)}
                                   className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-[11px] text-foreground transition-colors hover:bg-accent/30"
                                 >
-                                  标记未采用
+                                  {bilingual('标记未采用', 'Mark as rejected')}
                                 </button>
                               </div>
                             </details>
@@ -6381,7 +7391,7 @@ export function TeamChannelsPanel({
                       >
                         <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${threadRootExpanded ? 'rotate-90' : ''}`} />
                         <div className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-                          协作起点 · {activeThread.author_name} · 点击查看起点详情
+                  {bilingual('协作起点', 'Origin')} · {activeThread.author_name} · {bilingual('点击查看起点详情', 'Click to view origin details')}
                         </div>
                       </button>
                       {threadRootExpanded ? (
@@ -6428,7 +7438,7 @@ export function TeamChannelsPanel({
                           }}
                           className="h-8 rounded-[10px] border-border/60 bg-background px-2.5 text-[11px] shadow-none"
                         >
-                          技能
+                {bilingual('技能', 'Skills')}
                         </Button>
                         <Button
                           type="button"
@@ -6436,7 +7446,7 @@ export function TeamChannelsPanel({
                           onClick={() => setShowDocPicker(true)}
                           className="h-8 rounded-[10px] border-border/60 bg-background px-2.5 text-[11px] shadow-none"
                         >
-                          附件
+                {bilingual('附件', 'Attachments')}
                         </Button>
                         <Button
                           type="button"
@@ -6445,7 +7455,7 @@ export function TeamChannelsPanel({
                           disabled={uploadingDocument}
                           className="h-8 rounded-[10px] border-border/60 bg-background px-2.5 text-[11px] shadow-none"
                         >
-                          {uploadingDocument ? '上传中…' : '上传'}
+                {uploadingDocument ? bilingual('上传中…', 'Uploading…') : bilingual('上传', 'Upload')}
                         </Button>
                       </div>
                       {(attachedDocs.length > 0 || selectedCapabilities.length > 0) ? (
@@ -6495,7 +7505,7 @@ export function TeamChannelsPanel({
                           onSelect={handleThreadComposerSelect}
                           onKeyDown={(event) => handleComposerMentionKeyDown('thread', event)}
                           className="min-h-[76px] resize-none border-0 bg-transparent px-2 py-1 pr-30 text-[12.5px] leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                          placeholder="围绕这条线程继续推进…"
+                placeholder={bilingual('围绕这条线程继续推进…', 'Continue advancing this thread…')}
                         />
                         <div className="absolute bottom-2 right-2">
                           <Button
@@ -6504,7 +7514,7 @@ export function TeamChannelsPanel({
                             className="h-8 rounded-[12px] px-3 text-[12px] shadow-none"
                           >
                             <MessageSquareReply className="mr-1 h-3.5 w-3.5" />
-                            回复
+                            {bilingual('回复', 'Reply')}
                           </Button>
                         </div>
                       </div>
@@ -6530,9 +7540,9 @@ export function TeamChannelsPanel({
                       <div className="w-full space-y-4 px-4 md:px-6 lg:px-8 xl:px-10">
                         {discussionAreaMessages.length === 0 ? (
                           <div className="border-b border-dashed border-border/70 px-1 py-8 text-center">
-                            <div className="text-[12px] font-medium text-foreground">讨论区还没有内容</div>
+                <div className="text-[12px] font-medium text-foreground">{bilingual('讨论区还没有内容', 'The discussion area is empty')}</div>
                             <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                              这里用于团队交流、提醒、同步和 @成员，不默认进入协作过程。
+                  {bilingual('这里用于团队交流、提醒、同步和 @成员，不默认进入协作过程。', 'Use this area for team communication, reminders, sync, and @mentions. It does not enter the collaboration flow by default.')}
                             </div>
                           </div>
                         ) : null}
@@ -6547,17 +7557,17 @@ export function TeamChannelsPanel({
                       <div className="flex w-full flex-col px-4 md:px-6 lg:px-8 xl:px-10 py-3">
                         <div className="mb-3 flex items-center justify-between gap-3 border-b border-border/70 pb-3">
                         <div>
-                          <div className="text-[13px] font-semibold text-foreground">协作项</div>
+                          <div className="text-[13px] font-semibold text-foreground">{bilingual('协作项', 'Collaboration item')}</div>
                           {workSurfaceFilter !== 'all' || workStatusFilter !== 'all' ? (
                             <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                              {`当前筛选：${workSurfaceFilter === 'all' ? '全部协作' : collaborationSurfaceFilterLabel(workSurfaceFilter)}${
+                              {`${bilingual('当前筛选：', 'Current filter: ')}${workSurfaceFilter === 'all' ? bilingual('全部协作', 'All collaboration') : collaborationSurfaceFilterLabel(workSurfaceFilter)}${
                                 workStatusFilter === 'all' ? '' : ` · ${collaborationStatusFilterLabel(workStatusFilter)}`
                               }`}
                             </div>
                           ) : null}
                           </div>
                           <div className="text-[11px] text-muted-foreground">
-                            {currentWorkOrUpdateItems.length} 条
+                            {bilingual(`${currentWorkOrUpdateItems.length} 条`, `${currentWorkOrUpdateItems.length} items`)}
                           </div>
                         </div>
                         <div className="overflow-hidden rounded-[12px] border border-border/70 bg-background">
@@ -6598,7 +7608,7 @@ export function TeamChannelsPanel({
                                         {workStatusLabel(item.message.display_status, item.message.surface)}
                                       </span>
                                       <span className="rounded-full border border-border/60 px-2 py-0.5 text-[10px] text-muted-foreground">
-                                        {item.message.source_kind === 'agent' ? 'Agent 发起' : '成员发起'}
+                                        {item.message.source_kind === 'agent' ? bilingual('Agent 发起', 'Started by agent') : bilingual('成员发起', 'Started by member')}
                                       </span>
                                       <span className="ml-auto text-[10px] text-muted-foreground">
                                         {formatDateTime(item.message.created_at)}
@@ -6617,7 +7627,7 @@ export function TeamChannelsPanel({
                                     ) : null}
                                     <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
                                       <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">
-                                        {item.message.reply_count} 条回复
+                                        {bilingual(`${item.message.reply_count} 条回复`, `${item.message.reply_count} replies`)}
                                       </span>
                                       {item.recentAgents.length > 0 ? (
                                         <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">
@@ -6626,12 +7636,12 @@ export function TeamChannelsPanel({
                                       ) : null}
                                       {item.documentCount > 0 ? (
                                         <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">
-                                          {item.documentCount} 资料
+                                          {bilingual(`${item.documentCount} 资料`, `${item.documentCount} docs`)}
                                         </span>
                                       ) : null}
                                       {item.aiOutputCount > 0 ? (
                                         <span className="rounded-full bg-muted/45 px-2 py-0.5 text-muted-foreground">
-                                          {item.aiOutputCount} 个 AI 产出
+                                          {bilingual(`${item.aiOutputCount} 个 AI 产出`, `${item.aiOutputCount} AI outputs`)}
                                         </span>
                                       ) : null}
                                     </div>
@@ -6673,7 +7683,7 @@ export function TeamChannelsPanel({
                               onClick={() => setComposerToolsOpen(true)}
                               className="h-8 rounded-[10px] border-border/70 bg-background px-2.5 text-[11px] shadow-none"
                             >
-                              工具
+                              {bilingual('工具', 'Tools')}
                             </Button>
                           ) : (
                             <>
@@ -6686,7 +7696,7 @@ export function TeamChannelsPanel({
                                 }}
                                 className="h-8 rounded-[10px] border-border/70 bg-background px-2.5 text-[11px] shadow-none"
                               >
-                                技能
+                              {bilingual('技能', 'Skills')}
                               </Button>
                               <Button
                                 type="button"
@@ -6694,7 +7704,7 @@ export function TeamChannelsPanel({
                                 onClick={() => setShowDocPicker(true)}
                                 className="h-8 rounded-[10px] border-border/70 bg-background px-2.5 text-[11px] shadow-none"
                               >
-                                附件
+                              {bilingual('附件', 'Attachments')}
                               </Button>
                               <Button
                                 type="button"
@@ -6703,7 +7713,7 @@ export function TeamChannelsPanel({
                                 disabled={uploadingDocument}
                                 className="h-8 rounded-[10px] border-border/70 bg-background px-2.5 text-[11px] shadow-none"
                               >
-                                {uploadingDocument ? '上传中…' : '上传'}
+                                {uploadingDocument ? bilingual('上传中…', 'Uploading…') : bilingual('上传', 'Upload')}
                               </Button>
                             </>
                           )}
@@ -6713,13 +7723,13 @@ export function TeamChannelsPanel({
                             {attachedDocs.length > 0 ? (
                               <span className="inline-flex items-center rounded-full bg-background/90 px-2.5 py-1 text-[10.5px] text-muted-foreground">
                                 <Paperclip className="mr-1 h-3 w-3" />
-                                {attachedDocs.length} 个附件
+                                {bilingual(`${attachedDocs.length} 个附件`, `${attachedDocs.length} attachment(s)`)}
                               </span>
                             ) : null}
                             {selectedCapabilities.length > 0 ? (
                               <span className="inline-flex items-center rounded-full bg-primary/[0.08] px-2.5 py-1 text-[10.5px] text-primary">
                                 <Sparkles className="mr-1 h-3 w-3" />
-                                {selectedCapabilities.length} 个技能
+                                {bilingual(`${selectedCapabilities.length} 个技能`, `${selectedCapabilities.length} skill(s)`)}
                               </span>
                             ) : null}
                           </div>
@@ -6744,7 +7754,7 @@ export function TeamChannelsPanel({
                                   setPendingDocIds((prev) => prev.filter((id) => id !== doc.id));
                                 }}
                                 className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
-                                title="移除文档"
+                                title={bilingual('移除文档', 'Remove document')}
                               >
                                 <X className="h-3 w-3" />
                               </button>
@@ -6761,7 +7771,7 @@ export function TeamChannelsPanel({
                                 type="button"
                                 onClick={() => removeCapabilityRef(item.ref)}
                                 className="inline-flex h-4 w-4 items-center justify-center rounded-full text-primary/70 transition-colors hover:bg-background hover:text-primary"
-                                title="移除能力"
+                                title={bilingual('移除能力', 'Remove capability')}
                               >
                                 <X className="h-3 w-3" />
                               </button>
@@ -6773,10 +7783,10 @@ export function TeamChannelsPanel({
                       <div className="relative rounded-[10px] border border-border/70 bg-background px-1.5 py-1.5">
                         <div className="px-2 pb-1 text-[10px] text-muted-foreground">
                           {rootStartsTemporaryCollaboration
-                            ? `将围绕 @${rootMentionedAgentLabel} 打开一条临时协作会话，先探讨和澄清。`
+                            ? `A temporary collaboration session will open around @${rootMentionedAgentLabel} first for discussion and clarification.`
                             : rootComposerIntent === 'work'
-                              ? '将开始一个协作项，AI 和团队成员会围绕这件事继续推进'
-                              : '发送到讨论区，适合人与人交流、提醒、同步和 @成员'}
+                              ? 'A collaboration item will be created and both AI and team members will continue driving this work.'
+                              : 'This will go to discussion, which is best for human conversation, reminders, sync, and @mentions.'}
                         </div>
                         <Textarea
                           ref={rootComposerTextareaRef}
@@ -6787,18 +7797,18 @@ export function TeamChannelsPanel({
                           className="min-h-[76px] resize-none border-0 bg-transparent px-2 py-1 pr-28 text-[13px] leading-6 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                           placeholder={
                             rootStartsTemporaryCollaboration
-                              ? `和 @${rootMentionedAgentLabel} 先聊清楚问题、背景和下一步…`
+                              ? `Talk with @${rootMentionedAgentLabel} first to clarify the problem, context, and next step…`
                               : rootComposerIntent === 'work'
-                                ? '开始一项协作，说明要推进什么…'
-                                : '发送讨论内容，和团队成员同步、提醒或 @成员…'
+                                ? 'Start a collaboration item and explain what should be driven forward…'
+                                : 'Send a discussion message to sync, remind, or @mention team members…'
                           }
                         />
                         <div className="absolute bottom-2 right-2 flex items-center gap-2">
                           {isMobile && (attachedDocs.length > 0 || selectedCapabilities.length > 0) ? (
                             <span className="hidden rounded-full bg-muted/40 px-2 py-1 text-[10.5px] text-muted-foreground sm:inline-flex">
-                              {attachedDocs.length > 0 ? `${attachedDocs.length} 附件` : ''}
+                              {attachedDocs.length > 0 ? bilingual(`${attachedDocs.length} 附件`, `${attachedDocs.length} attachment(s)`) : ''}
                               {attachedDocs.length > 0 && selectedCapabilities.length > 0 ? ' · ' : ''}
-                              {selectedCapabilities.length > 0 ? `${selectedCapabilities.length} 技能` : ''}
+                              {selectedCapabilities.length > 0 ? bilingual(`${selectedCapabilities.length} 技能`, `${selectedCapabilities.length} skill(s)`) : ''}
                             </span>
                           ) : null}
                           <Button
@@ -6808,10 +7818,10 @@ export function TeamChannelsPanel({
                           >
                             <Send className="mr-1 h-3.5 w-3.5" />
                             {rootStartsTemporaryCollaboration
-                              ? '开始临时协作'
+                              ? bilingual('开始临时协作', 'Start temporary collaboration')
                               : rootComposerIntent === 'work'
-                                ? '开始协作'
-                                : '发送到讨论区'}
+                                ? bilingual('开始协作', 'Start collaboration')
+                                : bilingual('发送到讨论区', 'Send to discussion')}
                           </Button>
                         </div>
                       </div>
@@ -6826,25 +7836,26 @@ export function TeamChannelsPanel({
           ) : (
             <div className="collab-empty-shell flex flex-1 items-center justify-center px-8 text-center text-sm text-muted-foreground">
               <div>
-                <div className="collab-section-title">选择一个团队频道进入工作台</div>
+                <div className="collab-section-title">{bilingual('选择一个团队频道进入工作台', 'Choose a team channel to enter the workspace')}</div>
                 <div className="collab-meta mt-3 max-w-[420px] leading-6">
-                  在这里打开讨论流、协作项、频道资料和 AI 产出，开始一条完整的协作路径。
+                  {bilingual('在这里打开讨论流、协作项、频道资料和 AI 产出，开始一条完整的协作路径。', 'Open discussions, collaboration items, channel docs, and AI outputs here to start a full collaboration flow.')}
                 </div>
               </div>
             </div>
           )}
         </div>
+        {renderDesktopWorkspacePanel()}
         {renderDesktopInspector()}
       </div>
 
-      <BottomSheetPanel open={isMobile && sidePanelMode === 'thread' && !!threadRootId} onOpenChange={(open) => { if (!open) { closeThreadPanel(); } }} title="协作项" description="围绕这件事继续推进" fullHeight>
+      <BottomSheetPanel open={isMobile && sidePanelMode === 'thread' && !!threadRootId} onOpenChange={(open) => { if (!open) { closeThreadPanel(); } }} title={bilingual('协作项', 'Collaboration item')} description={bilingual('围绕这件事继续推进', 'Continue advancing this work')} fullHeight>
         <div className="space-y-4">
           {threadRootMessage ? (
             <>
               <div className="rounded-[18px] bg-background px-3 py-3 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.06)]">
                 <div className="flex items-center gap-2">
                   <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                    协作项
+                    {bilingual('协作项', 'Collaboration item')}
                   </div>
                   <span className={`rounded-full px-2 py-0.5 text-[10px] ${
                     workStatusTone(threadRootMessage.display_status, threadRootMessage.surface)
@@ -6862,6 +7873,12 @@ export function TeamChannelsPanel({
                     aiOutputCount={currentThreadAiOutputCount}
                   />
                 </div>
+                  {threadRuntime ? (
+                    <div className="mt-2 rounded-[12px] border border-border/70 bg-background/80 px-3 py-2 text-[11px] text-muted-foreground">
+                      {bilingual('线程现场：', 'Thread workspace: ')}{threadRuntime.thread_worktree_path || threadRuntime.workspace_path || bilingual('未绑定', 'Not bound')}
+                      {threadRuntime.thread_branch ? ` · ${bilingual('分支：', 'Branch: ')}${threadRuntime.thread_branch}` : ''}
+                    </div>
+                  ) : null}
                 {!['adopted', 'rejected'].includes(threadRootMessage.display_status || '') ? (
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <Button
@@ -6871,7 +7888,7 @@ export function TeamChannelsPanel({
                       className="h-8 rounded-[12px] px-3 text-[11px] shadow-none"
                       onClick={() => requestAdoptThreadConfirm(threadRootMessage)}
                     >
-                      标记采用
+                      {bilingual('标记采用', 'Mark as adopted')}
                     </Button>
                     <details className="relative">
                       <summary className="flex h-8 cursor-pointer list-none items-center rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground">
@@ -6884,7 +7901,7 @@ export function TeamChannelsPanel({
                             onClick={() => requestMarkThreadHighlightedConfirm(threadRootMessage)}
                             className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-[11px] text-foreground transition-colors hover:bg-accent/30"
                           >
-                            升级为正式协作
+                            {bilingual('升级为正式协作', 'Promote to formal collaboration')}
                           </button>
                         ) : null}
                         {threadRootMessage.display_status !== 'awaiting_confirmation' ? (
@@ -6893,7 +7910,7 @@ export function TeamChannelsPanel({
                             onClick={() => requestAwaitingConfirmationConfirm(threadRootMessage)}
                             className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-[11px] text-foreground transition-colors hover:bg-accent/30"
                           >
-                            等你判断
+                            {bilingual('等你判断', 'Needs your decision')}
                           </button>
                         ) : null}
                         <button
@@ -6901,14 +7918,14 @@ export function TeamChannelsPanel({
                           onClick={() => requestSyncThreadResultConfirm(threadRootMessage)}
                           className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-[11px] text-foreground transition-colors hover:bg-accent/30"
                         >
-                          同步结果
+                          {bilingual('同步结果', 'Sync result')}
                         </button>
                         <button
                           type="button"
                           onClick={() => requestArchiveThreadConfirm(threadRootMessage)}
                           className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-[11px] text-foreground transition-colors hover:bg-accent/30"
                         >
-                          标记未采用
+                          {bilingual('标记未采用', 'Mark as rejected')}
                         </button>
                       </div>
                     </details>
@@ -6922,7 +7939,7 @@ export function TeamChannelsPanel({
               >
                 <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${threadRootExpanded ? 'rotate-90' : ''}`} />
                 <div className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-                  协作起点 · {threadRootMessage.author_name} · 点击查看起点详情
+                  {bilingual('协作起点', 'Origin')} · {threadRootMessage.author_name} · {bilingual('点击查看起点详情', 'Click to view origin details')}
                 </div>
               </button>
               {threadRootExpanded ? <ThreadRootCard message={threadRootMessage} /> : null}
@@ -6949,7 +7966,7 @@ export function TeamChannelsPanel({
                 onClick={() => setComposerToolsOpen(true)}
                 className="h-8 rounded-[10px] border-border/60 bg-background px-2.5 text-[11px] shadow-none"
               >
-                工具
+                {bilingual('工具', 'Tools')}
               </Button>
             </div>
             {(attachedDocs.length > 0 || selectedCapabilities.length > 0) && (
@@ -6999,7 +8016,7 @@ export function TeamChannelsPanel({
                 onSelect={handleThreadComposerSelect}
                 onKeyDown={(event) => handleComposerMentionKeyDown('thread', event)}
                 className="min-h-[76px] resize-none border-0 bg-transparent px-2 py-1 pr-28 text-[12.5px] leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-                placeholder="围绕这条消息继续推进…"
+                placeholder={bilingual('围绕这条消息继续推进…', 'Continue advancing this thread…')}
               />
               <div className="absolute bottom-2 right-2">
                 <Button
@@ -7007,12 +8024,26 @@ export function TeamChannelsPanel({
                   disabled={sending || (!threadComposeText.trim() && selectedCapabilityRefs.length === 0)}
                   className="h-8 rounded-[12px] px-3 text-[12px] shadow-none"
                 >
-                  <MessageSquareReply className="mr-1 h-3.5 w-3.5" />回复
+                  <MessageSquareReply className="mr-1 h-3.5 w-3.5" />{bilingual('回复', 'Reply')}
                 </Button>
               </div>
             </div>
           </div>
         </div>
+      </BottomSheetPanel>
+
+      <BottomSheetPanel
+        open={isMobile && sidePanelMode === 'workspace'}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSidePanelMode(null);
+          }
+        }}
+        title={bilingual('工作区面板', 'Workspace panel')}
+        description={bilingual('查看当前编程项目频道绑定的项目空间、仓库主检出和线程现场。', 'Inspect the project space, main repo checkout, and thread workspace bound to the current coding channel.')}
+        fullHeight
+      >
+        {renderWorkspacePanelContent()}
       </BottomSheetPanel>
 
       <BottomSheetPanel
@@ -7022,8 +8053,8 @@ export function TeamChannelsPanel({
             setSidePanelMode(null);
           }
         }}
-        title={sidePanelMode === 'ai_outputs' ? 'AI 产出' : '频道资料'}
-        description={sidePanelMode === 'ai_outputs' ? '查看当前频道的 AI 草稿与结果' : '查看当前频道的资料与文档目录'}
+        title={sidePanelMode === 'ai_outputs' ? bilingual('AI 产出', 'AI outputs') : bilingual('频道资料', 'Channel docs')}
+        description={sidePanelMode === 'ai_outputs' ? bilingual('查看当前频道的 AI 草稿与结果', 'Inspect AI drafts and results in the current channel') : bilingual('查看当前频道的资料与文档目录', 'Inspect documents and the document directory for the current channel')}
         fullHeight
       >
         {sidePanelMode === 'ai_outputs' ? renderAiOutputsInspector() : renderDocumentsInspector()}
@@ -7032,8 +8063,8 @@ export function TeamChannelsPanel({
       <BottomSheetPanel
         open={composerToolsOpen}
         onOpenChange={setComposerToolsOpen}
-        title="频道工具"
-        description="把技能、文档和上传资料挂到当前频道消息里。"
+        title={bilingual('频道工具', 'Channel tools')}
+        description={bilingual('把技能、文档和上传资料挂到当前频道消息里。', 'Attach skills, documents, and uploaded material to the current channel message.')}
       >
         <div className="space-y-2">
           <button
@@ -7047,9 +8078,9 @@ export function TeamChannelsPanel({
           >
             <Sparkles className="h-4 w-4 text-primary" />
             <div className="min-w-0">
-              <div className="text-[13px] font-medium text-foreground">技能</div>
+                <div className="text-[13px] font-medium text-foreground">{bilingual('技能', 'Skills')}</div>
               <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                选择当前 Agent 真正可调用的技能和扩展。
+                {bilingual('选择当前 Agent 真正可调用的技能和扩展。', 'Choose the skills and extensions that the current agent can actually call.')}
               </div>
             </div>
           </button>
@@ -7063,9 +8094,9 @@ export function TeamChannelsPanel({
           >
             <Paperclip className="h-4 w-4 text-primary" />
             <div className="min-w-0">
-              <div className="text-[13px] font-medium text-foreground">附件</div>
+              <div className="text-[13px] font-medium text-foreground">{bilingual('附件', 'Attachments')}</div>
               <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                把团队文档附加到当前频道消息或当前线程；只有附加后的文档才会进入本轮上下文。
+                {bilingual('把团队文档附加到当前频道消息或当前线程；只有附加后的文档才会进入本轮上下文。', 'Attach team documents to the current channel message or thread. Only attached docs enter the current turn context.')}
               </div>
             </div>
           </button>
@@ -7081,10 +8112,10 @@ export function TeamChannelsPanel({
             <Upload className="h-4 w-4 text-primary" />
             <div className="min-w-0">
               <div className="text-[13px] font-medium text-foreground">
-                {uploadingDocument ? '上传中…' : '上传文件'}
+                {uploadingDocument ? bilingual('上传中…', 'Uploading…') : bilingual('上传文件', 'Upload file')}
               </div>
               <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                直接上传到本频道的文档目录，并附加到当前消息；不会因为上传就自动全量读取频道资料。
+                {bilingual('直接上传到本频道的文档目录，并附加到当前消息；不会因为上传就自动全量读取频道资料。', 'Upload directly into this channel’s document directory and attach it to the current message. Uploading does not automatically read all channel documents.')}
               </div>
             </div>
           </button>
@@ -7122,27 +8153,27 @@ export function TeamChannelsPanel({
             closePublishDialog();
           }
         }}
-        title="发布到团队文档"
-        description="把这份 AI 产出升级成团队正式文档，并选择展示名称与目标目录。"
+        title={bilingual('发布到团队文档', 'Publish to team documents')}
+        description={bilingual('把这份 AI 产出升级成团队正式文档，并选择展示名称与目标目录。', 'Promote this AI output into an official team document and choose its display name and target directory.')}
         fullHeight={!isMobile}
       >
         <div className="space-y-4">
           <div>
-            <label className="mb-1 block text-[12px] text-muted-foreground">展示名称</label>
+            <label className="mb-1 block text-[12px] text-muted-foreground">{bilingual('展示名称', 'Display name')}</label>
             <Input
               value={publishName}
               onChange={(event) => setPublishName(event.target.value)}
-              placeholder="文档名称"
+              placeholder={bilingual('文档名称', 'Document name')}
             />
           </div>
           <div>
-            <label className="mb-1 block text-[12px] text-muted-foreground">目标目录</label>
+            <label className="mb-1 block text-[12px] text-muted-foreground">{bilingual('目标目录', 'Target directory')}</label>
             <Select value={publishFolderPath} onValueChange={setPublishFolderPath}>
               <SelectTrigger>
-                <SelectValue placeholder="选择目录" />
+                <SelectValue placeholder={bilingual('选择目录', 'Choose a directory')} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="/">根目录</SelectItem>
+                <SelectItem value="/">{bilingual('根目录', 'Root')}</SelectItem>
                 {flattenFolders(folderTree).map((folder) => (
                   <SelectItem key={folder.path} value={folder.path}>
                     {folder.label}
@@ -7151,45 +8182,73 @@ export function TeamChannelsPanel({
               </SelectContent>
             </Select>
             {foldersLoading ? (
-              <div className="mt-2 text-[11px] text-muted-foreground">正在读取团队文档目录…</div>
+              <div className="mt-2 text-[11px] text-muted-foreground">{bilingual('正在读取团队文档目录…', 'Loading the team document directory…')}</div>
             ) : null}
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={closePublishDialog}>
-              取消
+              {bilingual('取消', 'Cancel')}
             </Button>
             <Button
               onClick={() => void confirmPublishAiOutput()}
               disabled={!publishTargetDoc || publishingDocId === publishTargetDoc.id}
             >
-              {publishTargetDoc && publishingDocId === publishTargetDoc.id ? '发布中…' : '确认发布'}
+              {publishTargetDoc && publishingDocId === publishTargetDoc.id ? bilingual('发布中…', 'Publishing…') : bilingual('确认发布', 'Confirm publish')}
             </Button>
           </div>
         </div>
       </BottomSheetPanel>
 
-      <BottomSheetPanel open={createOpen} onOpenChange={setCreateOpen} title="创建团队频道" description="公开频道对团队成员可见，私密频道只对指定成员可见。" fullHeight={!isMobile}>
-        <div className="space-y-4">
-          <Input value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} placeholder="频道名称" />
-          <Textarea value={form.description} onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))} placeholder="频道说明" className="min-h-[88px]" />
-          <Select value={form.visibility} onValueChange={(value) => setForm((prev) => ({ ...prev, visibility: value as ChatChannelVisibility }))}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="team_public">公开频道</SelectItem>
-              <SelectItem value="team_private">私密频道</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={form.defaultAgentId} onValueChange={(value) => setForm((prev) => ({ ...prev, defaultAgentId: value }))}>
-            <SelectTrigger><SelectValue placeholder="默认 Agent" /></SelectTrigger>
-            <SelectContent>
-              {visibleAgents.map((agent) => (
-                <SelectItem key={agent.id} value={agent.id}>{agent.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {form.visibility === 'team_private' ? (
-            <div className="space-y-2">
-              <div className="text-[12px] font-medium text-foreground">初始成员</div>
+        <BottomSheetPanel open={createOpen} onOpenChange={setCreateOpen} title={bilingual('创建团队频道', 'Create team channel')} description={bilingual('公开频道对团队成员可见，私密频道只对指定成员可见。', 'Public channels are visible to team members. Private channels are visible only to selected members.')} fullHeight={!isMobile}>
+          <div className="space-y-4">
+            <Input value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} placeholder={bilingual('频道名称', 'Channel name')} />
+            <Textarea value={form.description} onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))} placeholder={bilingual('频道说明', 'Channel description')} className="min-h-[88px]" />
+            <Select value={form.visibility} onValueChange={(value) => setForm((prev) => ({ ...prev, visibility: value as ChatChannelVisibility }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="team_public">{bilingual('公开频道', 'Public channel')}</SelectItem>
+                <SelectItem value="team_private">{bilingual('私密频道', 'Private channel')}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={form.channelType} onValueChange={(value) => setForm((prev) => ({ ...prev, channelType: value as ChatChannelType }))}>
+              <SelectTrigger><SelectValue placeholder={bilingual('频道类型', 'Channel type')} /></SelectTrigger>
+              <SelectContent>
+                  <SelectItem value="general">{bilingual('普通协作频道', 'General collaboration channel')}</SelectItem>
+                  <SelectItem value="coding">{bilingual('编程项目频道', 'Coding project channel')}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={form.defaultAgentId} onValueChange={(value) => setForm((prev) => ({ ...prev, defaultAgentId: value }))}>
+              <SelectTrigger><SelectValue placeholder={bilingual('默认 Agent', 'Default agent')} /></SelectTrigger>
+              <SelectContent>
+                {visibleAgents.map((agent) => (
+                  <SelectItem key={agent.id} value={agent.id}>{agent.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {form.channelType === 'coding' ? (
+              <>
+                <div className="rounded-[12px] bg-muted/[0.05] px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+                  {bilingual('编程项目频道会自动创建并绑定一个项目工作区，后续协作线程默认围绕这个工作区和 thread worktree 执行。', 'Coding channels automatically create and bind a project workspace. Later collaboration threads run around this workspace and its thread worktree by default.')}
+                </div>
+                <Input
+                  value={form.workspaceDisplayName}
+                  onChange={(event) => setForm((prev) => ({ ...prev, workspaceDisplayName: event.target.value }))}
+                  placeholder={bilingual('项目工作区名称', 'Project workspace name')}
+                />
+                <Input
+                  value={form.repoDefaultBranch}
+                  onChange={(event) => setForm((prev) => ({ ...prev, repoDefaultBranch: event.target.value }))}
+                  placeholder={bilingual('默认分支（如 main）', 'Default branch (for example: main)')}
+                />
+              </>
+            ) : (
+              <div className="rounded-[12px] bg-muted/[0.05] px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+                {bilingual('普通协作频道不绑定项目工作区，适合文档、讨论和通用协作。', 'General collaboration channels do not bind a project workspace and are better for documents, discussion, and general collaboration.')}
+              </div>
+            )}
+            {form.visibility === 'team_private' ? (
+              <div className="space-y-2">
+              <div className="text-[12px] font-medium text-foreground">{bilingual('初始成员', 'Initial members')}</div>
               <div className="max-h-[240px] space-y-2 overflow-y-auto rounded-[16px] border border-border/70 p-3">
                 {teamMembers.map((member) => (
                   <label key={member.id} className="flex items-center gap-2 text-[12px]">
@@ -7213,33 +8272,220 @@ export function TeamChannelsPanel({
           ) : null}
           <div className="flex justify-end">
             <Button onClick={() => void handleCreateChannel()} disabled={!form.name.trim() || !form.defaultAgentId}>
-              <Plus className="mr-1 h-4 w-4" />创建频道
+              <Plus className="mr-1 h-4 w-4" />{bilingual('创建频道', 'Create channel')}
             </Button>
           </div>
         </div>
       </BottomSheetPanel>
 
-      <BottomSheetPanel open={settingsOpen} onOpenChange={setSettingsOpen} title="频道设置" description="维护频道名称、描述、可见范围和默认 Agent。" fullHeight={!isMobile}>
-        <div className="space-y-4">
-          <Input value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} placeholder="频道名称" />
-          <Textarea value={form.description} onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))} placeholder="频道说明" className="min-h-[88px]" />
-          <Select value={form.visibility} onValueChange={(value) => setForm((prev) => ({ ...prev, visibility: value as ChatChannelVisibility }))}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="team_public">公开频道</SelectItem>
-              <SelectItem value="team_private">私密频道</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={form.defaultAgentId} onValueChange={(value) => setForm((prev) => ({ ...prev, defaultAgentId: value }))}>
-            <SelectTrigger><SelectValue placeholder="默认 Agent" /></SelectTrigger>
-            <SelectContent>
-              {visibleAgents.map((agent) => (
-                <SelectItem key={agent.id} value={agent.id}>{agent.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <BottomSheetPanel
+          open={onboardingOpen}
+          onOpenChange={setOnboardingOpen}
+          title={bilingual('填写频道启动信息', 'Fill in channel kickoff details')}
+          description={bilingual('这四项会直接写入频道设置和频道记忆，供协作线程长期参考。', 'These four fields are written directly into channel settings and channel memory for long-term collaboration reference.')}
+          fullHeight={!isMobile}
+        >
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <div className="text-[12px] text-muted-foreground">{bilingual('频道目标', 'Channel goal')}</div>
+              <Textarea
+                value={form.channelGoal}
+                onChange={(event) => setForm((prev) => ({ ...prev, channelGoal: event.target.value }))}
+                placeholder={bilingual('这个频道主要围绕什么事情建立？', 'What is this channel mainly created for?')}
+                className="min-h-[76px]"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-[12px] text-muted-foreground">{bilingual('参与人', 'Participants')}</div>
+              <Textarea
+                value={form.participantNotes}
+                onChange={(event) => setForm((prev) => ({ ...prev, participantNotes: event.target.value }))}
+                placeholder={bilingual('主要谁会参与协作？谁是关键判断人？', 'Who mainly participates? Who makes the key decisions?')}
+                className="min-h-[76px]"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-[12px] text-muted-foreground">{bilingual('产出物', 'Outputs')}</div>
+              <Textarea
+                value={form.expectedOutputs}
+                onChange={(event) => setForm((prev) => ({ ...prev, expectedOutputs: event.target.value }))}
+                placeholder={bilingual('最终希望形成什么结果、文档、方案或交付物？', 'What result, document, plan, or deliverable do you want in the end?')}
+                className="min-h-[76px]"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-[12px] text-muted-foreground">{bilingual('协作方式', 'Collaboration style')}</div>
+              <Input
+                value={form.collaborationStyle}
+                onChange={(event) => setForm((prev) => ({ ...prev, collaborationStyle: event.target.value }))}
+                placeholder={bilingual('例如：偏讨论 / 偏方案 / 偏执行 / 偏评审 / 混合', 'For example: discussion-heavy / planning-heavy / execution-heavy / review-heavy / mixed')}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setOnboardingOpen(false)}>
+                {bilingual('稍后再填', 'Fill later')}
+              </Button>
+              <Button onClick={() => void handleSaveOnboarding()}>
+                <Save className="mr-1 h-4 w-4" />
+                {bilingual('写入频道信息', 'Save channel info')}
+              </Button>
+            </div>
+          </div>
+        </BottomSheetPanel>
+
+        <BottomSheetPanel open={settingsOpen} onOpenChange={setSettingsOpen} title={bilingual('频道设置', 'Channel settings')} description={bilingual('维护频道名称、描述、可见范围和默认 Agent。', 'Maintain the channel name, description, visibility, and default agent.')} fullHeight={!isMobile}>
+          <div className="space-y-4">
+            <Input value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} placeholder={bilingual('频道名称', 'Channel name')} />
+            <Textarea value={form.description} onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))} placeholder={bilingual('频道说明', 'Channel description')} className="min-h-[88px]" />
+            <Select value={form.visibility} onValueChange={(value) => setForm((prev) => ({ ...prev, visibility: value as ChatChannelVisibility }))}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="team_public">{bilingual('公开频道', 'Public channel')}</SelectItem>
+                <SelectItem value="team_private">{bilingual('私密频道', 'Private channel')}</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="space-y-2 rounded-[16px] border border-border/70 bg-muted/[0.04] px-4 py-3">
+              <div className="text-[13px] font-medium text-foreground">{bilingual('频道类型', 'Channel type')}</div>
+              <Select value={form.channelType} onValueChange={(value) => setForm((prev) => ({ ...prev, channelType: value as ChatChannelType }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="general">{bilingual('普通协作频道', 'General collaboration channel')}</SelectItem>
+                  <SelectItem value="coding">{bilingual('编程项目频道', 'Coding project channel')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="text-[11px] leading-5 text-muted-foreground">
+                {bilingual('当前类型：', 'Current type: ')}{channelTypeLabel(form.channelType)}。
+                {form.channelType === 'coding'
+                  ? bilingual(' 保存后会确保频道绑定项目工作区，并让协作线程默认围绕代码现场执行。', ' After saving, the channel stays bound to the project workspace and collaboration threads run around the code context by default.')
+                  : bilingual(' 保存后会解绑频道对项目工作区的使用关系，但不会删除底层 repo/worktree。', ' After saving, the channel is detached from the project workspace, but the underlying repo/worktree is not deleted.')}
+              </div>
+            </div>
+            <Select value={form.defaultAgentId} onValueChange={(value) => setForm((prev) => ({ ...prev, defaultAgentId: value }))}>
+              <SelectTrigger><SelectValue placeholder={bilingual('默认 Agent', 'Default agent')} /></SelectTrigger>
+              <SelectContent>
+                {visibleAgents.map((agent) => (
+                  <SelectItem key={agent.id} value={agent.id}>{agent.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {form.channelType === 'coding' ? (
+              <div className="space-y-3 rounded-[16px] border border-border/70 bg-muted/[0.04] px-4 py-3">
+                <div>
+                <div className="text-[13px] font-medium text-foreground">{bilingual('项目工作区', 'Project workspace')}</div>
+                  <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                    {bilingual('这个频道会绑定一个项目工作区，所有协作线程都会从这里派生代码现场。', 'This channel binds to a project workspace. All collaboration threads derive their code context from it.')}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-[12px] text-muted-foreground">{bilingual('工作区名称', 'Workspace name')}</div>
+                  <Input
+                    value={form.workspaceDisplayName}
+                    onChange={(event) => setForm((prev) => ({ ...prev, workspaceDisplayName: event.target.value }))}
+                    placeholder={bilingual('项目工作区名称', 'Project workspace name')}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-[12px] text-muted-foreground">{bilingual('默认分支', 'Default branch')}</div>
+                  <Input
+                    value={form.repoDefaultBranch}
+                    onChange={(event) => setForm((prev) => ({ ...prev, repoDefaultBranch: event.target.value }))}
+                    placeholder="main"
+                  />
+                </div>
+                {channelDetail?.workspace_path ? (
+                  <div className="rounded-[12px] bg-background/80 px-3 py-2 text-[11px] text-muted-foreground">
+                    {bilingual('工作区：', 'Workspace: ')}{channelDetail.workspace_display_name || channelDetail.name}
+                    <br />
+                    {bilingual('路径：', 'Path: ')}{channelDetail.workspace_path}
+                    {channelDetail.repo_path ? (
+                      <>
+                        <br />
+                        {bilingual('仓库：', 'Repo: ')}{channelDetail.repo_path}
+                      </>
+                    ) : null}
+                    {channelDetail.main_checkout_path || channelDetail.repo_root ? (
+                      <>
+                        <br />
+                        {bilingual('主检出：', 'Main checkout: ')}{channelDetail.main_checkout_path || channelDetail.repo_root}
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-[16px] border border-border/70 bg-muted/[0.04] px-4 py-3 text-[11px] leading-5 text-muted-foreground">
+                {bilingual('普通协作频道不展示项目工作区。若当前频道之前已经是编程项目频道，切回普通协作后只会解绑，不会删除底层代码现场。', 'General collaboration channels do not show a project workspace. If this channel was previously a coding channel, switching back will only detach it and will not delete the underlying repo or worktree.')}
+              </div>
+            )}
+            {form.channelType === 'general' && channelDetail?.workspace_governance?.has_detached_workspace ? (
+              <div className="space-y-3 rounded-[16px] border border-border/70 bg-muted/[0.04] px-4 py-3">
+                <div>
+                  <div className="text-[13px] font-medium text-foreground">{bilingual('解绑工作区治理', 'Detached workspace governance')}</div>
+                  <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                    {bilingual('当前频道有一套已解绑但仍保留的项目工作区。可以恢复到编程项目频道，也可以单独归档或删除这套代码现场。', 'This channel has a detached project workspace that is still retained. You can restore it to a coding channel, archive it, or delete the code context separately.')}
+                  </div>
+                </div>
+                <div className="rounded-[12px] bg-background/80 px-3 py-2 text-[11px] text-muted-foreground">
+                  {bilingual('状态：', 'Status: ')}{workspaceLifecycleLabel(channelDetail.workspace_governance.lifecycle_state)}
+                  <br />
+                  {bilingual('工作区：', 'Workspace: ')}{channelDetail.workspace_governance.workspace_display_name || channelDetail.name}
+                  {channelDetail.workspace_governance.workspace_path ? (
+                    <>
+                      <br />
+                      {bilingual('路径：', 'Path: ')}{channelDetail.workspace_governance.workspace_path}
+                    </>
+                  ) : null}
+                  {channelDetail.workspace_governance.repo_path ? (
+                    <>
+                      <br />
+                      {bilingual('仓库：', 'Repo: ')}{channelDetail.workspace_governance.repo_path}
+                    </>
+                  ) : null}
+                  {channelDetail.workspace_governance.main_checkout_path ? (
+                    <>
+                      <br />
+                      {bilingual('主检出：', 'Main checkout: ')}{channelDetail.workspace_governance.main_checkout_path}
+                    </>
+                  ) : null}
+                  {channelDetail.workspace_governance.retention_until ? (
+                    <>
+                      <br />
+                      {bilingual('保留至：', 'Retained until: ')}{formatDateTime(channelDetail.workspace_governance.retention_until)}
+                    </>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void handleRestoreDetachedWorkspace()}
+                    disabled={workspaceGovernanceAction !== null}
+                  >
+                    {workspaceGovernanceAction === 'restore' ? bilingual('恢复中…', 'Restoring…') : bilingual('恢复为编程频道', 'Restore as coding channel')}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void handleArchiveDetachedWorkspace()}
+                    disabled={workspaceGovernanceAction !== null}
+                  >
+                    {workspaceGovernanceAction === 'archive' ? bilingual('归档中…', 'Archiving…') : bilingual('归档工作区', 'Archive workspace')}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void handleDeleteDetachedWorkspace()}
+                    disabled={workspaceGovernanceAction !== null}
+                  >
+                    {workspaceGovernanceAction === 'delete' ? bilingual('删除中…', 'Deleting…') : bilingual('删除工作区', 'Delete workspace')}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           <div className="space-y-1">
-            <div className="text-[12px] text-muted-foreground">管理 Agent 主动度</div>
+            <div className="text-[12px] text-muted-foreground">{bilingual('管理 Agent 主动度', 'Manager agent autonomy')}</div>
             <Select
               value={form.agentAutonomyMode}
               onValueChange={(value) =>
@@ -7248,9 +8494,9 @@ export function TeamChannelsPanel({
             >
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="standard">标准模式</SelectItem>
-                <SelectItem value="proactive">主动推进模式</SelectItem>
-                <SelectItem value="agent_lead">Agent 主导模式</SelectItem>
+                <SelectItem value="standard">{bilingual('标准模式', 'Standard mode')}</SelectItem>
+                <SelectItem value="proactive">{bilingual('主动推进模式', 'Proactive mode')}</SelectItem>
+                <SelectItem value="agent_lead">{bilingual('Agent 主导模式', 'Agent-led mode')}</SelectItem>
               </SelectContent>
             </Select>
             <div className="text-[11px] leading-5 text-muted-foreground">
@@ -7259,49 +8505,49 @@ export function TeamChannelsPanel({
           </div>
           <div className="space-y-3 rounded-[16px] border border-border/70 bg-muted/[0.04] px-4 py-3">
             <div>
-              <div className="text-[13px] font-medium text-foreground">频道记忆</div>
+              <div className="text-[13px] font-medium text-foreground">{bilingual('频道记忆', 'Channel memory')}</div>
               <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                管理 Agent 会长期参考这里的信息来判断建议、总结、提醒和推进方向。
+                {bilingual('管理 Agent 会长期参考这里的信息来判断建议、总结、提醒和推进方向。', 'The managing agent will use this information over time when deciding suggestions, summaries, reminders, and direction.') }
               </div>
             </div>
             <div className="space-y-1">
-              <div className="text-[12px] text-muted-foreground">频道目标</div>
+              <div className="text-[12px] text-muted-foreground">{bilingual('频道目标', 'Channel goal')}</div>
               <Textarea
                 value={form.channelGoal}
                 onChange={(event) => setForm((prev) => ({ ...prev, channelGoal: event.target.value }))}
-                placeholder="这个频道主要围绕什么事情建立？"
+                placeholder={bilingual('这个频道主要围绕什么事情建立？', 'What is this channel mainly created for?')}
                 className="min-h-[72px]"
               />
             </div>
             <div className="space-y-1">
-              <div className="text-[12px] text-muted-foreground">参与人</div>
+              <div className="text-[12px] text-muted-foreground">{bilingual('参与人', 'Participants')}</div>
               <Textarea
                 value={form.participantNotes}
                 onChange={(event) => setForm((prev) => ({ ...prev, participantNotes: event.target.value }))}
-                placeholder="主要谁会参与协作？谁是关键判断人？"
+                placeholder={bilingual('主要谁会参与协作？谁是关键判断人？', 'Who mainly participates in the collaboration? Who makes the key decisions?')}
                 className="min-h-[72px]"
               />
             </div>
             <div className="space-y-1">
-              <div className="text-[12px] text-muted-foreground">产出物</div>
+              <div className="text-[12px] text-muted-foreground">{bilingual('产出物', 'Expected outputs')}</div>
               <Textarea
                 value={form.expectedOutputs}
                 onChange={(event) => setForm((prev) => ({ ...prev, expectedOutputs: event.target.value }))}
-                placeholder="最终希望形成什么结果、文档、方案或交付物？"
+                placeholder={bilingual('最终希望形成什么结果、文档、方案或交付物？', 'What result, document, plan, or deliverable do you want in the end?')}
                 className="min-h-[72px]"
               />
             </div>
             <div className="space-y-1">
-              <div className="text-[12px] text-muted-foreground">协作方式</div>
+              <div className="text-[12px] text-muted-foreground">{bilingual('协作方式', 'Collaboration style')}</div>
               <Input
                 value={form.collaborationStyle}
                 onChange={(event) => setForm((prev) => ({ ...prev, collaborationStyle: event.target.value }))}
-                placeholder="例如：偏讨论 / 偏方案 / 偏执行 / 偏评审 / 混合"
+                placeholder={bilingual('例如：偏讨论 / 偏方案 / 偏执行 / 偏评审 / 混合', 'For example: discussion-heavy / planning-heavy / execution-heavy / review-heavy / mixed')}
               />
             </div>
             {channelDetail?.orchestrator_state?.last_heartbeat_at ? (
               <div className="rounded-[12px] bg-background/80 px-3 py-2 text-[11px] text-muted-foreground">
-                最近心跳：{formatDateTime(channelDetail.orchestrator_state.last_heartbeat_at)}
+                {bilingual('最近心跳：', 'Latest heartbeat: ')}{formatDateTime(channelDetail.orchestrator_state.last_heartbeat_at)}
                 {channelDetail.orchestrator_state.last_heartbeat_reason
                   ? ` · ${channelDetail.orchestrator_state.last_heartbeat_reason}`
                   : ''}
@@ -7310,17 +8556,17 @@ export function TeamChannelsPanel({
           </div>
           <div className="flex justify-end">
             <Button onClick={() => void handleSaveChannel()}>
-              <Save className="mr-1 h-4 w-4" />保存频道设置
+              <Save className="mr-1 h-4 w-4" />{bilingual('保存频道设置', 'Save channel settings')}
             </Button>
           </div>
           <div className="rounded-[16px] border border-destructive/20 bg-destructive/[0.04] px-4 py-3">
-            <div className="text-[13px] font-medium text-foreground">删除频道</div>
+              <div className="text-[13px] font-medium text-foreground">{bilingual('删除频道', 'Delete channel')}</div>
             <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
-              可以选择只删除频道，保留所有文档；或者彻底删除频道和相关文档。
+                {bilingual('可以选择只删除频道，保留所有文档；或者彻底删除频道和相关文档。', 'You can delete only the channel and keep all documents, or permanently delete the channel together with related documents.')}
             </div>
             <div className="mt-3 flex justify-end">
               <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)}>
-                删除频道
+                {bilingual('删除频道', 'Delete channel')}
               </Button>
             </div>
           </div>
@@ -7334,13 +8580,13 @@ export function TeamChannelsPanel({
             setPendingCollaborationAction(null);
           }
         }}
-        title={pendingCollaborationAction?.title || '确认操作'}
+        title={pendingCollaborationAction?.title || bilingual('确认操作', 'Confirm action')}
         description={pendingCollaborationAction?.description}
         confirmText={pendingCollaborationAction?.confirmText}
         variant={pendingCollaborationAction?.variant || 'default'}
         onConfirm={() => void handleConfirmCollaborationAction()}
         loading={confirmingCollaborationAction}
-        cancelText="取消"
+        cancelText={bilingual('取消', 'Cancel')}
       >
         {pendingCollaborationAction ? (
           <div className="space-y-3">
@@ -7378,9 +8624,9 @@ export function TeamChannelsPanel({
       <ConfirmDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}
-        title="删除频道"
-        description="选择删除方式。这个动作无法撤销。"
-        confirmText={deleteMode === 'full_delete' ? '确认彻底删除' : '确认删除并保留文档'}
+        title={bilingual('删除频道', 'Delete channel')}
+        description={bilingual('选择删除方式。这个动作无法撤销。', 'Choose a deletion mode. This action cannot be undone.')}
+        confirmText={deleteMode === 'full_delete' ? bilingual('确认彻底删除', 'Confirm permanent delete') : bilingual('确认删除并保留文档', 'Confirm delete and keep documents')}
         variant="destructive"
         onConfirm={() => void handleDeleteChannel()}
         loading={deletingChannel}
@@ -7395,9 +8641,9 @@ export function TeamChannelsPanel({
                 : 'border-border/70 hover:bg-accent/20'
             }`}
           >
-            <div className="text-[13px] font-medium text-foreground">保留所有文档删除</div>
+            <div className="text-[13px] font-medium text-foreground">{bilingual('保留所有文档删除', 'Delete and keep all documents')}</div>
             <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
-              删除频道、消息、成员和线程，但保留频道资料与 AI 产出文档。
+              {bilingual('删除频道、消息、成员和线程，但保留频道资料与 AI 产出文档。', 'Delete the channel, messages, members, and threads, but keep channel documents and AI output docs.')}
             </div>
           </button>
           <button
@@ -7409,19 +8655,19 @@ export function TeamChannelsPanel({
                 : 'border-border/70 hover:bg-destructive/[0.05]'
             }`}
           >
-            <div className="text-[13px] font-medium text-foreground">彻底删除</div>
+            <div className="text-[13px] font-medium text-foreground">{bilingual('彻底删除', 'Permanent delete')}</div>
             <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
-              删除频道、消息、成员、线程，以及当前频道目录下的资料和该频道来源的 AI 产出。
+              {bilingual('删除频道、消息、成员、线程，以及当前频道目录下的资料和该频道来源的 AI 产出。', 'Delete the channel, messages, members, threads, the documents in this channel directory, and AI outputs generated from this channel.')}
             </div>
           </button>
         </div>
       </ConfirmDialog>
 
-      <BottomSheetPanel open={membersOpen} onOpenChange={setMembersOpen} title="频道成员" description="公开频道对团队成员可见；私密频道需要显式维护成员。" fullHeight={!isMobile}>
+      <BottomSheetPanel open={membersOpen} onOpenChange={setMembersOpen} title={bilingual('频道成员', 'Channel members')} description={bilingual('公开频道对团队成员可见；私密频道需要显式维护成员。', 'Public channels are visible to the whole team; private channels require explicit membership management.')} fullHeight={!isMobile}>
         <div className="space-y-4">
           <div className="flex items-center gap-2">
             <Select value={newMemberId} onValueChange={setNewMemberId}>
-              <SelectTrigger><SelectValue placeholder="选择成员" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder={bilingual('选择成员', 'Select member')} /></SelectTrigger>
               <SelectContent>
                 {memberOptions.map((member) => (
                   <SelectItem key={member.id} value={member.userId}>{member.displayName}</SelectItem>
@@ -7431,12 +8677,12 @@ export function TeamChannelsPanel({
             <Select value={newMemberRole} onValueChange={(value) => setNewMemberRole(value as 'member' | 'manager')}>
               <SelectTrigger className="w-[132px]"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="member">成员</SelectItem>
-                <SelectItem value="manager">管理者</SelectItem>
+                  <SelectItem value="member">{bilingual('成员', 'Member')}</SelectItem>
+                  <SelectItem value="manager">{bilingual('管理者', 'Manager')}</SelectItem>
               </SelectContent>
             </Select>
             <Button variant="outline" onClick={() => void handleAddMember()} disabled={!newMemberId}>
-              添加
+              {bilingual('添加', 'Add')}
             </Button>
           </div>
           <div className="space-y-2">
@@ -7457,7 +8703,7 @@ export function TeamChannelsPanel({
                   </SelectContent>
                 </Select>
                 <Button variant="ghost" size="sm" onClick={() => void handleRemoveMember(member.user_id)}>
-                  移除
+                    {bilingual('移除', 'Remove')}
                 </Button>
               </div>
             ))}

@@ -1,6 +1,5 @@
 use crate::agents::harness::TaskRuntime;
 use crate::agents::harness::{CoordinatorRole, DelegationMode};
-use crate::agents::platform_tools::PLATFORM_MANAGE_SCHEDULE_TOOL_NAME;
 use crate::agents::ExtensionConfig;
 use crate::providers::base::Provider;
 use std::env;
@@ -376,11 +375,7 @@ impl TaskConfig {
                 })
                 .collect(),
             runtime_tool_surface,
-            hidden_coordinator_tools: vec![
-                "subagent".to_string(),
-                "swarm".to_string(),
-                PLATFORM_MANAGE_SCHEDULE_TOOL_NAME.to_string(),
-            ],
+            hidden_coordinator_tools: vec!["subagent".to_string(), "swarm".to_string()],
             permission_policy,
             allow_worker_messaging: self.allow_worker_messaging,
             peer_worker_addresses: self.peer_worker_addresses.clone(),

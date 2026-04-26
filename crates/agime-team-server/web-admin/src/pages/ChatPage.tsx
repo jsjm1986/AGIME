@@ -22,6 +22,7 @@ export default function ChatPage() {
   const [selectedSessionMeta, setSelectedSessionMeta] = useState<ChatSession | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<TeamAgent | null>(null);
   const [filterAgentId, setFilterAgentId] = useState<string | undefined>();
+  const [draftConversationNonce, setDraftConversationNonce] = useState(0);
 
   // C5 fix: All hooks must be called before any conditional return
   const handleSelectSession = useCallback(
@@ -57,13 +58,17 @@ export default function ChatPage() {
 
   const handleAgentSelect = useCallback((agent: TeamAgent) => {
     setSelectedAgent(agent);
+    setSelectedSessionId(null);
     setSelectedSessionMeta(null);
-  }, []);
+    setDraftConversationNonce((current) => current + 1);
+    navigate(`/teams/${teamId}/chat`, { replace: true });
+  }, [navigate, teamId]);
 
   const handleSessionRemoved = useCallback(
     (_sid: string) => {
       setSelectedSessionId(null);
       setSelectedSessionMeta(null);
+      setDraftConversationNonce((current) => current + 1);
       navigate(`/teams/${teamId}/chat`, { replace: true });
     },
     [teamId, navigate]
@@ -74,8 +79,13 @@ export default function ChatPage() {
     setSelectedSessionId(urlSessionId || null);
     if (!urlSessionId) {
       setSelectedSessionMeta(null);
+      setDraftConversationNonce((current) => current + 1);
     }
   }, [urlSessionId]);
+
+  const conversationInstanceKey = selectedSessionId
+    ? `session:${selectedSessionId}`
+    : `draft:${selectedAgent?.id || filterAgentId || "none"}:${draftConversationNonce}`;
 
   if (!teamId) return null;
 
@@ -111,6 +121,7 @@ export default function ChatPage() {
       <div className="flex-1 flex flex-col min-w-0">
         {selectedSessionId ? (
           <ChatConversation
+            key={conversationInstanceKey}
             sessionId={selectedSessionId}
             agentId={selectedAgent?.id || selectedSessionMeta?.agent_id || ''}
             agentName={selectedAgent?.name || selectedSessionMeta?.agent_name || 'Agent'}
@@ -120,6 +131,7 @@ export default function ChatPage() {
           />
         ) : selectedAgent ? (
           <ChatConversation
+            key={conversationInstanceKey}
             sessionId={null}
             agentId={selectedAgent.id}
             agentName={selectedAgent.name}

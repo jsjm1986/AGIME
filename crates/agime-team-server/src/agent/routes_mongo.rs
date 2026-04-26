@@ -10,6 +10,8 @@ use axum::{
 use std::sync::Arc;
 
 use crate::auth::middleware::UserContext;
+use agime::model::{CacheEditMode, ModelConfig, PromptCachingMode};
+use agime::runtime_profile::resolve_preview_profile;
 use agime_team::models::{
     AgentExtensionConfig, AgentSkillConfig, AgentTask, CreateAgentRequest, CustomExtensionConfig,
     ListAgentsQuery, ListTasksQuery, PaginatedResponse, SubmitTaskRequest, TaskResult, TeamAgent,
@@ -23,7 +25,7 @@ use super::ai_describe::{
     AiDescribeError, AiDescribeService, BuiltinDescribeRequest, DescribeRequest, InsightsQuery,
     KNOWN_BUILTINS, KNOWN_BUILTIN_SKILLS,
 };
-use super::executor_mongo::TaskExecutor;
+use super::execution_admission;
 use super::rate_limit::RateLimiter;
 use super::service_mongo::{
     AgentService, AvatarGovernanceEventPayload, AvatarGovernanceQueueItemPayload,
@@ -31,7 +33,7 @@ use super::service_mongo::{
 };
 use super::session_mongo::SessionListQuery;
 use super::streamer::stream_task_results;
-use super::task_manager::{StreamEvent, TaskManager};
+use super::task_manager::TaskManager;
 use crate::config::Config;
 
 /// Create agent router (MongoDB version)
@@ -77,6 +79,7 @@ pub fn router(db: Arc<MongoDb>) -> Router {
         )
         .route("/agents", post(create_agent))
         .route("/agents", get(list_agents))
+        .route("/runtime-profile-preview", get(runtime_profile_preview))
         .route("/agents/{id}", get(get_agent))
         .route("/agents/{id}", put(update_agent))
         .route("/agents/{id}", delete(delete_agent))
@@ -224,6 +227,62 @@ async fn list_agents(
         tracing::error!("Failed to list agents: {:?}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })
+}
+
+async fn runtime_profile_preview(
+    Query(query): Query<RuntimeProfilePreviewQuery>,
+) -> Result<Json<JsonValue>, StatusCode> {
+    let model_name = query.model.trim();
+    if model_name.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let mut model_config = ModelConfig::new(model_name).map_err(|_| StatusCode::BAD_REQUEST)?;
+    model_config = model_config
+        .with_context_limit(query.context_limit)
+        .with_max_tokens(query.max_tokens)
+        .with_thinking(query.thinking_enabled, query.thinking_budget)
+        .with_reasoning_effort(query.reasoning_effort.clone())
+        .with_output_reserve_tokens(query.output_reserve_tokens)
+        .with_auto_compact_threshold(query.auto_compact_threshold);
+
+    if let Some(mode) = query
+        .prompt_caching_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        model_config.prompt_caching_mode = mode
+            .parse::<PromptCachingMode>()
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+    }
+    if let Some(mode) = query
+        .cache_edit_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        model_config.cache_edit_mode = mode
+            .parse::<CacheEditMode>()
+            .map_err(|_| StatusCode::BAD_REQUEST)?;
+    }
+
+    let profile = resolve_preview_profile(
+        &model_config,
+        query.api_format.as_deref(),
+        query.api_url.as_deref(),
+    );
+
+    Ok(Json(serde_json::json!({
+        "model": model_name,
+        "userIntent": profile.user_intent,
+        "hintedCapabilities": profile.hinted_capabilities,
+        "runtimeCapabilities": profile.capabilities,
+        "effectiveExecution": profile.effective_execution,
+        "downgrades": profile.downgrades,
+        "warnings": profile.warnings,
+        "sourceBreakdown": profile.source_breakdown
+    })))
 }
 
 async fn list_avatar_instances(
@@ -602,9 +661,15 @@ async fn provision_from_template_inner(
         allowed_groups: Some(source.allowed_groups.clone()),
         max_concurrent_tasks: Some(source.max_concurrent_tasks),
         thinking_enabled: Some(source.thinking_enabled),
+        thinking_budget: source.thinking_budget,
+        reasoning_effort: source.reasoning_effort.clone(),
         temperature: source.temperature,
         max_tokens: source.max_tokens,
         context_limit: source.context_limit,
+        output_reserve_tokens: source.output_reserve_tokens,
+        auto_compact_threshold: source.auto_compact_threshold,
+        prompt_caching_mode: Some(source.prompt_caching_mode),
+        cache_edit_mode: Some(source.cache_edit_mode),
         assigned_skills: Some(source.assigned_skills.clone()),
         skill_binding_mode: Some(source.skill_binding_mode),
         delegation_policy: Some(source.delegation_policy.clone()),
@@ -691,37 +756,12 @@ async fn submit_task(
         match service.approve_task(&task_id, &user.user_id).await {
             Ok(Some(approved_task)) => {
                 tracing::info!("Auto-approved chat task {} for agent", task_id);
-
-                // Register and spawn execution
-                let (cancel_token, _stream_tx) = task_manager.register(&task_id).await;
-                let executor = TaskExecutor::new(db.clone(), task_manager.clone());
-                let tid = task_id.clone();
-                let svc = service.clone();
-                let tm = task_manager.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = executor.execute_task(&tid, cancel_token).await {
-                        tracing::error!("Task execution failed: {}", e);
-                        match svc.fail_task(&tid, &e.to_string()).await {
-                            Ok(None) => tracing::warn!(
-                                "fail_task: no update for task {} (already terminal?)",
-                                tid
-                            ),
-                            Err(db_err) => {
-                                tracing::error!("Failed to update task status: {}", db_err)
-                            }
-                            _ => {}
-                        }
-                        tm.broadcast(
-                            &tid,
-                            StreamEvent::Done {
-                                status: "failed".to_string(),
-                                error: Some(e.to_string()),
-                            },
-                        )
-                        .await;
-                        tm.complete(&tid).await;
-                    }
-                });
+                if let Err(error) =
+                    execution_admission::admit_or_queue_task(&db, &service, &task_manager, &task_id)
+                        .await
+                {
+                    tracing::error!("Failed to admit auto-approved task {}: {}", task_id, error);
+                }
 
                 return Ok(Json(approved_task));
             }
@@ -812,39 +852,12 @@ async fn approve_task(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    // Register task for streaming
-    let (cancel_token, _stream_tx) = task_manager.register(&id).await;
-
-    // Spawn background task to execute
-    let executor = TaskExecutor::new(db.clone(), task_manager.clone());
-    let task_id = id.clone();
-    let service_clone = service.clone();
-    tokio::spawn(async move {
-        if let Err(e) = executor.execute_task(&task_id, cancel_token).await {
-            tracing::error!("Task execution failed: {}", e);
-            match service_clone.fail_task(&task_id, &e.to_string()).await {
-                Ok(None) => tracing::warn!(
-                    "fail_task: no update for task {} (already terminal?)",
-                    task_id
-                ),
-                Err(db_err) => {
-                    tracing::error!("Failed to update task status to failed: {}", db_err)
-                }
-                _ => {}
-            }
-            // Send Done event so SSE subscribers know the task ended
-            task_manager
-                .broadcast(
-                    &task_id,
-                    StreamEvent::Done {
-                        status: "failed".to_string(),
-                        error: Some(e.to_string()),
-                    },
-                )
-                .await;
-            task_manager.complete(&task_id).await;
-        }
-    });
+    if let Err(error) =
+        execution_admission::admit_or_queue_task(&db, &service, &task_manager, &id).await
+    {
+        tracing::error!("Failed to admit approved task {}: {}", id, error);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     Ok(Json(task))
 }
@@ -1061,6 +1074,12 @@ async fn update_agent_extensions(
         max_tokens: None,
         context_limit: None,
         thinking_enabled: None,
+        thinking_budget: None,
+        reasoning_effort: None,
+        output_reserve_tokens: None,
+        auto_compact_threshold: None,
+        prompt_caching_mode: None,
+        cache_edit_mode: None,
         assigned_skills: None,
         skill_binding_mode: None,
         delegation_policy: None,
@@ -1121,6 +1140,12 @@ async fn reload_agent_extensions(
         max_tokens: None,
         context_limit: None,
         thinking_enabled: None,
+        thinking_budget: None,
+        reasoning_effort: None,
+        output_reserve_tokens: None,
+        auto_compact_threshold: None,
+        prompt_caching_mode: None,
+        cache_edit_mode: None,
         assigned_skills: None,
         skill_binding_mode: None,
         delegation_policy: None,
@@ -1185,6 +1210,12 @@ async fn update_agent_skills(
         max_tokens: None,
         context_limit: None,
         thinking_enabled: None,
+        thinking_budget: None,
+        reasoning_effort: None,
+        output_reserve_tokens: None,
+        auto_compact_threshold: None,
+        prompt_caching_mode: None,
+        cache_edit_mode: None,
         assigned_skills: req.assigned_skills,
         skill_binding_mode: None,
         delegation_policy: None,
@@ -1294,6 +1325,33 @@ async fn archive_session(
 struct AddTeamExtensionRequest {
     extension_id: String,
     team_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeProfilePreviewQuery {
+    model: String,
+    #[serde(default)]
+    api_format: Option<String>,
+    #[serde(default)]
+    api_url: Option<String>,
+    #[serde(default)]
+    context_limit: Option<usize>,
+    #[serde(default)]
+    max_tokens: Option<i32>,
+    #[serde(default)]
+    thinking_enabled: Option<bool>,
+    #[serde(default)]
+    thinking_budget: Option<u32>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
+    #[serde(default)]
+    output_reserve_tokens: Option<usize>,
+    #[serde(default)]
+    auto_compact_threshold: Option<f64>,
+    #[serde(default)]
+    prompt_caching_mode: Option<String>,
+    #[serde(default)]
+    cache_edit_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

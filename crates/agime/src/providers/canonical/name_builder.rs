@@ -138,8 +138,8 @@ fn is_hosting_provider(provider: &str) -> bool {
 
 /// Infer the real provider from model name patterns
 fn infer_provider_from_model(model: &str) -> Option<&'static str> {
-    // Use capabilities registry for provider inference
-    if let Some(provider) = crate::capabilities::infer_provider(model) {
+    // Use the resolved capability profile as the primary hint source.
+    if let Some(provider) = crate::capabilities::resolve(model).provider {
         // Convert String to &'static str using a match on known providers
         return match provider.as_str() {
             "anthropic" => Some("anthropic"),

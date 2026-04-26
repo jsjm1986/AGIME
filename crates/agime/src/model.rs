@@ -1,4 +1,3 @@
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;
@@ -17,59 +16,6 @@ pub enum ConfigError {
     InvalidRange(String, String),
 }
 
-static MODEL_SPECIFIC_LIMITS: Lazy<Vec<(&'static str, usize)>> = Lazy::new(|| {
-    vec![
-        // openai
-        ("gpt-5", 272_000),
-        ("gpt-4-turbo", 128_000),
-        ("gpt-4.1", 1_000_000),
-        ("gpt-4-1", 1_000_000),
-        ("gpt-4o", 128_000),
-        ("o4-mini", 200_000),
-        ("o3-mini", 200_000),
-        ("o3", 200_000),
-        // anthropic - all 200k
-        ("claude", 200_000),
-        // google
-        ("gemini-1.5-flash", 1_000_000),
-        ("gemini-1", 128_000),
-        ("gemini-2", 1_000_000),
-        ("gemma-3-27b", 128_000),
-        ("gemma-3-12b", 128_000),
-        ("gemma-3-4b", 128_000),
-        ("gemma-3-1b", 32_000),
-        ("gemma3-27b", 128_000),
-        ("gemma3-12b", 128_000),
-        ("gemma3-4b", 128_000),
-        ("gemma3-1b", 32_000),
-        ("gemma-2-27b", 8_192),
-        ("gemma-2-9b", 8_192),
-        ("gemma-2-2b", 8_192),
-        ("gemma2-", 8_192),
-        ("gemma-7b", 8_192),
-        ("gemma-2b", 8_192),
-        ("gemma1", 8_192),
-        ("gemma", 8_192),
-        // facebook
-        ("llama-2-1b", 32_000),
-        ("llama", 128_000),
-        // qwen
-        ("qwen3-coder", 262_144),
-        ("qwen2-7b", 128_000),
-        ("qwen2-14b", 128_000),
-        ("qwen2-32b", 131_072),
-        ("qwen2-70b", 262_144),
-        ("qwen2", 128_000),
-        ("qwen3-32b", 131_072),
-        // xai
-        ("grok-4", 256_000),
-        ("grok-code-fast-1", 256_000),
-        ("grok", 131_072),
-        // other
-        ("kimi-k2", 131_072),
-    ]
-});
-
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ModelConfig {
     pub model_name: String,
@@ -78,9 +24,72 @@ pub struct ModelConfig {
     pub max_tokens: Option<i32>,
     pub thinking_enabled: Option<bool>,
     pub thinking_budget: Option<u32>,
+    pub reasoning_effort: Option<String>,
+    pub output_reserve_tokens: Option<usize>,
+    pub auto_compact_threshold: Option<f64>,
+    #[serde(default)]
+    pub prompt_caching_mode: PromptCachingMode,
+    #[serde(default)]
+    pub cache_edit_mode: CacheEditMode,
     pub toolshim: bool,
     pub toolshim_model: Option<String>,
     pub fast_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptCachingMode {
+    #[default]
+    Auto,
+    Off,
+    Prefer,
+}
+
+impl PromptCachingMode {
+    pub fn is_disabled(self) -> bool {
+        matches!(self, Self::Off)
+    }
+}
+
+impl std::str::FromStr for PromptCachingMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "off" => Ok(Self::Off),
+            "prefer" => Ok(Self::Prefer),
+            other => Err(format!("Invalid prompt caching mode: {}", other)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheEditMode {
+    #[default]
+    Auto,
+    Off,
+    Prefer,
+}
+
+impl CacheEditMode {
+    pub fn is_disabled(self) -> bool {
+        matches!(self, Self::Off)
+    }
+}
+
+impl std::str::FromStr for CacheEditMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "off" => Ok(Self::Off),
+            "prefer" => Ok(Self::Prefer),
+            other => Err(format!("Invalid cache edit mode: {}", other)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +119,11 @@ impl ModelConfig {
             max_tokens: None,
             thinking_enabled: None,
             thinking_budget: None,
+            reasoning_effort: None,
+            output_reserve_tokens: None,
+            auto_compact_threshold: None,
+            prompt_caching_mode: PromptCachingMode::Auto,
+            cache_edit_mode: CacheEditMode::Auto,
             toolshim,
             toolshim_model,
             fast_model: None,
@@ -131,23 +145,9 @@ impl ModelConfig {
             return Self::validate_context_limit(&val, "CONTEXT_LIMIT").map(Some);
         }
 
-        // Get the model's limit
-        let model_limit = Self::get_model_specific_limit(model_name);
-
-        // If there's a fast_model, get its limit and use the minimum
-        if let Some(fast_model_name) = fast_model {
-            let fast_model_limit = Self::get_model_specific_limit(fast_model_name);
-
-            // Return the minimum of both limits (if both exist)
-            match (model_limit, fast_model_limit) {
-                (Some(m), Some(f)) => Ok(Some(m.min(f))),
-                (Some(m), None) => Ok(Some(m)),
-                (None, Some(f)) => Ok(Some(f)),
-                (None, None) => Ok(None),
-            }
-        } else {
-            Ok(model_limit)
-        }
+        let _ = model_name;
+        let _ = fast_model;
+        Ok(None)
     }
 
     fn validate_context_limit(val: &str, env_var: &str) -> Result<usize, ConfigError> {
@@ -215,23 +215,6 @@ impl ModelConfig {
         }
     }
 
-    fn get_model_specific_limit(model_name: &str) -> Option<usize> {
-        MODEL_SPECIFIC_LIMITS
-            .iter()
-            .find(|(pattern, _)| model_name.contains(pattern))
-            .map(|(_, limit)| *limit)
-    }
-
-    pub fn get_all_model_limits() -> Vec<ModelLimitConfig> {
-        MODEL_SPECIFIC_LIMITS
-            .iter()
-            .map(|(pattern, context_limit)| ModelLimitConfig {
-                pattern: pattern.to_string(),
-                context_limit: *context_limit,
-            })
-            .collect()
-    }
-
     pub fn with_context_limit(mut self, limit: Option<usize>) -> Self {
         if limit.is_some() {
             self.context_limit = limit;
@@ -252,6 +235,35 @@ impl ModelConfig {
     pub fn with_thinking(mut self, enabled: Option<bool>, budget: Option<u32>) -> Self {
         self.thinking_enabled = enabled;
         self.thinking_budget = budget;
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort.filter(|value| !value.trim().is_empty());
+        self
+    }
+
+    pub fn with_output_reserve_tokens(mut self, output_reserve_tokens: Option<usize>) -> Self {
+        if output_reserve_tokens.is_some() {
+            self.output_reserve_tokens = output_reserve_tokens;
+        }
+        self
+    }
+
+    pub fn with_auto_compact_threshold(mut self, threshold: Option<f64>) -> Self {
+        if threshold.is_some() {
+            self.auto_compact_threshold = threshold;
+        }
+        self
+    }
+
+    pub fn with_prompt_caching_mode(mut self, mode: PromptCachingMode) -> Self {
+        self.prompt_caching_mode = mode;
+        self
+    }
+
+    pub fn with_cache_edit_mode(mut self, mode: CacheEditMode) -> Self {
+        self.cache_edit_mode = mode;
         self
     }
 
@@ -281,23 +293,10 @@ impl ModelConfig {
     }
 
     pub fn context_limit(&self) -> usize {
-        // If we have an explicit context limit set, use it
         if let Some(limit) = self.context_limit {
             return limit;
         }
-
-        // Otherwise, get the model's default limit
-        let main_limit =
-            Self::get_model_specific_limit(&self.model_name).unwrap_or(DEFAULT_CONTEXT_LIMIT);
-
-        // If we have a fast_model, also check its limit and use the minimum
-        if let Some(fast_model) = &self.fast_model {
-            let fast_limit =
-                Self::get_model_specific_limit(fast_model).unwrap_or(DEFAULT_CONTEXT_LIMIT);
-            main_limit.min(fast_limit)
-        } else {
-            main_limit
-        }
+        DEFAULT_CONTEXT_LIMIT
     }
 
     pub fn new_or_fail(model_name: &str) -> ModelConfig {

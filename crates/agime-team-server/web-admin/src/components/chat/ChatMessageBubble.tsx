@@ -10,11 +10,17 @@ import {
   Sparkles,
   Zap,
   Puzzle,
+  Download,
+  Eye,
+  FileText,
+  Share2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import MarkdownContent from "../MarkdownContent";
 import { formatRelativeTime } from "../../utils/format";
 import { copyText } from "../../utils/clipboard";
+import { chatApi, type ChatWorkspaceFileBlock } from "../../api/chat";
+import { useToast } from "../../contexts/ToastContext";
 
 export interface ToolCallInfo {
   name: string;
@@ -34,7 +40,14 @@ export interface Message {
   rawThinking?: string;
   toolCalls?: ToolCallInfo[];
   turn?: { current: number; max: number };
-  compaction?: { strategy: string; before: number; after: number };
+  compaction?: {
+    strategy: string;
+    before: number;
+    after: number;
+    phase?: string;
+    reason?: string;
+  };
+  workspaceFiles?: ChatWorkspaceFileBlock[];
   isStreaming?: boolean;
   timestamp: Date;
 }
@@ -45,12 +58,21 @@ interface ChatMessageProps {
   thinking?: string;
   toolCalls?: ToolCallInfo[];
   turn?: { current: number; max: number };
-  compaction?: { strategy: string; before: number; after: number };
+  compaction?: {
+    strategy: string;
+    before: number;
+    after: number;
+    phase?: string;
+    reason?: string;
+  };
+  workspaceFiles?: ChatWorkspaceFileBlock[];
   isStreaming?: boolean;
   timestamp?: Date;
   agentName?: string;
   userName?: string;
+  sessionId?: string;
   layoutVariant?: "default" | "workspace";
+  showExecutionDetails?: boolean;
 }
 
 const TOOL_LABELS: Record<string, { zh: string; en: string }> = {
@@ -174,7 +196,31 @@ function tryParseStructuredResult(raw: string): unknown | null {
       return null;
     }
   }
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const candidate = trimmed.slice(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      return null;
+    }
+  }
   return null;
+}
+
+function normalizeWorkspacePath(path: string): string {
+  const normalized = path.trim().replace(/\\/g, "/");
+  if (!normalized.startsWith("/")) {
+    return normalized;
+  }
+  for (const marker of ["/artifacts/", "/documents/", "/exports/", "/reports/"]) {
+    const index = normalized.indexOf(marker);
+    if (index >= 0) {
+      return normalized.slice(index + 1);
+    }
+  }
+  return normalized.split("/").filter(Boolean).slice(-2).join("/");
 }
 
 function readFirstString(
@@ -245,6 +291,94 @@ function formatRawToolResult(raw: string) {
     }
   }
   return raw;
+}
+
+function normalizeWorkspaceFileBlock(
+  value: unknown,
+): ChatWorkspaceFileBlock | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const path =
+    typeof record.path === "string" && record.path.trim().length > 0
+      ? normalizeWorkspacePath(record.path)
+      : typeof record.file_path === "string" && record.file_path.trim().length > 0
+        ? normalizeWorkspacePath(record.file_path)
+        : null;
+  if (!path) return null;
+  const labelCandidate =
+    typeof record.label === "string" && record.label.trim().length > 0
+      ? record.label.trim()
+      : typeof record.output_name === "string" && record.output_name.trim().length > 0
+        ? record.output_name.trim()
+        : typeof record.doc_name === "string" && record.doc_name.trim().length > 0
+          ? record.doc_name.trim()
+          : path.split("/").filter(Boolean).pop() || path;
+  return {
+    type: "workspace_file",
+    path,
+    label: labelCandidate,
+    content_type:
+      typeof record.content_type === "string" ? record.content_type : null,
+    size_bytes:
+      typeof record.size_bytes === "number"
+        ? record.size_bytes
+        : typeof record.file_size === "number"
+          ? record.file_size
+          : null,
+    preview_supported: record.preview_supported !== false,
+  };
+}
+
+function extractWorkspaceFilesFromToolResult(
+  rawResult: string | undefined,
+): ChatWorkspaceFileBlock[] {
+  const result = (rawResult || "").trim();
+  if (!result) return [];
+  const parsed = tryParseStructuredResult(result);
+  if (!parsed || typeof parsed !== "object") return [];
+  const record = parsed as Record<string, unknown>;
+  const blocks: ChatWorkspaceFileBlock[] = [];
+  const nested = normalizeWorkspaceFileBlock(record.file);
+  if (nested) {
+    blocks.push(nested);
+  }
+  const direct = normalizeWorkspaceFileBlock(record);
+  if (direct && !blocks.some((item) => item.path === direct.path)) {
+    blocks.push(direct);
+  }
+  return blocks;
+}
+
+function mergeWorkspaceFiles(
+  explicitFiles: ChatWorkspaceFileBlock[] | undefined,
+  toolCalls: ToolCallInfo[] | undefined,
+): ChatWorkspaceFileBlock[] {
+  const byPath = new Map<string, ChatWorkspaceFileBlock>();
+  for (const file of explicitFiles || []) {
+    byPath.set(file.path, file);
+  }
+  for (const toolCall of toolCalls || []) {
+    for (const file of extractWorkspaceFilesFromToolResult(toolCall.result)) {
+      if (!byPath.has(file.path)) {
+        byPath.set(file.path, file);
+      }
+    }
+  }
+  return Array.from(byPath.values());
+}
+
+function isWorkspaceDeliveryHandoffText(content: string): boolean {
+  const normalized = content.trim();
+  if (!normalized) return false;
+  const lowered = normalized.toLowerCase();
+  if (
+    lowered.startsWith("document exported to workspace successfully.") ||
+    lowered.startsWith("document access established") ||
+    lowered.includes("use developer shell, mcp, or another local tool")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function summarizeToolResult(
@@ -578,6 +712,66 @@ function InfinityLoopStatus({
   );
 }
 
+function isInlineVisualisationFile(file: ChatWorkspaceFileBlock): boolean {
+  const normalizedPath = file.path.replace(/\\/g, "/").toLowerCase();
+  const normalizedType = (file.content_type || "").toLowerCase();
+  return (
+    normalizedType.startsWith("text/html") &&
+    normalizedPath.startsWith("artifacts/visualisations/") &&
+    normalizedPath.endsWith(".html")
+  );
+}
+
+function AutoVisualisationFrame({
+  src,
+  title,
+  className = "",
+}: {
+  src: string;
+  title: string;
+  className?: string;
+}) {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [height, setHeight] = useState(460);
+
+  const syncHeight = () => {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) {
+      return;
+    }
+    const body = doc.body;
+    const element = doc.documentElement;
+    const measured = Math.max(
+      body?.scrollHeight || 0,
+      body?.offsetHeight || 0,
+      element?.scrollHeight || 0,
+      element?.offsetHeight || 0,
+    );
+    if (measured > 0) {
+      setHeight(Math.min(Math.max(measured + 8, 360), 760));
+    }
+  };
+
+  const handleLoad = () => {
+    syncHeight();
+    window.setTimeout(syncHeight, 100);
+    window.setTimeout(syncHeight, 500);
+  };
+
+  return (
+    <iframe
+      ref={iframeRef}
+      src={src}
+      title={title}
+      sandbox="allow-scripts allow-same-origin allow-downloads"
+      scrolling="no"
+      onLoad={handleLoad}
+      style={{ height }}
+      className={`w-full border-0 bg-white ${className}`}
+    />
+  );
+}
+
 export function ChatMessageBubble({
   role,
   content,
@@ -585,19 +779,24 @@ export function ChatMessageBubble({
   toolCalls,
   turn,
   compaction,
+  workspaceFiles = [],
   isStreaming,
   timestamp,
   agentName,
   userName,
+  sessionId,
   layoutVariant = "default",
+  showExecutionDetails = false,
 }: ChatMessageProps) {
   const { t, i18n } = useTranslation();
+  const { addToast } = useToast();
   const [showThinking, setShowThinking] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const [expandedToolResults, setExpandedToolResults] = useState<
     Record<string, boolean>
   >({});
   const [copied, setCopied] = useState(false);
+  const [sharingPath, setSharingPath] = useState<string | null>(null);
   const copyTimeoutRef = useRef<number | null>(null);
   const isUser = role === "user";
   const isZh = (i18n.resolvedLanguage || i18n.language || "").startsWith("zh");
@@ -620,6 +819,57 @@ export function ChatMessageBubble({
       setCopied(true);
       if (copyTimeoutRef.current) window.clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleShare = async (file: ChatWorkspaceFileBlock) => {
+    if (!sessionId || sharingPath === file.path) {
+      return;
+    }
+    setSharingPath(file.path);
+    try {
+      const share = await chatApi.createSessionWorkspaceShare(
+        sessionId,
+        file.path,
+        file.label,
+      );
+      const previewUrl =
+        typeof window !== "undefined"
+          ? new URL(share.preview_url, window.location.origin).toString()
+          : share.preview_url;
+      const opened =
+        typeof window !== "undefined"
+          ? window.open(previewUrl, "_blank", "noopener,noreferrer")
+          : null;
+      const copiedOk = await copyText(previewUrl);
+      if (copiedOk) {
+        addToast(
+          "success",
+          t(
+            "chat.workspaceShareCopied",
+            "分享链接已复制，并已打开公开预览页。",
+          ),
+        );
+      } else if (opened) {
+        addToast(
+          "success",
+          t("chat.workspaceShareOpened", "已打开公开预览页。"),
+        );
+      } else {
+        addToast(
+          "success",
+          t("chat.workspaceShareReady", "公开分享链接已生成。"),
+        );
+      }
+    } catch (error) {
+      addToast(
+        "error",
+        error instanceof Error
+          ? error.message
+          : t("chat.workspaceShareError", "创建分享链接失败。"),
+      );
+    } finally {
+      setSharingPath((current) => (current === file.path ? null : current));
     }
   };
 
@@ -651,6 +901,15 @@ export function ChatMessageBubble({
   const capabilityBlock = isUser ? parseCapabilityBlock(content) : null;
   const visibleUserContent =
     capabilityBlock?.hasBlock ? capabilityBlock.remainder : content;
+  const deliveryFiles = !isUser
+    ? mergeWorkspaceFiles(workspaceFiles, toolCalls)
+    : [];
+  const assistantDisplayContent =
+    !isUser &&
+    deliveryFiles.length > 0 &&
+    isWorkspaceDeliveryHandoffText(content)
+      ? ""
+      : content;
 
   const bubbleWidthClass =
     layoutVariant === "workspace"
@@ -712,7 +971,7 @@ export function ChatMessageBubble({
           )}
 
           {/* Thinking section */}
-          {thinking && (
+          {showExecutionDetails && thinking && (
             <div className="mb-2 border-l-2 border-[hsl(var(--status-info-text))/0.28] pl-2">
               <button
                 onClick={() => setShowThinking(!showThinking)}
@@ -771,15 +1030,101 @@ export function ChatMessageBubble({
               </>
             ) : (
               <MarkdownContent
-                content={content}
+                content={assistantDisplayContent}
                 className="text-[13px] leading-5 prose-p:leading-5 prose-table:text-[13px] prose-headings:text-[13px] prose-h1:text-[13px] prose-h2:text-[13px] prose-h3:text-[13px] prose-h1:my-1 prose-h2:my-1 prose-h3:my-1"
               />
             )}
             {isStreaming && <span className="animate-pulse">▊</span>}
           </div>
 
+          {!isUser && sessionId && deliveryFiles.length > 0 && (
+            <div className="mt-3 space-y-1.5">
+              {deliveryFiles.map((file) => {
+                const previewUrl = file.preview_supported
+                  ? chatApi.getSessionWorkspaceAppPreviewUrl(sessionId, file.path, {
+                      label: file.label,
+                      contentType: file.content_type,
+                    })
+                  : null;
+                const downloadUrl = chatApi.getSessionWorkspaceFileContentUrl(
+                  sessionId,
+                  file.path,
+                );
+                const sizeLabel =
+                  typeof file.size_bytes === "number" && file.size_bytes > 0
+                    ? file.size_bytes >= 1024 * 1024
+                      ? `${(file.size_bytes / (1024 * 1024)).toFixed(1)} MB`
+                      : `${Math.max(1, Math.round(file.size_bytes / 1024))} KB`
+                    : null;
+                const inlineVisualisation = isInlineVisualisationFile(file);
+                return (
+                  <div
+                    key={`${sessionId}:${file.path}`}
+                    className="overflow-hidden rounded-[12px] border border-border/65 bg-background/70 text-[11px]"
+                  >
+                    {inlineVisualisation ? (
+                      <div className="border-b border-border/60 bg-white">
+                        <AutoVisualisationFrame
+                          src={downloadUrl}
+                          title={file.label}
+                        />
+                      </div>
+                    ) : null}
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                      <div className="min-w-0 flex items-center gap-2">
+                        <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <div className="min-w-0">
+                          <div className="truncate font-medium text-foreground">
+                            {file.label}
+                          </div>
+                          <div className="truncate text-[10px] text-muted-foreground">
+                            {[file.content_type, sizeLabel].filter(Boolean).join(" · ") || file.path}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {previewUrl ? (
+                          <a
+                            href={previewUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 rounded-full border border-border/70 px-2 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                          >
+                            <Eye className="h-3 w-3" />
+                            {t("common.preview", "预览")}
+                          </a>
+                        ) : null}
+                        <a
+                          href={downloadUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          download={file.label}
+                          className="inline-flex items-center gap-1 rounded-full border border-border/70 px-2 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                        >
+                          <Download className="h-3 w-3" />
+                          {t("common.download", "下载")}
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => void handleShare(file)}
+                          disabled={sharingPath === file.path}
+                          className="inline-flex items-center gap-1 rounded-full border border-border/70 px-2 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <Share2 className="h-3 w-3" />
+                          {sharingPath === file.path
+                            ? t("common.loading", "处理中")
+                            : t("common.share", "分享")}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {/* Tool calls section */}
-          {toolCalls && toolCalls.length > 0 && (
+          {showExecutionDetails && toolCalls && toolCalls.length > 0 && (
             <div className="mt-2 border-l-2 border-[hsl(var(--status-warning-text))/0.28] pl-2">
               <button
                 onClick={() => setShowTools(!showTools)}
@@ -906,6 +1251,12 @@ export function ChatMessageBubble({
                 "chat.contextCompacted",
                 "Context compacted: {{before}} → {{after}} tokens",
                 { before: compaction.before, after: compaction.after },
+              )}
+              {(compaction.phase || compaction.reason) && (
+                <span>
+                  {" · "}
+                  {[compaction.phase, compaction.reason].filter(Boolean).join(" / ")}
+                </span>
               )}
             </div>
           )}

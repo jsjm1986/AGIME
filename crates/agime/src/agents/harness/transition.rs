@@ -10,6 +10,9 @@ use super::state::HarnessMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransitionKind {
+    ReplyBootstrap,
+    ProviderTurnRecovery,
+    PostTurnAdjudication,
     ModeTransition,
     RecoveryCompaction,
     NoToolRepair,
@@ -98,4 +101,57 @@ pub async fn record_transition(
         .lock()
         .await
         .record(turn, mode, kind, reason, metadata);
+}
+
+pub async fn record_reply_bootstrap_transition(
+    trace: &SharedTransitionTrace,
+    mode: HarnessMode,
+    reason: impl Into<String>,
+    metadata: BTreeMap<String, String>,
+) {
+    record_transition(
+        trace,
+        0,
+        mode,
+        TransitionKind::ReplyBootstrap,
+        reason,
+        metadata,
+    )
+    .await;
+}
+
+pub async fn record_provider_turn_transition(
+    trace: &SharedTransitionTrace,
+    turn: u32,
+    mode: HarnessMode,
+    reason: impl Into<String>,
+    metadata: BTreeMap<String, String>,
+) {
+    record_transition(
+        trace,
+        turn,
+        mode,
+        TransitionKind::ProviderTurnRecovery,
+        reason,
+        metadata,
+    )
+    .await;
+}
+
+pub async fn record_post_turn_adjudication_transition(
+    trace: &SharedTransitionTrace,
+    turn: u32,
+    mode: HarnessMode,
+    reason: impl Into<String>,
+    metadata: BTreeMap<String, String>,
+) {
+    record_transition(
+        trace,
+        turn,
+        mode,
+        TransitionKind::PostTurnAdjudication,
+        reason,
+        metadata,
+    )
+    .await;
 }

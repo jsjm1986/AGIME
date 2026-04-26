@@ -1,34 +1,49 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use agime::agents::extension::ExtensionConfig;
 #[cfg(test)]
 use agime::agents::format_execution_host_completion_text;
+use agime::agents::harness::TransitionTrace;
 use agime::agents::harness::{
     auto_resolve_request, normalize_system_document_analysis_completion_report,
     CompletionSurfacePolicy, PermissionBridgeResolution,
 };
 use agime::agents::{
-    clear_permission_bridge_resolver, native_swarm_tool_enabled, planner_auto_swarm_enabled,
-    run_harness_host, set_permission_bridge_resolver, Agent, AgentEvent, CoordinatorExecutionMode,
-    DelegationCapabilityContext, DelegationMode, ExecuteCompletionOutcome,
-    ExecutionHostCompletionReport, HarnessEventSink, HarnessHostDependencies, HarnessHostRequest,
-    HarnessMode, HarnessPersistenceAdapter, ProviderTurnMode, SessionConfig, TaskKind, TaskRuntime,
-    TaskRuntimeEvent, TaskRuntimeHost,
+    build_permission_requested_control_message, build_permission_resolved_control_message,
+    build_permission_timed_out_control_message, build_tool_finished_control_message,
+    build_tool_started_control_message, build_worker_finished_control_message,
+    build_worker_followup_requested_control_message, build_worker_idle_control_message,
+    build_worker_progress_control_message, build_worker_started_control_message,
+    clear_permission_bridge_resolver, control_messages_for_agent_event,
+    control_sequencer_for_session, native_swarm_tool_enabled, normalize_call_tool_result,
+    normalize_tool_execution_error_text, planner_auto_swarm_enabled, run_harness_host,
+    set_permission_bridge_resolver, tool_execution_cancelled_error_text, Agent, AgentEvent,
+    CompletionControlEvent, CoordinatorExecutionMode, DelegationCapabilityContext, DelegationMode,
+    ExecuteCompletionOutcome, ExecutionHostCompletionReport, HarnessControlEnvelope,
+    HarnessControlMessage, HarnessControlSink, HarnessEventSink, HarnessHostDependencies,
+    HarnessHostRequest, HarnessMode, HarnessPersistenceAdapter, PermissionControlEvent,
+    PermissionDecisionSource, ProviderTurnMode, RuntimeControlEvent, SessionConfig,
+    SessionControlEvent, TaskKind, TaskRuntime, TaskRuntimeEvent, TaskRuntimeHost,
+    WorkerAttemptIdentity, WorkerControlEvent,
 };
+use agime::context_runtime::{observe_runtime_transition, ContextRuntimeState};
 use agime::conversation::message::{
-    ActionRequiredData, FrontendToolRequest, Message, MessageContent, SystemNotificationType,
+    ActionRequiredData, FrontendToolRequest, Message, MessageContent,
 };
 use agime::conversation::Conversation;
 use agime::mcp_utils::ToolResult;
 use agime::permission::permission_confirmation::PrincipalType;
 use agime::permission::{Permission, PermissionConfirmation};
 use agime::providers::base::Provider;
-use agime::session::SessionType;
+use agime::session::{SessionManager, SessionType};
+use agime::utils::normalize_delegation_summary_text;
 use agime_team::models::{ApiFormat, ApprovalMode, TeamAgent};
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use regex::Regex;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Content, ErrorCode, ErrorData};
 use serde_json::Value;
@@ -39,23 +54,25 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::agent_prompt_composer::{compose_top_level_prompt, AgentPromptComposerInput};
-use super::capability_policy::AgentRuntimePolicyResolver;
+use super::capability_policy::{is_non_delegating_session_source, AgentRuntimePolicyResolver};
 use super::chat_channel_manager::ChatChannelManager;
 use super::chat_manager::ChatManager;
 use super::executor_mongo::{
     agent_has_extension_manager_enabled, build_api_caller, builtin_extension_configs_to_custom,
-    find_extension_config_by_name, resolve_agent_attached_team_extensions,
-    resolve_agent_custom_extensions, TaskExecutor, TeamRuntimeSettings, TeamSkillMode,
+    extension_allowed_by_name, find_extension_config_by_name,
+    resolve_agent_attached_team_extensions, resolve_agent_custom_extensions, TaskExecutor,
+    TeamRuntimeSettings, TeamSkillMode,
 };
 use super::extension_installer::ExtensionInstaller;
 use super::extension_manager_client::{DynamicExtensionState, TeamExtensionManagerClient};
 use super::mcp_connector::{ElicitationBridgeCallback, McpConnector, ToolContentBlock};
 use super::platform_runner::PlatformExtensionRunner;
+use super::prompt_profiles::CHAT_DELEGATION_PROFILE_ID;
 use super::runtime;
 use super::service_mongo::AgentService;
 use super::session_mongo::AgentSessionDoc;
 use super::task_manager::{StreamEvent, TaskManager};
-use super::workspace_service::WorkspaceService;
+use super::workspace_service::{WorkspaceExecutionContext, WorkspaceService};
 
 const DIRECT_HARNESS_HOST_FLAG: &str = "TEAM_ENABLE_DIRECT_HARNESS_HOST";
 
@@ -84,6 +101,27 @@ pub fn current_host_execution_path() -> HostExecutionPath {
     }
 }
 
+fn parse_turn_tool_gate_allow_only(
+    turn_system_instruction: Option<&str>,
+) -> Option<HashSet<String>> {
+    let text = turn_system_instruction?;
+    let start = text.find("<turn_tool_gate mode=\"allow_only\">")?;
+    let after = &text[start + "<turn_tool_gate mode=\"allow_only\">".len()..];
+    let end = after.find("</turn_tool_gate>")?;
+    let block = &after[..end];
+    let names = block
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    if names.is_empty() {
+        None
+    } else {
+        Some(names)
+    }
+}
+
 pub struct ServerHarnessHost {
     db: Arc<MongoDb>,
     agent_service: Arc<AgentService>,
@@ -94,8 +132,13 @@ pub struct ServerHarnessHostOutcome {
     pub messages_json: String,
     pub message_count: i32,
     pub total_tokens: Option<i32>,
+    pub context_runtime_state: Option<ContextRuntimeState>,
     pub last_assistant_text: Option<String>,
     pub completion_report: Option<ExecutionHostCompletionReport>,
+    pub persisted_child_evidence: Vec<agime::agents::harness::PersistedChildEvidenceItem>,
+    pub persisted_child_transcript_resume:
+        Vec<agime::agents::harness::PersistedChildTranscriptView>,
+    pub transition_trace: Option<TransitionTrace>,
     pub events_emitted: usize,
     pub signal_summary: Option<agime::agents::CoordinatorSignalSummary>,
     pub completion_outcome: Option<ExecuteCompletionOutcome>,
@@ -205,7 +248,7 @@ fn sanitize_user_visible_runtime_text(raw: Option<&str>) -> Option<String> {
         cleaned_lines.push(trimmed.to_string());
     }
 
-    let cleaned = cleaned_lines.join("\n").trim().to_string();
+    let cleaned = normalize_delegation_summary_text(&cleaned_lines.join("\n"));
     if cleaned.is_empty() {
         None
     } else {
@@ -262,15 +305,183 @@ struct DirectToolRuntime {
     cancel_token: CancellationToken,
     tool_timeout_secs: Option<u64>,
     server_local_tool_names: HashSet<String>,
+    workspace_path: Option<String>,
+    workspace_context: Option<WorkspaceExecutionContext>,
+}
+
+#[derive(Clone, Default)]
+struct ServerHarnessControlSink;
+
+#[async_trait::async_trait]
+impl HarnessControlSink for ServerHarnessControlSink {
+    async fn handle(&self, envelope: &HarnessControlEnvelope) -> Result<()> {
+        tracing::debug!(
+            logical_session_id = %envelope.session_id,
+            runtime_session_id = %envelope.runtime_session_id,
+            sequence = envelope.sequence,
+            channel = %control_channel_label(&envelope.payload),
+            event_type = %control_event_type_label(&envelope.payload),
+            "ServerHarnessControlSink: observed control envelope"
+        );
+        Ok(())
+    }
 }
 
 struct ServerHarnessEventSink {
     broadcaster: StreamBroadcaster,
     tool_runtime: Arc<DirectToolRuntime>,
+    control_sink: Arc<dyn HarnessControlSink>,
+    request_registry: RuntimeControlRegistry,
+}
+
+#[derive(Clone, Default)]
+struct RuntimeControlRegistry {
+    inner: Arc<Mutex<RuntimeControlRegistryState>>,
+}
+
+#[derive(Default)]
+struct RuntimeControlRegistryState {
+    permission_terminals: HashMap<String, PermissionTerminalState>,
+    finished_tool_requests: HashSet<String>,
+    latest_worker_attempts: HashMap<String, WorkerAttemptState>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PermissionTerminalState {
+    Resolved,
+    TimedOut,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct WorkerAttemptState {
+    task_id: String,
+    logical_worker_id: String,
+    attempt_id: String,
+    attempt_index: u32,
+}
+
+enum ControlEmissionDecision {
+    Emit,
+    Duplicate(&'static str),
+    Stale(&'static str),
 }
 
 fn is_server_local_tool_name(server_local_tool_names: &HashSet<String>, tool_name: &str) -> bool {
     server_local_tool_names.contains(tool_name)
+}
+
+impl RuntimeControlRegistry {
+    fn classify(&self, message: &HarnessControlMessage) -> ControlEmissionDecision {
+        let mut state = self
+            .inner
+            .lock()
+            .expect("runtime control registry poisoned");
+        match message {
+            HarnessControlMessage::Permission(PermissionControlEvent::Resolved {
+                request_id,
+                ..
+            }) => match state.permission_terminals.get(request_id) {
+                Some(PermissionTerminalState::Resolved) => {
+                    ControlEmissionDecision::Duplicate("permission already resolved")
+                }
+                Some(PermissionTerminalState::TimedOut) => {
+                    ControlEmissionDecision::Stale("permission already timed out")
+                }
+                None => {
+                    state
+                        .permission_terminals
+                        .insert(request_id.clone(), PermissionTerminalState::Resolved);
+                    ControlEmissionDecision::Emit
+                }
+            },
+            HarnessControlMessage::Permission(PermissionControlEvent::TimedOut {
+                request_id,
+                ..
+            }) => match state.permission_terminals.get(request_id) {
+                Some(PermissionTerminalState::TimedOut) => {
+                    ControlEmissionDecision::Duplicate("permission already timed out")
+                }
+                Some(PermissionTerminalState::Resolved) => {
+                    ControlEmissionDecision::Stale("permission already resolved")
+                }
+                None => {
+                    state
+                        .permission_terminals
+                        .insert(request_id.clone(), PermissionTerminalState::TimedOut);
+                    ControlEmissionDecision::Emit
+                }
+            },
+            HarnessControlMessage::Tool(agime::agents::ToolControlEvent::Finished {
+                request_id,
+                ..
+            }) => {
+                if state.finished_tool_requests.insert(request_id.clone()) {
+                    ControlEmissionDecision::Emit
+                } else {
+                    ControlEmissionDecision::Duplicate("tool request already finished")
+                }
+            }
+            HarnessControlMessage::Worker(WorkerControlEvent::Started {
+                task_id,
+                logical_worker_id,
+                attempt_id,
+                attempt_index,
+                ..
+            }) => {
+                if let (Some(logical_worker_id), Some(attempt_id)) =
+                    (logical_worker_id.as_ref(), attempt_id.as_ref())
+                {
+                    let candidate = WorkerAttemptState {
+                        task_id: task_id.clone(),
+                        logical_worker_id: logical_worker_id.clone(),
+                        attempt_id: attempt_id.clone(),
+                        attempt_index: attempt_index.unwrap_or_default(),
+                    };
+                    let should_replace = state
+                        .latest_worker_attempts
+                        .get(logical_worker_id)
+                        .map(|current| {
+                            candidate.attempt_index > current.attempt_index
+                                || (candidate.attempt_index == current.attempt_index
+                                    && candidate.attempt_id != current.attempt_id)
+                        })
+                        .unwrap_or(true);
+                    if should_replace {
+                        state
+                            .latest_worker_attempts
+                            .insert(logical_worker_id.clone(), candidate);
+                    }
+                }
+                ControlEmissionDecision::Emit
+            }
+            HarnessControlMessage::Worker(WorkerControlEvent::Finished {
+                task_id,
+                logical_worker_id,
+                attempt_id,
+                attempt_index,
+                ..
+            }) => {
+                let (Some(logical_worker_id), Some(attempt_id)) =
+                    (logical_worker_id.as_ref(), attempt_id.as_ref())
+                else {
+                    return ControlEmissionDecision::Emit;
+                };
+                let Some(latest) = state.latest_worker_attempts.get(logical_worker_id) else {
+                    return ControlEmissionDecision::Emit;
+                };
+                let current_attempt_index = attempt_index.unwrap_or_default();
+                if latest.task_id != *task_id
+                    || latest.attempt_id != *attempt_id
+                    || latest.attempt_index != current_attempt_index
+                {
+                    ControlEmissionDecision::Stale("worker attempt superseded by newer attempt")
+                } else {
+                    ControlEmissionDecision::Emit
+                }
+            }
+            _ => ControlEmissionDecision::Emit,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -280,6 +491,10 @@ struct SessionHostPersistenceAdapter {
     fallback_title: Option<String>,
     generated_title: Option<String>,
     runtime_session_tx: Option<watch::Sender<Option<String>>>,
+    broadcaster: StreamBroadcaster,
+    control_sink: Arc<dyn HarnessControlSink>,
+    request_registry: RuntimeControlRegistry,
+    initial_context_runtime_state: Option<ContextRuntimeState>,
 }
 
 fn derive_chat_title_from_user_message(user_message: &str) -> Option<String> {
@@ -444,6 +659,39 @@ fn harness_mode_for_session_source(session_source: &str) -> HarnessMode {
     }
 }
 
+fn has_explicit_delegation_request(user_message: &str) -> bool {
+    let lowered = user_message.to_ascii_lowercase();
+    lowered.contains("subagent")
+        || lowered.contains("swarm")
+        || lowered.contains("single worker")
+        || lowered.contains("one worker")
+        || lowered.contains("multiple workers")
+        || lowered.contains("multiple worker")
+        || user_message.contains("子代理")
+        || user_message.contains("多 worker")
+        || user_message.contains("多个 worker")
+        || user_message.contains("多代理")
+        || user_message.contains("并行")
+}
+
+fn should_force_execute_for_explicit_delegation(
+    session_source: &str,
+    user_message: &str,
+    explicit_delegation_turn: bool,
+) -> bool {
+    if is_non_delegating_session_source(session_source) {
+        return false;
+    }
+    if explicit_delegation_turn {
+        return true;
+    }
+
+    let delegation_surface = session_source.eq_ignore_ascii_case("chat")
+        || session_source.eq_ignore_ascii_case("automation_runtime")
+        || session_source.eq_ignore_ascii_case("channel_conversation");
+    delegation_surface && has_explicit_delegation_request(user_message)
+}
+
 fn provider_turn_mode_for_harness_mode(harness_mode: HarnessMode) -> ProviderTurnMode {
     match harness_mode {
         HarnessMode::Execute => ProviderTurnMode::Aggregated,
@@ -465,6 +713,23 @@ fn provider_turn_mode_for_session_source(
         ProviderTurnMode::Streaming
     } else {
         provider_turn_mode_for_harness_mode(harness_mode)
+    }
+}
+
+fn completion_surface_policy_for_session_source(
+    session_source: &str,
+    harness_mode: HarnessMode,
+) -> CompletionSurfacePolicy {
+    if session_source.eq_ignore_ascii_case("system") {
+        CompletionSurfacePolicy::SystemDocumentAnalysis
+    } else if session_source.eq_ignore_ascii_case("chat")
+        || session_source.eq_ignore_ascii_case("automation_runtime")
+    {
+        CompletionSurfacePolicy::Conversation
+    } else if matches!(harness_mode, HarnessMode::Conversation) {
+        CompletionSurfacePolicy::Conversation
+    } else {
+        CompletionSurfacePolicy::Execute
     }
 }
 
@@ -594,6 +859,20 @@ fn document_analysis_completion_response() -> agime::recipe::Response {
     }
 }
 
+fn completion_contract_for_session_source(
+    session_source: &str,
+    harness_mode: HarnessMode,
+    require_final_report: bool,
+) -> Option<agime::recipe::Response> {
+    if session_source.eq_ignore_ascii_case("system") {
+        Some(document_analysis_completion_response())
+    } else if matches!(harness_mode, HarnessMode::Execute) && require_final_report {
+        Some(execution_host_completion_response())
+    } else {
+        None
+    }
+}
+
 fn is_non_terminal_document_analysis_summary(summary: &str) -> bool {
     let normalized = summary.trim().to_ascii_lowercase();
     let future_intent_patterns = [
@@ -618,10 +897,16 @@ fn normalize_adapter_execution_host_completion_report(
     signal_summary: Option<&agime::agents::CoordinatorSignalSummary>,
     session_source: &str,
 ) -> ExecutionHostCompletionReport {
+    let conversation_surface = session_source.eq_ignore_ascii_case("chat")
+        || session_source.eq_ignore_ascii_case("automation_runtime")
+        || session_source.eq_ignore_ascii_case("portal")
+        || session_source.eq_ignore_ascii_case("channel_conversation");
+
     if session_source.eq_ignore_ascii_case("system") {
         report = normalize_system_document_analysis_completion_report(report, signal_summary);
-    } else if report.status == "completed"
-        && signal_summary.is_some_and(|summary| summary.has_blocking_signals())
+    } else if !conversation_surface
+        && report.status == "completed"
+        && signal_summary.is_some_and(|summary| summary.has_hard_blocking_signals())
     {
         report.status = "blocked".to_string();
         if report.blocking_reason.is_none() {
@@ -644,6 +929,21 @@ fn normalize_adapter_execution_host_completion_report(
     report
 }
 
+fn build_context_runtime_compaction_event(
+    initial: Option<&ContextRuntimeState>,
+    final_state: Option<&ContextRuntimeState>,
+) -> Option<StreamEvent> {
+    let final_state = final_state?;
+    let observation = observe_runtime_transition(initial, final_state)?;
+    Some(StreamEvent::Compaction {
+        strategy: "context_runtime".to_string(),
+        before_tokens: observation.before_tokens?,
+        after_tokens: observation.after_tokens?,
+        phase: Some(observation.phase),
+        reason: observation.reason,
+    })
+}
+
 #[async_trait::async_trait]
 impl HarnessPersistenceAdapter for SessionHostPersistenceAdapter {
     async fn on_started(
@@ -653,6 +953,14 @@ impl HarnessPersistenceAdapter for SessionHostPersistenceAdapter {
         _initial_conversation: &Conversation,
         _mode: HarnessMode,
     ) -> Result<()> {
+        let previous_runtime_session_id = self
+            .agent_service
+            .get_session(&self.session_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|session| session.last_runtime_session_id)
+            .filter(|value| !value.trim().is_empty() && value != runtime_session_id);
         if let Some(tx) = &self.runtime_session_tx {
             let _ = tx.send(Some(runtime_session_id.to_string()));
         }
@@ -662,15 +970,19 @@ impl HarnessPersistenceAdapter for SessionHostPersistenceAdapter {
         self.agent_service
             .set_session_processing(&self.session_id, true)
             .await?;
+        if let Some(previous_runtime_session_id) = previous_runtime_session_id {
+            let _ = SessionManager::delete_session(&previous_runtime_session_id).await;
+        }
         Ok(())
     }
 
     async fn on_finished(
         &self,
         _logical_session_id: &str,
-        _runtime_session_id: &str,
+        runtime_session_id: &str,
         final_conversation: &Conversation,
         _mode: HarnessMode,
+        context_runtime_state: Option<&ContextRuntimeState>,
         total_tokens: Option<i32>,
         _input_tokens: Option<i32>,
         _output_tokens: Option<i32>,
@@ -687,8 +999,44 @@ impl HarnessPersistenceAdapter for SessionHostPersistenceAdapter {
                     .as_deref()
                     .or(self.fallback_title.as_deref()),
                 total_tokens,
+                context_runtime_state,
             )
             .await?;
+        if let Some(event) = build_context_runtime_compaction_event(
+            self.initial_context_runtime_state.as_ref(),
+            context_runtime_state,
+        ) {
+            if let StreamEvent::Compaction {
+                strategy,
+                before_tokens,
+                after_tokens,
+                phase,
+                reason,
+            } = &event
+            {
+                tracing::info!(
+                    logical_session_id = %self.session_id,
+                    strategy = %strategy,
+                    before_tokens = *before_tokens,
+                    after_tokens = *after_tokens,
+                    phase = phase.as_deref().unwrap_or("unknown"),
+                    reason = reason.as_deref().unwrap_or("unspecified"),
+                    "ServerHarnessHost: context_runtime compaction event emitted"
+                );
+            }
+            if let Some(mirror) = compaction_mirror(&event) {
+                emit_stream_control_mirror(
+                    &self.broadcaster,
+                    self.control_sink.as_ref(),
+                    &self.request_registry,
+                    runtime_session_id,
+                    mirror,
+                )
+                .await;
+            } else {
+                self.broadcaster.emit(event).await;
+            }
+        }
         Ok(())
     }
 }
@@ -776,13 +1124,15 @@ fn spawn_task_runtime_forwarder(
     task_runtime: Arc<TaskRuntime>,
     mut runtime_session_rx: watch::Receiver<Option<String>>,
     broadcaster: StreamBroadcaster,
+    control_sink: Arc<dyn HarnessControlSink>,
+    request_registry: RuntimeControlRegistry,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         #[derive(Clone)]
         struct TrackedTaskState {
             kind: TaskKind,
             target: Option<String>,
-            attempt_identity: Option<agime::agents::WorkerAttemptIdentity>,
+            attempt_identity: Option<WorkerAttemptIdentity>,
         }
 
         let runtime_session_id = loop {
@@ -801,33 +1151,26 @@ fn spawn_task_runtime_forwarder(
                 Ok(TaskRuntimeEvent::Started(snapshot)) => {
                     if snapshot.parent_session_id == runtime_session_id {
                         let attempt_identity =
-                            agime::agents::WorkerAttemptIdentity::from_metadata(&snapshot.metadata);
+                            WorkerAttemptIdentity::from_metadata(&snapshot.metadata);
+                        let task_id = snapshot.task_id.clone();
+                        let target = snapshot.target_artifacts.first().cloned();
                         tracked_tasks.insert(
-                            snapshot.task_id.clone(),
+                            task_id.clone(),
                             TrackedTaskState {
                                 kind: snapshot.kind,
-                                target: snapshot.target_artifacts.first().cloned(),
+                                target: target.clone(),
                                 attempt_identity: attempt_identity.clone(),
                             },
                         );
-                        broadcaster
-                            .emit(StreamEvent::WorkerStarted {
-                                task_id: snapshot.task_id,
-                                kind: task_kind_label(snapshot.kind),
-                                target: snapshot.target_artifacts.first().cloned(),
-                                logical_worker_id: attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.logical_worker_id.clone()),
-                                attempt_id: attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_id.clone()),
-                                attempt_index: attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_index),
-                                previous_task_id: attempt_identity
-                                    .and_then(|value| value.previous_task_id.clone()),
-                            })
-                            .await;
+                        let mirror = worker_started_mirror(&snapshot, attempt_identity.as_ref());
+                        emit_stream_control_mirror(
+                            &broadcaster,
+                            control_sink.as_ref(),
+                            &request_registry,
+                            &runtime_session_id,
+                            mirror,
+                        )
+                        .await;
                     }
                 }
                 Ok(TaskRuntimeEvent::Progress {
@@ -836,13 +1179,15 @@ fn spawn_task_runtime_forwarder(
                     percent,
                 }) => {
                     if tracked_tasks.contains_key(&task_id) {
-                        broadcaster
-                            .emit(StreamEvent::WorkerProgress {
-                                task_id,
-                                message,
-                                percent,
-                            })
-                            .await;
+                        let mirror = worker_progress_mirror(task_id, message, percent);
+                        emit_stream_control_mirror(
+                            &broadcaster,
+                            control_sink.as_ref(),
+                            &request_registry,
+                            &runtime_session_id,
+                            mirror,
+                        )
+                        .await;
                     }
                 }
                 Ok(TaskRuntimeEvent::FollowupRequested {
@@ -851,47 +1196,34 @@ fn spawn_task_runtime_forwarder(
                     reason,
                 }) => {
                     if let Some(state) = tracked_tasks.get(&task_id) {
-                        broadcaster
-                            .emit(StreamEvent::WorkerFollowup {
-                                task_id,
-                                kind,
-                                reason,
-                                logical_worker_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.logical_worker_id.clone()),
-                                attempt_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_id.clone()),
-                                attempt_index: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_index),
-                                previous_task_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .and_then(|value| value.previous_task_id.clone()),
-                            })
-                            .await;
+                        let mirror = worker_followup_mirror(
+                            task_id,
+                            kind,
+                            reason,
+                            state.attempt_identity.as_ref(),
+                        );
+                        emit_stream_control_mirror(
+                            &broadcaster,
+                            control_sink.as_ref(),
+                            &request_registry,
+                            &runtime_session_id,
+                            mirror,
+                        )
+                        .await;
                     }
                 }
                 Ok(TaskRuntimeEvent::Idle { task_id, message }) => {
                     if let Some(state) = tracked_tasks.get(&task_id) {
-                        broadcaster
-                            .emit(StreamEvent::WorkerIdle {
-                                task_id,
-                                message,
-                                logical_worker_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.logical_worker_id.clone()),
-                                attempt_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_id.clone()),
-                            })
-                            .await;
+                        let mirror =
+                            worker_idle_mirror(task_id, message, state.attempt_identity.as_ref());
+                        emit_stream_control_mirror(
+                            &broadcaster,
+                            control_sink.as_ref(),
+                            &request_registry,
+                            &runtime_session_id,
+                            mirror,
+                        )
+                        .await;
                     }
                 }
                 Ok(TaskRuntimeEvent::PermissionRequested {
@@ -900,21 +1232,20 @@ fn spawn_task_runtime_forwarder(
                     tool_name,
                 }) => {
                     if let Some(state) = tracked_tasks.get(&task_id) {
-                        broadcaster
-                            .emit(StreamEvent::PermissionRequested {
-                                task_id,
-                                tool_name,
-                                worker_name,
-                                logical_worker_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.logical_worker_id.clone()),
-                                attempt_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_id.clone()),
-                            })
-                            .await;
+                        let mirror = permission_requested_mirror(
+                            task_id,
+                            worker_name,
+                            tool_name,
+                            state.attempt_identity.as_ref(),
+                        );
+                        emit_stream_control_mirror(
+                            &broadcaster,
+                            control_sink.as_ref(),
+                            &request_registry,
+                            &runtime_session_id,
+                            mirror,
+                        )
+                        .await;
                     }
                 }
                 Ok(TaskRuntimeEvent::PermissionResolved {
@@ -922,24 +1253,25 @@ fn spawn_task_runtime_forwarder(
                     worker_name,
                     tool_name,
                     decision,
+                    source,
                 }) => {
                     if let Some(state) = tracked_tasks.get(&task_id) {
-                        broadcaster
-                            .emit(StreamEvent::PermissionResolved {
-                                task_id,
-                                tool_name,
-                                decision,
-                                worker_name,
-                                logical_worker_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.logical_worker_id.clone()),
-                                attempt_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_id.clone()),
-                            })
-                            .await;
+                        let mirror = permission_resolved_mirror(
+                            task_id,
+                            worker_name,
+                            tool_name,
+                            decision,
+                            source,
+                            state.attempt_identity.as_ref(),
+                        );
+                        emit_stream_control_mirror(
+                            &broadcaster,
+                            control_sink.as_ref(),
+                            &request_registry,
+                            &runtime_session_id,
+                            mirror,
+                        )
+                        .await;
                     }
                 }
                 Ok(TaskRuntimeEvent::PermissionTimedOut {
@@ -949,22 +1281,21 @@ fn spawn_task_runtime_forwarder(
                     timeout_ms,
                 }) => {
                     if let Some(state) = tracked_tasks.get(&task_id) {
-                        broadcaster
-                            .emit(StreamEvent::PermissionTimedOut {
-                                task_id,
-                                tool_name,
-                                timeout_ms,
-                                worker_name,
-                                logical_worker_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.logical_worker_id.clone()),
-                                attempt_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_id.clone()),
-                            })
-                            .await;
+                        let mirror = permission_timed_out_mirror(
+                            task_id,
+                            worker_name,
+                            tool_name,
+                            timeout_ms,
+                            state.attempt_identity.as_ref(),
+                        );
+                        emit_stream_control_mirror(
+                            &broadcaster,
+                            control_sink.as_ref(),
+                            &request_registry,
+                            &runtime_session_id,
+                            mirror,
+                        )
+                        .await;
                     }
                 }
                 Ok(TaskRuntimeEvent::Completed(result)) => {
@@ -982,31 +1313,22 @@ fn spawn_task_runtime_forwarder(
                             );
                             super::hook_runtime::emit_subagent_stop_payload(&payload);
                         }
-                        broadcaster
-                            .emit(StreamEvent::WorkerFinished {
-                                task_id: result.task_id,
-                                kind: task_kind_label(result.kind),
-                                status: "completed".to_string(),
-                                summary: result.summary,
-                                produced_delta: Some(result.produced_delta),
-                                logical_worker_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.logical_worker_id.clone()),
-                                attempt_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_id.clone()),
-                                attempt_index: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_index),
-                                previous_task_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .and_then(|value| value.previous_task_id.clone()),
-                            })
-                            .await;
+                        let mirror = worker_finished_mirror(
+                            result.task_id,
+                            result.kind,
+                            "completed",
+                            result.summary,
+                            result.produced_delta,
+                            state.attempt_identity.as_ref(),
+                        );
+                        emit_stream_control_mirror(
+                            &broadcaster,
+                            control_sink.as_ref(),
+                            &request_registry,
+                            &runtime_session_id,
+                            mirror,
+                        )
+                        .await;
                     }
                 }
                 Ok(TaskRuntimeEvent::Failed(result)) => {
@@ -1024,31 +1346,22 @@ fn spawn_task_runtime_forwarder(
                             );
                             super::hook_runtime::emit_subagent_stop_payload(&payload);
                         }
-                        broadcaster
-                            .emit(StreamEvent::WorkerFinished {
-                                task_id: result.task_id,
-                                kind: task_kind_label(result.kind),
-                                status: "failed".to_string(),
-                                summary: result.summary,
-                                produced_delta: Some(result.produced_delta),
-                                logical_worker_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.logical_worker_id.clone()),
-                                attempt_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_id.clone()),
-                                attempt_index: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_index),
-                                previous_task_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .and_then(|value| value.previous_task_id.clone()),
-                            })
-                            .await;
+                        let mirror = worker_finished_mirror(
+                            result.task_id,
+                            result.kind,
+                            "failed",
+                            result.summary,
+                            result.produced_delta,
+                            state.attempt_identity.as_ref(),
+                        );
+                        emit_stream_control_mirror(
+                            &broadcaster,
+                            control_sink.as_ref(),
+                            &request_registry,
+                            &runtime_session_id,
+                            mirror,
+                        )
+                        .await;
                     }
                 }
                 Ok(TaskRuntimeEvent::Cancelled { task_id }) => {
@@ -1064,31 +1377,22 @@ fn spawn_task_runtime_forwarder(
                             Some("worker cancelled".to_string()),
                         );
                         super::hook_runtime::emit_subagent_stop_payload(&payload);
-                        broadcaster
-                            .emit(StreamEvent::WorkerFinished {
-                                task_id,
-                                kind: task_kind_label(state.kind),
-                                status: "cancelled".to_string(),
-                                summary: "worker cancelled".to_string(),
-                                produced_delta: Some(false),
-                                logical_worker_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.logical_worker_id.clone()),
-                                attempt_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_id.clone()),
-                                attempt_index: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .map(|value| value.attempt_index),
-                                previous_task_id: state
-                                    .attempt_identity
-                                    .as_ref()
-                                    .and_then(|value| value.previous_task_id.clone()),
-                            })
-                            .await;
+                        let mirror = worker_finished_mirror(
+                            task_id,
+                            state.kind,
+                            "cancelled",
+                            "worker cancelled".to_string(),
+                            false,
+                            state.attempt_identity.as_ref(),
+                        );
+                        emit_stream_control_mirror(
+                            &broadcaster,
+                            control_sink.as_ref(),
+                            &request_registry,
+                            &runtime_session_id,
+                            mirror,
+                        )
+                        .await;
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -1096,6 +1400,478 @@ fn spawn_task_runtime_forwarder(
             }
         }
     })
+}
+
+fn control_channel_label(payload: &HarnessControlMessage) -> &'static str {
+    match payload {
+        HarnessControlMessage::Session(_) => "session",
+        HarnessControlMessage::Tool(_) => "tool",
+        HarnessControlMessage::Permission(_) => "permission",
+        HarnessControlMessage::Worker(_) => "worker",
+        HarnessControlMessage::Completion(_) => "completion",
+        HarnessControlMessage::Runtime(_) => "runtime",
+    }
+}
+
+fn control_event_type_label(payload: &HarnessControlMessage) -> &'static str {
+    match payload {
+        HarnessControlMessage::Session(event) => match event {
+            agime::agents::SessionControlEvent::Started { .. } => "started",
+            agime::agents::SessionControlEvent::StateChanged { .. } => "state_changed",
+            agime::agents::SessionControlEvent::Interrupted { .. } => "interrupted",
+            agime::agents::SessionControlEvent::CancelRequested { .. } => "cancel_requested",
+            agime::agents::SessionControlEvent::Finished { .. } => "finished",
+        },
+        HarnessControlMessage::Tool(event) => match event {
+            agime::agents::ToolControlEvent::TransportRequested { .. } => "transport_requested",
+            agime::agents::ToolControlEvent::Started { .. } => "started",
+            agime::agents::ToolControlEvent::Progress { .. } => "progress",
+            agime::agents::ToolControlEvent::Finished { .. } => "finished",
+        },
+        HarnessControlMessage::Permission(event) => match event {
+            PermissionControlEvent::Requested { .. } => "requested",
+            PermissionControlEvent::Resolved { .. } => "resolved",
+            PermissionControlEvent::TimedOut { .. } => "timed_out",
+            PermissionControlEvent::RequiresAction { .. } => "requires_action",
+        },
+        HarnessControlMessage::Worker(event) => match event {
+            WorkerControlEvent::Started { .. } => "started",
+            WorkerControlEvent::Progress { .. } => "progress",
+            WorkerControlEvent::Idle { .. } => "idle",
+            WorkerControlEvent::FollowupRequested { .. } => "followup_requested",
+            WorkerControlEvent::Finished { .. } => "finished",
+        },
+        HarnessControlMessage::Completion(event) => match event {
+            CompletionControlEvent::StructuredPublished { .. } => "structured_published",
+            CompletionControlEvent::OutcomeObserved { .. } => "outcome_observed",
+        },
+        HarnessControlMessage::Runtime(event) => match event {
+            RuntimeControlEvent::CompactionObserved { .. } => "compaction_observed",
+            RuntimeControlEvent::Notification { .. } => "notification",
+        },
+    }
+}
+
+async fn emit_task_control_message(
+    control_sink: &dyn HarnessControlSink,
+    runtime_session_id: &str,
+    message: HarnessControlMessage,
+) {
+    let Some(sequencer) = control_sequencer_for_session(runtime_session_id) else {
+        return;
+    };
+    let envelope = sequencer.next(message);
+    if let Err(error) = control_sink.handle(&envelope).await {
+        tracing::warn!(
+            logical_session_id = %envelope.session_id,
+            runtime_session_id = %envelope.runtime_session_id,
+            sequence = envelope.sequence,
+            error = %error,
+            "ServerHarnessHost: control sink failed during task runtime mirror"
+        );
+    }
+}
+
+async fn emit_stream_control_mirror(
+    broadcaster: &StreamBroadcaster,
+    control_sink: &dyn HarnessControlSink,
+    request_registry: &RuntimeControlRegistry,
+    runtime_session_id: &str,
+    control_message: HarnessControlMessage,
+) {
+    match request_registry.classify(&control_message) {
+        ControlEmissionDecision::Emit => {}
+        ControlEmissionDecision::Duplicate(reason) => {
+            tracing::warn!(
+                runtime_session_id = %runtime_session_id,
+                channel = %control_channel_label(&control_message),
+                event_type = %control_event_type_label(&control_message),
+                reason,
+                "suppressing duplicate control terminal event"
+            );
+            return;
+        }
+        ControlEmissionDecision::Stale(reason) => {
+            tracing::warn!(
+                runtime_session_id = %runtime_session_id,
+                channel = %control_channel_label(&control_message),
+                event_type = %control_event_type_label(&control_message),
+                reason,
+                "suppressing stale control terminal event"
+            );
+            return;
+        }
+    }
+    if let Some(stream_event) = stream_event_for_control_projection(&control_message) {
+        broadcaster.emit(stream_event).await;
+    }
+    emit_task_control_message(control_sink, runtime_session_id, control_message).await;
+}
+
+fn worker_started_mirror(
+    snapshot: &agime::agents::TaskSnapshot,
+    _attempt_identity: Option<&WorkerAttemptIdentity>,
+) -> HarnessControlMessage {
+    build_worker_started_control_message(snapshot)
+}
+
+fn worker_progress_mirror(
+    task_id: String,
+    message: String,
+    percent: Option<u8>,
+) -> HarnessControlMessage {
+    build_worker_progress_control_message(task_id, message, percent)
+}
+
+fn worker_followup_mirror(
+    task_id: String,
+    kind: String,
+    reason: String,
+    attempt_identity: Option<&WorkerAttemptIdentity>,
+) -> HarnessControlMessage {
+    build_worker_followup_requested_control_message(task_id, kind, reason, attempt_identity)
+}
+
+fn worker_idle_mirror(
+    task_id: String,
+    message: String,
+    attempt_identity: Option<&WorkerAttemptIdentity>,
+) -> HarnessControlMessage {
+    build_worker_idle_control_message(task_id, message, attempt_identity)
+}
+
+fn permission_requested_mirror(
+    task_id: String,
+    worker_name: Option<String>,
+    tool_name: String,
+    attempt_identity: Option<&WorkerAttemptIdentity>,
+) -> HarnessControlMessage {
+    build_permission_requested_control_message(task_id, tool_name, worker_name, attempt_identity)
+}
+
+fn permission_resolved_mirror(
+    task_id: String,
+    worker_name: Option<String>,
+    tool_name: String,
+    decision: String,
+    source: Option<String>,
+    attempt_identity: Option<&WorkerAttemptIdentity>,
+) -> HarnessControlMessage {
+    build_permission_resolved_control_message(
+        task_id,
+        tool_name,
+        decision,
+        source,
+        None,
+        worker_name,
+        attempt_identity,
+    )
+}
+
+fn permission_timed_out_mirror(
+    task_id: String,
+    worker_name: Option<String>,
+    tool_name: String,
+    timeout_ms: u64,
+    attempt_identity: Option<&WorkerAttemptIdentity>,
+) -> HarnessControlMessage {
+    build_permission_timed_out_control_message(
+        task_id,
+        tool_name,
+        timeout_ms,
+        worker_name,
+        attempt_identity,
+    )
+}
+
+fn worker_finished_mirror(
+    task_id: String,
+    kind: TaskKind,
+    status: &str,
+    summary: String,
+    produced_delta: bool,
+    attempt_identity: Option<&WorkerAttemptIdentity>,
+) -> HarnessControlMessage {
+    build_worker_finished_control_message(
+        task_id,
+        kind,
+        status,
+        summary,
+        produced_delta,
+        attempt_identity,
+    )
+}
+
+fn tool_started_mirror(request_id: String, tool_name: String) -> HarnessControlMessage {
+    build_tool_started_control_message(request_id, tool_name)
+}
+
+fn tool_finished_mirror(
+    request_id: String,
+    tool_name: String,
+    success: bool,
+    content: String,
+    duration_ms: Option<u64>,
+) -> HarnessControlMessage {
+    build_tool_finished_control_message(request_id, tool_name, success, Some(content), duration_ms)
+}
+
+fn compaction_mirror(event: &StreamEvent) -> Option<HarnessControlMessage> {
+    let StreamEvent::Compaction {
+        strategy,
+        reason,
+        before_tokens,
+        after_tokens,
+        phase,
+    } = event
+    else {
+        return None;
+    };
+    let _ = (before_tokens, after_tokens, phase);
+    let control_message = HarnessControlMessage::Runtime(RuntimeControlEvent::CompactionObserved {
+        strategy: Some(strategy.clone()),
+        reason: reason.clone(),
+        before_tokens: Some(*before_tokens),
+        after_tokens: Some(*after_tokens),
+        phase: phase.clone(),
+    });
+    Some(control_message)
+}
+
+fn is_compaction_inline_notification(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    normalized.starts_with("exceeded auto-compact threshold of ")
+        || normalized.starts_with("context limit reached. compacting to continue conversation...")
+}
+
+fn stream_event_for_control_projection(message: &HarnessControlMessage) -> Option<StreamEvent> {
+    match message {
+        HarnessControlMessage::Tool(agime::agents::ToolControlEvent::Started {
+            request_id,
+            tool_name,
+        }) => Some(StreamEvent::ToolCall {
+            name: tool_name.clone(),
+            id: request_id.clone(),
+        }),
+        HarnessControlMessage::Tool(agime::agents::ToolControlEvent::Finished {
+            request_id,
+            tool_name,
+            success,
+            summary,
+            duration_ms,
+        }) => Some(StreamEvent::ToolResult {
+            id: request_id.clone(),
+            success: *success,
+            content: summary.clone().unwrap_or_default(),
+            name: Some(tool_name.clone()),
+            duration_ms: *duration_ms,
+        }),
+        HarnessControlMessage::Permission(PermissionControlEvent::Requested {
+            request_id,
+            tool_name,
+            worker_name,
+            logical_worker_id,
+            attempt_id,
+        }) => Some(StreamEvent::PermissionRequested {
+            task_id: request_id.clone(),
+            tool_name: tool_name.clone(),
+            worker_name: worker_name.clone(),
+            logical_worker_id: logical_worker_id.clone(),
+            attempt_id: attempt_id.clone(),
+        }),
+        HarnessControlMessage::Permission(PermissionControlEvent::Resolved {
+            request_id,
+            tool_name,
+            decision,
+            source,
+            worker_name,
+            logical_worker_id,
+            attempt_id,
+            ..
+        }) => Some(StreamEvent::PermissionResolved {
+            task_id: request_id.clone(),
+            tool_name: tool_name.clone(),
+            decision: decision.clone(),
+            source: Some(format!("{:?}", source).to_ascii_lowercase()),
+            worker_name: worker_name.clone(),
+            logical_worker_id: logical_worker_id.clone(),
+            attempt_id: attempt_id.clone(),
+        }),
+        HarnessControlMessage::Permission(PermissionControlEvent::TimedOut {
+            request_id,
+            tool_name,
+            timeout_ms,
+            worker_name,
+            logical_worker_id,
+            attempt_id,
+        }) => Some(StreamEvent::PermissionTimedOut {
+            task_id: request_id.clone(),
+            tool_name: tool_name.clone(),
+            timeout_ms: *timeout_ms,
+            worker_name: worker_name.clone(),
+            logical_worker_id: logical_worker_id.clone(),
+            attempt_id: attempt_id.clone(),
+        }),
+        HarnessControlMessage::Worker(WorkerControlEvent::Started {
+            task_id,
+            kind,
+            target,
+            logical_worker_id,
+            attempt_id,
+            attempt_index,
+            previous_task_id,
+        }) => Some(StreamEvent::WorkerStarted {
+            task_id: task_id.clone(),
+            kind: kind.clone(),
+            target: target.clone(),
+            logical_worker_id: logical_worker_id.clone(),
+            attempt_id: attempt_id.clone(),
+            attempt_index: *attempt_index,
+            previous_task_id: previous_task_id.clone(),
+        }),
+        HarnessControlMessage::Worker(WorkerControlEvent::Progress {
+            task_id,
+            message,
+            percent,
+        }) => Some(StreamEvent::WorkerProgress {
+            task_id: task_id.clone(),
+            message: message.clone(),
+            percent: *percent,
+        }),
+        HarnessControlMessage::Worker(WorkerControlEvent::Idle {
+            task_id,
+            message,
+            logical_worker_id,
+            attempt_id,
+        }) => Some(StreamEvent::WorkerIdle {
+            task_id: task_id.clone(),
+            message: message.clone(),
+            logical_worker_id: logical_worker_id.clone(),
+            attempt_id: attempt_id.clone(),
+        }),
+        HarnessControlMessage::Worker(WorkerControlEvent::FollowupRequested {
+            task_id,
+            kind,
+            reason,
+            logical_worker_id,
+            attempt_id,
+            attempt_index,
+            previous_task_id,
+        }) => Some(StreamEvent::WorkerFollowup {
+            task_id: task_id.clone(),
+            kind: kind.clone(),
+            reason: reason.clone(),
+            logical_worker_id: logical_worker_id.clone(),
+            attempt_id: attempt_id.clone(),
+            attempt_index: *attempt_index,
+            previous_task_id: previous_task_id.clone(),
+        }),
+        HarnessControlMessage::Worker(WorkerControlEvent::Finished {
+            task_id,
+            kind,
+            status,
+            summary,
+            produced_delta,
+            logical_worker_id,
+            attempt_id,
+            attempt_index,
+            previous_task_id,
+        }) => Some(StreamEvent::WorkerFinished {
+            task_id: task_id.clone(),
+            kind: kind.clone(),
+            status: status.clone(),
+            summary: summary.clone(),
+            produced_delta: *produced_delta,
+            logical_worker_id: logical_worker_id.clone(),
+            attempt_id: attempt_id.clone(),
+            attempt_index: *attempt_index,
+            previous_task_id: previous_task_id.clone(),
+        }),
+        HarnessControlMessage::Runtime(RuntimeControlEvent::CompactionObserved {
+            strategy,
+            reason,
+            before_tokens,
+            after_tokens,
+            phase,
+        }) => match (strategy, before_tokens, after_tokens) {
+            (Some(strategy), Some(before_tokens), Some(after_tokens)) => {
+                Some(StreamEvent::Compaction {
+                    strategy: strategy.clone(),
+                    before_tokens: *before_tokens,
+                    after_tokens: *after_tokens,
+                    phase: phase.clone(),
+                    reason: reason.clone(),
+                })
+            }
+            _ => None,
+        },
+        HarnessControlMessage::Runtime(RuntimeControlEvent::Notification {
+            code, message, ..
+        }) => match code.as_deref() {
+            Some("assistant_text") => Some(StreamEvent::Text {
+                content: message.clone(),
+            }),
+            Some("inline_message") => {
+                if is_compaction_inline_notification(message) {
+                    None
+                } else {
+                    Some(StreamEvent::Text {
+                        content: message.clone(),
+                    })
+                }
+            }
+            Some("auto_approve_status") | Some("unsupported_external_frontend_status") => {
+                Some(StreamEvent::Status {
+                    status: message.clone(),
+                })
+            }
+            _ => None,
+        },
+        HarnessControlMessage::Session(SessionControlEvent::StateChanged { state, reason })
+            if state == "thinking" =>
+        {
+            reason.as_ref().map(|content| StreamEvent::Thinking {
+                content: content.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+async fn emit_control_projection_message(
+    broadcaster: &StreamBroadcaster,
+    control_sink: &dyn HarnessControlSink,
+    request_registry: &RuntimeControlRegistry,
+    runtime_session_id: &str,
+    control_message: HarnessControlMessage,
+) {
+    match request_registry.classify(&control_message) {
+        ControlEmissionDecision::Emit => {}
+        ControlEmissionDecision::Duplicate(reason) => {
+            tracing::warn!(
+                runtime_session_id = %runtime_session_id,
+                channel = %control_channel_label(&control_message),
+                event_type = %control_event_type_label(&control_message),
+                reason,
+                "suppressing duplicate control projection"
+            );
+            return;
+        }
+        ControlEmissionDecision::Stale(reason) => {
+            tracing::warn!(
+                runtime_session_id = %runtime_session_id,
+                channel = %control_channel_label(&control_message),
+                event_type = %control_event_type_label(&control_message),
+                reason,
+                "suppressing stale control projection"
+            );
+            return;
+        }
+    }
+    if let Some(event) = stream_event_for_control_projection(&control_message) {
+        broadcaster.emit(event).await;
+    }
+    emit_task_control_message(control_sink, runtime_session_id, control_message).await;
 }
 
 #[async_trait::async_trait]
@@ -1108,7 +1884,10 @@ impl HarnessEventSink for ServerHarnessEventSink {
         event: &AgentEvent,
     ) -> Result<()> {
         match event {
-            AgentEvent::Message(message) => self.handle_message(agent, message).await,
+            AgentEvent::Message(message) => {
+                self.handle_message(logical_session_id, runtime_session_id, agent, message)
+                    .await
+            }
             AgentEvent::ToolTransportRequest(event) => match event.transport {
                 agime::agents::ToolTransportKind::ServerLocal => {
                     self.handle_server_local_tool_request(
@@ -1153,6 +1932,141 @@ impl ServerHarnessEventSink {
         is_server_local_tool_name(&self.tool_runtime.server_local_tool_names, tool_name)
     }
 
+    fn visualisation_artifact_label(tool_name: &str) -> String {
+        let leaf = tool_name
+            .rsplit("__")
+            .next()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(tool_name);
+        format!("Auto Visualiser {}", leaf.replace('_', " "))
+    }
+
+    fn visualisation_artifact_path(tool_name: &str) -> String {
+        let leaf = tool_name
+            .rsplit("__")
+            .next()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(tool_name);
+        let safe = leaf
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_ascii_lowercase();
+        let safe = if safe.is_empty() {
+            "visualisation".to_string()
+        } else {
+            safe
+        };
+        format!("artifacts/visualisations/{}-{}.html", safe, Uuid::new_v4())
+    }
+
+    fn html_resource_bytes(block: &ToolContentBlock) -> Option<(String, Vec<u8>)> {
+        let ToolContentBlock::Resource {
+            uri,
+            mime_type,
+            text,
+            blob,
+        } = block
+        else {
+            return None;
+        };
+        let mime = mime_type.as_deref().unwrap_or_default();
+        if !uri.starts_with("ui://") || !mime.starts_with("text/html") {
+            return None;
+        }
+        if let Some(text) = text {
+            return Some((uri.clone(), text.as_bytes().to_vec()));
+        }
+        let blob = blob.as_ref()?;
+        STANDARD.decode(blob).ok().map(|bytes| (uri.clone(), bytes))
+    }
+
+    fn materialize_visualisation_resources(
+        &self,
+        runtime_session_id: &str,
+        tool_name: &str,
+        blocks: &[ToolContentBlock],
+    ) -> Vec<serde_json::Value> {
+        let Some(workspace_path) = self.tool_runtime.workspace_path.as_deref() else {
+            return Vec::new();
+        };
+        let workspace_service = WorkspaceService::new(String::new());
+        let Ok(Some(workspace)) = workspace_service.load_workspace(workspace_path) else {
+            return Vec::new();
+        };
+        let workspace_context = self
+            .tool_runtime
+            .workspace_context
+            .clone()
+            .or_else(|| workspace_service.execution_context(&workspace, "tool").ok());
+        let Some(workspace_context) = workspace_context else {
+            return Vec::new();
+        };
+
+        let mut files = Vec::new();
+        for block in blocks {
+            let Some((uri, bytes)) = Self::html_resource_bytes(block) else {
+                continue;
+            };
+            let relative_path = Self::visualisation_artifact_path(tool_name);
+            let absolute_path = Path::new(&workspace_context.workspace_root).join(&relative_path);
+            if !workspace_write_allowed(&workspace_context, &absolute_path) {
+                tracing::warn!(
+                    runtime_session_id = %runtime_session_id,
+                    tool_name,
+                    uri,
+                    path = %absolute_path.to_string_lossy(),
+                    allowed_write_roots = ?workspace_context.allowed_write_roots,
+                    "Auto Visualiser artifact write escaped workspace execution context"
+                );
+                continue;
+            }
+            let write_result = (|| -> Result<()> {
+                if let Some(parent) = absolute_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&absolute_path, &bytes)?;
+                let _ = workspace_service.record_workspace_output(
+                    &workspace,
+                    &relative_path,
+                    Some("text/html".to_string()),
+                )?;
+                Ok(())
+            })();
+            if let Err(err) = write_result {
+                tracing::warn!(
+                    runtime_session_id = %runtime_session_id,
+                    tool_name,
+                    uri,
+                    error = %err,
+                    "failed to materialize Auto Visualiser resource"
+                );
+                continue;
+            }
+            files.push(serde_json::json!({
+                "type": "workspace_file",
+                "path": relative_path,
+                "label": Self::visualisation_artifact_label(tool_name),
+                "content_type": "text/html",
+                "size_bytes": bytes.len() as i64,
+                "preview_supported": true,
+                "source": {
+                    "kind": "mcp_resource",
+                    "uri": uri,
+                    "tool_name": tool_name
+                }
+            }));
+        }
+        files
+    }
+
     async fn execute_direct_tool_request(
         &self,
         logical_session_id: &str,
@@ -1180,20 +2094,63 @@ impl ServerHarnessEventSink {
         };
 
         let tool_name = tool_call.name.to_string();
-        self.broadcaster
-            .emit(StreamEvent::ToolCall {
-                name: tool_name.clone(),
-                id: request_id.to_string(),
-            })
-            .await;
+        emit_stream_control_mirror(
+            &self.broadcaster,
+            self.control_sink.as_ref(),
+            &self.request_registry,
+            runtime_session_id,
+            tool_started_mirror(request_id.to_string(), tool_name.clone()),
+        )
+        .await;
 
         let args = Value::Object(tool_call.arguments.clone().unwrap_or_default());
+        let final_input = args.clone();
         let (duration_ms, result) =
             execute_direct_tool_call(self.tool_runtime.clone(), &tool_name, args).await;
+        let tool_was_cancelled = self.tool_runtime.cancel_token.is_cancelled();
+        if tool_was_cancelled {
+            emit_control_projection_message(
+                &self.broadcaster,
+                self.control_sink.as_ref(),
+                &self.request_registry,
+                runtime_session_id,
+                HarnessControlMessage::Runtime(RuntimeControlEvent::Notification {
+                    level: "warning".to_string(),
+                    code: Some("tool_execution_cancelled".to_string()),
+                    message: format!(
+                        "tool `{}` finalized after cancellation and was surfaced as cancelled",
+                        tool_name
+                    ),
+                }),
+            )
+            .await;
+        }
 
         match result {
             Ok(blocks) => {
-                let content = TaskExecutor::tool_blocks_summary(&blocks);
+                let mut call_result = blocks_to_call_result(&blocks);
+                let visualisation_files = self.materialize_visualisation_resources(
+                    runtime_session_id,
+                    &tool_name,
+                    &blocks,
+                );
+                if !visualisation_files.is_empty() {
+                    let primary_file = visualisation_files.first().cloned();
+                    call_result.content.insert(
+                        0,
+                        Content::text(
+                            serde_json::json!({
+                                "status": "ok",
+                                "summary": "Auto Visualiser generated interactive HTML visualisation artifact(s).",
+                                "files": visualisation_files,
+                                "file": primary_file
+                            })
+                            .to_string(),
+                        ),
+                    );
+                }
+                let normalized =
+                    normalize_call_tool_result(Some(&tool_name), Some(&final_input), &call_result);
                 let payload = super::hook_runtime::build_post_tool_use_payload(
                     logical_session_id,
                     Some(runtime_session_id.to_string()),
@@ -1204,41 +2161,57 @@ impl ServerHarnessEventSink {
                     None,
                 );
                 super::hook_runtime::emit_post_tool_use_payload(&payload);
-                self.broadcaster
-                    .emit(StreamEvent::ToolResult {
-                        id: request_id.to_string(),
-                        success: true,
-                        content: content.clone(),
-                        name: Some(tool_name),
-                        duration_ms: Some(duration_ms),
-                    })
-                    .await;
+                emit_stream_control_mirror(
+                    &self.broadcaster,
+                    self.control_sink.as_ref(),
+                    &self.request_registry,
+                    runtime_session_id,
+                    tool_finished_mirror(
+                        request_id.to_string(),
+                        tool_name.clone(),
+                        normalized.success,
+                        normalized.display_text.clone(),
+                        Some(duration_ms),
+                    ),
+                )
+                .await;
                 agent
-                    .handle_tool_result(request_id.to_string(), Ok(blocks_to_call_result(&blocks)))
+                    .handle_tool_result(request_id.to_string(), Ok(call_result))
                     .await;
             }
             Err(err) => {
+                let normalized =
+                    normalize_tool_execution_error_text(Some(&tool_name), Some(&final_input), &err);
                 let payload = super::hook_runtime::build_post_tool_use_failure_payload(
                     logical_session_id,
                     Some(runtime_session_id.to_string()),
                     request_id,
                     &tool_name,
-                    err.clone(),
+                    normalized.display_text.clone(),
                 );
                 super::hook_runtime::emit_post_tool_use_failure_payload(&payload);
-                self.broadcaster
-                    .emit(StreamEvent::ToolResult {
-                        id: request_id.to_string(),
-                        success: false,
-                        content: err.clone(),
-                        name: Some(tool_name),
-                        duration_ms: Some(duration_ms),
-                    })
-                    .await;
+                emit_stream_control_mirror(
+                    &self.broadcaster,
+                    self.control_sink.as_ref(),
+                    &self.request_registry,
+                    runtime_session_id,
+                    tool_finished_mirror(
+                        request_id.to_string(),
+                        tool_name.clone(),
+                        normalized.success,
+                        normalized.display_text.clone(),
+                        Some(duration_ms),
+                    ),
+                )
+                .await;
                 agent
                     .handle_tool_result(
                         request_id.to_string(),
-                        Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, err, None)),
+                        Err(ErrorData::new(
+                            ErrorCode::INTERNAL_ERROR,
+                            normalized.display_text,
+                            normalized.structured_output,
+                        )),
                     )
                     .await;
             }
@@ -1264,46 +2237,35 @@ impl ServerHarnessEventSink {
         .await
     }
 
-    async fn handle_message(&self, agent: &Agent, message: &Message) -> Result<()> {
+    async fn handle_message(
+        &self,
+        logical_session_id: &str,
+        runtime_session_id: &str,
+        agent: &Agent,
+        message: &Message,
+    ) -> Result<()> {
+        let control_messages =
+            control_messages_for_agent_event(&AgentEvent::Message(message.clone()));
+        for control_message in &control_messages {
+            emit_control_projection_message(
+                &self.broadcaster,
+                self.control_sink.as_ref(),
+                &self.request_registry,
+                runtime_session_id,
+                control_message.clone(),
+            )
+            .await;
+        }
+
+        // Message-derived control events are emitted centrally in host.rs and projected
+        // to legacy stream events above. The remaining branches here are only for
+        // side-effectful direct-host behaviors that still need imperative handling.
         for content in &message.content {
             match content {
-                MessageContent::Text(text)
-                    if message.metadata.user_visible
-                        && message.role == rmcp::model::Role::Assistant =>
-                {
-                    self.broadcaster
-                        .emit(StreamEvent::Text {
-                            content: text.text.clone(),
-                        })
-                        .await;
-                }
-                MessageContent::Thinking(thinking) if message.metadata.user_visible => {
-                    self.broadcaster
-                        .emit(StreamEvent::Thinking {
-                            content: thinking.thinking.clone(),
-                        })
-                        .await;
-                }
-                MessageContent::SystemNotification(notification)
-                    if message.metadata.user_visible =>
-                {
-                    let event = match notification.notification_type {
-                        SystemNotificationType::ThinkingMessage => StreamEvent::Thinking {
-                            content: notification.msg.clone(),
-                        },
-                        SystemNotificationType::InlineMessage => StreamEvent::Text {
-                            content: notification.msg.clone(),
-                        },
-                        SystemNotificationType::RuntimeNotificationAttachment => {
-                            continue;
-                        }
-                    };
-                    self.broadcaster.emit(event).await;
-                }
                 MessageContent::FrontendToolRequest(request) => {
                     self.handle_frontend_tool_request(
-                        "frontend-message",
-                        "frontend-message",
+                        logical_session_id,
+                        runtime_session_id,
                         agent,
                         request,
                     )
@@ -1312,11 +2274,39 @@ impl ServerHarnessEventSink {
                 MessageContent::ActionRequired(action) => {
                     if let ActionRequiredData::ToolConfirmation { id, tool_name, .. } = &action.data
                     {
-                        self.broadcaster
-                            .emit(StreamEvent::Status {
-                                status: format!("auto_approve:{}", tool_name),
-                            })
-                            .await;
+                        // The corresponding RequiresAction control event has already been
+                        // emitted upstream from AgentEvent::Message(ActionRequired).
+                        // This status line preserves the existing direct-host UX trace, while
+                        // we also emit the resolved control event to keep the permission
+                        // timeline complete on the canonical control channel.
+                        emit_control_projection_message(
+                            &self.broadcaster,
+                            self.control_sink.as_ref(),
+                            &self.request_registry,
+                            runtime_session_id,
+                            HarnessControlMessage::Runtime(RuntimeControlEvent::Notification {
+                                level: "info".to_string(),
+                                code: Some("auto_approve_status".to_string()),
+                                message: format!("auto_approve:{}", tool_name),
+                            }),
+                        )
+                        .await;
+                        emit_stream_control_mirror(
+                            &self.broadcaster,
+                            self.control_sink.as_ref(),
+                            &self.request_registry,
+                            runtime_session_id,
+                            build_permission_resolved_control_message(
+                                id.clone(),
+                                tool_name.clone(),
+                                "allow_once",
+                                Some("runtime_policy".to_string()),
+                                Some("auto-approved by direct host".to_string()),
+                                None,
+                                None,
+                            ),
+                        )
+                        .await;
                         agent
                             .handle_confirmation(
                                 id.clone(),
@@ -1357,11 +2347,35 @@ impl ServerHarnessEventSink {
                 .await;
         }
 
-        self.broadcaster
-            .emit(StreamEvent::Status {
-                status: format!("unsupported_external_frontend:{}", tool_name),
-            })
-            .await;
+        emit_control_projection_message(
+            &self.broadcaster,
+            self.control_sink.as_ref(),
+            &self.request_registry,
+            runtime_session_id,
+            HarnessControlMessage::Runtime(RuntimeControlEvent::Notification {
+                level: "warn".to_string(),
+                code: Some("unsupported_external_frontend_status".to_string()),
+                message: format!("unsupported_external_frontend:{}", tool_name),
+            }),
+        )
+        .await;
+        emit_stream_control_mirror(
+            &self.broadcaster,
+            self.control_sink.as_ref(),
+            &self.request_registry,
+            runtime_session_id,
+            build_tool_finished_control_message(
+                request.id.clone(),
+                tool_name.clone(),
+                false,
+                Some(format!(
+                    "external frontend tool '{}' is not available in direct server host mode",
+                    tool_name
+                )),
+                None,
+            ),
+        )
+        .await;
         agent
             .handle_tool_result(
                 request.id.clone(),
@@ -1603,7 +2617,23 @@ impl ServerHarnessHost {
 
         let runtime_snapshot =
             AgentRuntimePolicyResolver::resolve(&effective_agent, Some(session), None);
+        let non_delegating_surface = is_non_delegating_session_source(&session.session_source);
         let coordinator_execution_mode = if session.session_source.eq_ignore_ascii_case("system") {
+            CoordinatorExecutionMode::SingleWorker
+        } else if non_delegating_surface {
+            if !matches!(
+                inferred_execution_mode,
+                CoordinatorExecutionMode::SingleWorker
+            ) || runtime_snapshot.delegation_policy.allow_subagent
+                || runtime_snapshot.delegation_policy.allow_swarm
+            {
+                tracing::info!(
+                    logical_session_id = %session.session_id,
+                    session_source = %session.session_source,
+                    inferred_execution_mode = ?inferred_execution_mode,
+                    "ServerHarnessHost: non-delegating surface suppressing delegation"
+                );
+            }
             CoordinatorExecutionMode::SingleWorker
         } else {
             match inferred_execution_mode {
@@ -1621,19 +2651,23 @@ impl ServerHarnessHost {
                 mode => mode,
             }
         };
-        let delegation_mode = match coordinator_execution_mode {
-            CoordinatorExecutionMode::ExplicitSwarm | CoordinatorExecutionMode::AutoSwarm => {
-                if runtime_snapshot.delegation_policy.allow_swarm {
-                    DelegationMode::Swarm
-                } else {
-                    DelegationMode::Disabled
+        let delegation_mode = if non_delegating_surface {
+            DelegationMode::Disabled
+        } else {
+            match coordinator_execution_mode {
+                CoordinatorExecutionMode::ExplicitSwarm | CoordinatorExecutionMode::AutoSwarm => {
+                    if runtime_snapshot.delegation_policy.allow_swarm {
+                        DelegationMode::Swarm
+                    } else {
+                        DelegationMode::Disabled
+                    }
                 }
-            }
-            CoordinatorExecutionMode::SingleWorker => {
-                if runtime_snapshot.delegation_policy.allow_subagent {
-                    DelegationMode::Subagent
-                } else {
-                    DelegationMode::Disabled
+                CoordinatorExecutionMode::SingleWorker => {
+                    if runtime_snapshot.delegation_policy.allow_subagent {
+                        DelegationMode::Subagent
+                    } else {
+                        DelegationMode::Disabled
+                    }
                 }
             }
         };
@@ -1641,13 +2675,62 @@ impl ServerHarnessHost {
             validation_mode && runtime_snapshot.delegation_policy.allow_validation_worker;
         let require_final_report =
             session.require_final_report || runtime_snapshot.delegation_policy.require_final_report;
+        let run_id = Uuid::new_v4().to_string();
+        let workspace_service = WorkspaceService::new(String::new());
+        let workspace_context = match workspace_service.load_workspace(&workspace_path) {
+            Ok(Some(workspace)) => match workspace_service.execution_context(&workspace, &run_id) {
+                Ok(context) => Some(context),
+                Err(error) => {
+                    tracing::warn!(
+                        logical_session_id = %session.session_id,
+                        workspace_path = %workspace_path,
+                        error = %error,
+                        "ServerHarnessHost: failed to build workspace execution context"
+                    );
+                    None
+                }
+            },
+            Ok(None) => {
+                tracing::warn!(
+                    logical_session_id = %session.session_id,
+                    workspace_path = %workspace_path,
+                    "ServerHarnessHost: workspace manifest not found while building execution context"
+                );
+                None
+            }
+            Err(error) => {
+                tracing::warn!(
+                    logical_session_id = %session.session_id,
+                    workspace_path = %workspace_path,
+                    error = %error,
+                    "ServerHarnessHost: failed to load workspace for execution context"
+                );
+                None
+            }
+        };
+        if let Some(context) = &workspace_context {
+            tracing::info!(
+                logical_session_id = %session.session_id,
+                workspace_kind = ?context.workspace_kind,
+                workspace_root = %context.workspace_root,
+                run_id = %context.run_id,
+                run_dir = %context.run_dir,
+                allowed_read_roots = ?context.allowed_read_roots,
+                allowed_write_roots = ?context.allowed_write_roots,
+                "ServerHarnessHost: workspace execution context ready"
+            );
+        }
+        let effective_turn_system_instruction = merge_workspace_execution_instruction(
+            turn_system_instruction,
+            workspace_context.as_ref(),
+        );
 
         let prepared = self
             .prepare_runtime(
                 session,
                 &effective_agent,
                 &workspace_path,
-                turn_system_instruction,
+                effective_turn_system_instruction.as_deref(),
             )
             .await?;
         tracing::info!(
@@ -1660,7 +2743,7 @@ impl ServerHarnessHost {
             dynamic_state: prepared.dynamic_state.clone(),
             extension_manager: prepared.extension_manager.clone(),
             task_manager: self.internal_task_manager.clone(),
-            task_id: format!("direct-host:{}", Uuid::new_v4()),
+            task_id: format!("direct-host:{}", run_id),
             cancel_token: cancel_token.clone(),
             tool_timeout_secs: prepared.tool_timeout_secs,
             server_local_tool_names: prepared
@@ -1668,15 +2751,21 @@ impl ServerHarnessHost {
                 .iter()
                 .map(|tool| tool.name.to_string())
                 .collect(),
+            workspace_path: Some(workspace_path.clone()),
+            workspace_context: workspace_context.clone(),
         });
         let generated_title = if session.title.is_none() {
             derive_chat_title_from_user_message(user_message)
         } else {
             None
         };
+        let control_sink: Arc<dyn HarnessControlSink> = Arc::new(ServerHarnessControlSink);
+        let request_registry = RuntimeControlRegistry::default();
         let event_sink = Arc::new(ServerHarnessEventSink {
             broadcaster,
             tool_runtime,
+            control_sink: control_sink.clone(),
+            request_registry: request_registry.clone(),
         });
         let task_runtime = Arc::new(TaskRuntime::default());
         let (runtime_session_tx, runtime_session_rx) = watch::channel(None);
@@ -1684,6 +2773,8 @@ impl ServerHarnessHost {
             task_runtime.clone(),
             runtime_session_rx,
             event_sink.broadcaster.clone(),
+            control_sink.clone(),
+            request_registry.clone(),
         );
         let initial_messages: Vec<Message> =
             serde_json::from_str(&session.messages_json).unwrap_or_default();
@@ -1697,7 +2788,18 @@ impl ServerHarnessHost {
                 allow_worker_messaging: runtime_snapshot.delegation_policy.allow_worker_messaging,
             }))
             .await;
-        let harness_mode = harness_mode_for_session_source(&session.session_source);
+        let explicit_delegation_turn = effective_turn_system_instruction
+            .as_deref()
+            .is_some_and(|value| value.contains(CHAT_DELEGATION_PROFILE_ID));
+        let harness_mode = if should_force_execute_for_explicit_delegation(
+            &session.session_source,
+            user_message,
+            explicit_delegation_turn,
+        ) {
+            HarnessMode::Execute
+        } else {
+            harness_mode_for_session_source(&session.session_source)
+        };
         let mut server_local_tool_names = prepared
             .server_local_tools
             .iter()
@@ -1710,19 +2812,13 @@ impl ServerHarnessHost {
             &prepared.server_local_tools,
             &prepared.worker_extensions,
         );
-        let completion_surface_policy = if session.session_source.eq_ignore_ascii_case("system") {
-            CompletionSurfacePolicy::SystemDocumentAnalysis
-        } else if matches!(harness_mode, HarnessMode::Conversation) {
-            CompletionSurfacePolicy::Conversation
-        } else {
-            CompletionSurfacePolicy::Execute
-        };
-        let completion_contract = if session.session_source.eq_ignore_ascii_case("system") {
-            Some(document_analysis_completion_response())
-        } else {
-            (matches!(harness_mode, HarnessMode::Execute) && require_final_report)
-                .then(execution_host_completion_response)
-        };
+        let completion_surface_policy =
+            completion_surface_policy_for_session_source(&session.session_source, harness_mode);
+        let completion_contract = completion_contract_for_session_source(
+            &session.session_source,
+            harness_mode,
+            require_final_report,
+        );
         let required_tool_prefixes =
             required_tool_prefixes_for_session_source(&session.session_source);
         let auto_approve_chat = effective_agent.auto_approve_chat;
@@ -1739,9 +2835,10 @@ impl ServerHarnessHost {
                             request_id: request.request_id.clone(),
                             permission: Permission::AllowOnce,
                             feedback: Some(
-                                "direct-host leader-owned approval loop auto-approved the bounded worker request for this session"
-                                    .to_string(),
+                                    "direct-host leader-owned approval loop auto-approved the bounded worker request for this session"
+                                        .to_string(),
                             ),
+                            source: PermissionDecisionSource::RuntimePolicy,
                             resolved_at: chrono::Utc::now().to_rfc3339(),
                         }
                 } else {
@@ -1749,9 +2846,10 @@ impl ServerHarnessHost {
                             request_id: request.request_id.clone(),
                             permission: Permission::DenyOnce,
                             feedback: Some(
-                                "direct-host leader-owned approval loop denied this worker request because interactive confirmation is not configured for this session"
-                                    .to_string(),
+                                    "direct-host leader-owned approval loop denied this worker request because interactive confirmation is not configured for this session"
+                                        .to_string(),
                             ),
+                            source: PermissionDecisionSource::RuntimePolicy,
                             resolved_at: chrono::Utc::now().to_rfc3339(),
                         }
                 }
@@ -1794,6 +2892,7 @@ impl ServerHarnessHost {
                 swarm_budget: runtime_snapshot.delegation_policy.swarm_budget,
                 validation_mode: effective_validation_mode,
                 worker_extensions: prepared.worker_extensions.clone(),
+                initial_context_runtime_state: session.context_runtime_state.clone(),
                 task_runtime: Some(task_runtime.clone()),
                 system_prompt_override: Some(prepared.system_prompt.clone()),
                 system_prompt_extras: Vec::new(),
@@ -1803,13 +2902,18 @@ impl ServerHarnessHost {
             },
             HarnessHostDependencies {
                 agent: agent_instance.clone(),
-                event_sink,
+                event_sink: event_sink.clone(),
+                control_sink: control_sink.clone(),
                 persistence: Arc::new(SessionHostPersistenceAdapter {
                     agent_service: self.agent_service.clone(),
                     session_id: session.session_id.clone(),
                     fallback_title: session.title.clone(),
                     generated_title,
                     runtime_session_tx: Some(runtime_session_tx),
+                    broadcaster: event_sink.broadcaster.clone(),
+                    control_sink: control_sink.clone(),
+                    request_registry: request_registry.clone(),
+                    initial_context_runtime_state: session.context_runtime_state.clone(),
                 }),
             },
         )
@@ -1844,11 +2948,53 @@ impl ServerHarnessHost {
         if let Some(report) = completion_report.as_ref() {
             let workspace_service = WorkspaceService::new(String::new());
             if let Ok(Some(workspace)) = workspace_service.load_workspace(&workspace_path) {
+                let produced_resolution = workspace_service
+                    .resolve_workspace_outputs(&workspace, &report.produced_artifacts);
+                let accepted_resolution = workspace_service
+                    .resolve_workspace_outputs(&workspace, &report.accepted_artifacts);
+                if let Some(context) = &workspace_context {
+                    tracing::info!(
+                        logical_session_id = %session.session_id,
+                        runtime_session_id = %host_result.runtime_session_id,
+                        workspace_kind = ?context.workspace_kind,
+                        workspace_root = %context.workspace_root,
+                        run_id = %context.run_id,
+                        run_dir = %context.run_dir,
+                        produced_materialized = ?produced_resolution.materialized_paths,
+                        accepted_materialized = ?accepted_resolution.materialized_paths,
+                        produced_missing = ?produced_resolution.missing_paths,
+                        accepted_missing = ?accepted_resolution.missing_paths,
+                        produced_logical = ?produced_resolution.logical_targets,
+                        accepted_logical = ?accepted_resolution.logical_targets,
+                        "ServerHarnessHost: workspace artifact resolution"
+                    );
+                }
+                if !produced_resolution.missing_paths.is_empty()
+                    || !accepted_resolution.missing_paths.is_empty()
+                    || !produced_resolution.logical_targets.is_empty()
+                    || !accepted_resolution.logical_targets.is_empty()
+                {
+                    tracing::warn!(
+                        logical_session_id = %session.session_id,
+                        runtime_session_id = %host_result.runtime_session_id,
+                        produced_materialized = ?produced_resolution.materialized_paths,
+                        accepted_materialized = ?accepted_resolution.materialized_paths,
+                        produced_missing = ?produced_resolution.missing_paths,
+                        accepted_missing = ?accepted_resolution.missing_paths,
+                        logical_targets = ?produced_resolution.logical_targets
+                            .iter()
+                            .chain(accepted_resolution.logical_targets.iter())
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                        "completion artifacts were not fully materialized into the leader workspace"
+                    );
+                }
                 let _ = workspace_service.record_completion_artifacts(
                     &workspace,
                     &report.produced_artifacts,
                     &report.accepted_artifacts,
                 );
+                let _ = workspace_service.reconcile_manifest_artifacts(&workspace);
             }
         }
         let preview = sanitize_user_visible_runtime_text(
@@ -1861,31 +3007,14 @@ impl ServerHarnessHost {
                 .and_then(|outcome| sanitize_user_visible_runtime_text(outcome.summary.as_deref()))
         })
         .unwrap_or_default();
-        let execution_status = completion_report
+        let logical_execution_status = completion_report
             .as_ref()
             .map(|report| report.status.as_str())
             .unwrap_or("blocked");
-        let execution_error = completion_report.as_ref().and_then(|report| {
-            if report.status == "completed" {
-                None
-            } else {
-                report
-                    .blocking_reason
-                    .clone()
-                    .or_else(|| Some("execute host returned blocked completion".to_string()))
-            }
-        });
-        self.agent_service
-            .update_session_execution_result(
-                &session.session_id,
-                execution_status,
-                execution_error.as_deref(),
-            )
-            .await?;
         tracing::info!(
             logical_session_id = %session.session_id,
-            execution_status,
-            "ServerHarnessHost: logical session marked finished"
+            execution_status = logical_execution_status,
+            "ServerHarnessHost: host outcome ready for logical session"
         );
 
         self.persist_extension_overrides(&effective_agent, session, &prepared)
@@ -1896,12 +3025,16 @@ impl ServerHarnessHost {
             messages_json,
             message_count: host_result.final_conversation.len() as i32,
             total_tokens: host_result.total_tokens,
+            context_runtime_state: host_result.context_runtime_state,
             last_assistant_text: if preview.trim().is_empty() {
                 None
             } else {
                 Some(preview)
             },
             completion_report,
+            persisted_child_evidence: host_result.persisted_child_evidence,
+            persisted_child_transcript_resume: host_result.persisted_child_transcript_resume,
+            transition_trace: host_result.transition_trace,
             events_emitted: host_result.events_emitted,
             signal_summary: host_result
                 .signal_summary
@@ -1983,7 +3116,7 @@ impl ServerHarnessHost {
         }
         if !allowed_extension_names.is_empty() {
             all_extensions
-                .retain(|ext| allowed_extension_names.contains(&ext.name.to_ascii_lowercase()));
+                .retain(|ext| extension_allowed_by_name(&ext.name, &allowed_extension_names));
         }
 
         let elicitation_bridge: ElicitationBridgeCallback = Arc::new(move |_event| {});
@@ -2012,6 +3145,7 @@ impl ServerHarnessHost {
         let platform = PlatformExtensionRunner::create(
             &platform_enabled_extensions,
             Some(self.db.clone()),
+            None,
             Some(&session.team_id),
             Some(&session.user_id),
             Some(session.session_source.as_str()),
@@ -2082,6 +3216,9 @@ impl ServerHarnessHost {
         drop(state);
         if extension_manager.is_some() {
             server_local_tools.extend(TeamExtensionManagerClient::tools_as_rmcp());
+        }
+        if let Some(allow_only) = parse_turn_tool_gate_allow_only(turn_system_instruction) {
+            server_local_tools.retain(|tool| allow_only.contains(tool.name.as_ref()));
         }
 
         let mut worker_extensions = Vec::new();
@@ -2246,39 +3383,87 @@ fn with_execution_api_key(agent: &TeamAgent, fetched: Option<&TeamAgent>) -> Tea
     effective
 }
 
+fn workspace_write_allowed(context: &WorkspaceExecutionContext, path: &Path) -> bool {
+    context
+        .allowed_write_roots
+        .iter()
+        .any(|root| path.starts_with(Path::new(root)))
+}
+
+fn workspace_execution_instruction(context: &WorkspaceExecutionContext) -> String {
+    format!(
+        "Workspace execution boundary:\n- Workspace root: `{}`\n- Current run directory: `{}`\n- Treat `attachments/` as read-only input material.\n- Write final user-visible artifacts under `artifacts/`.\n- Write durable notes under `notes/`.\n- Use `runs/{}` only for this turn's temporary execution files.\n- Do not describe paths outside the workspace as previewable, downloadable, or shareable workspace artifacts.",
+        context.workspace_root, context.run_dir, context.run_id
+    )
+}
+
+fn merge_workspace_execution_instruction(
+    turn_system_instruction: Option<&str>,
+    context: Option<&WorkspaceExecutionContext>,
+) -> Option<String> {
+    let existing = turn_system_instruction
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let workspace_instruction = context.map(workspace_execution_instruction);
+    match (existing, workspace_instruction) {
+        (Some(existing), Some(workspace_instruction)) => {
+            Some(format!("{existing}\n\n{workspace_instruction}"))
+        }
+        (Some(existing), None) => Some(existing.to_string()),
+        (None, Some(workspace_instruction)) => Some(workspace_instruction),
+        (None, None) => None,
+    }
+}
+
 async fn execute_direct_tool_call(
     runtime: Arc<DirectToolRuntime>,
     tool_name: &str,
     args: Value,
 ) -> (u64, Result<Vec<ToolContentBlock>, String>) {
+    let started_at = std::time::Instant::now();
+    if runtime.cancel_token.is_cancelled() {
+        return (
+            started_at.elapsed().as_millis() as u64,
+            Err(tool_execution_cancelled_error_text(tool_name)),
+        );
+    }
     if let Some(manager) = runtime.extension_manager.as_ref() {
         if TeamExtensionManagerClient::can_handle(tool_name) {
-            let started_at = std::time::Instant::now();
             let result = if let Some(timeout_secs) = runtime.tool_timeout_secs {
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(timeout_secs),
-                    manager.call_tool_rich(tool_name, args),
-                )
-                .await
-                {
-                    Ok(Ok(blocks)) => Ok(blocks),
-                    Ok(Err(error)) => Err(format!("Error: {}", error)),
-                    Err(_) => Err(format!(
-                        "Error: tool '{}' timed out after {}s",
-                        tool_name, timeout_secs
-                    )),
+                tokio::select! {
+                    _ = runtime.cancel_token.cancelled() => Err(tool_execution_cancelled_error_text(tool_name)),
+                    outcome = tokio::time::timeout(
+                        std::time::Duration::from_secs(timeout_secs),
+                        manager.call_tool_rich(tool_name, args),
+                    ) => {
+                        match outcome {
+                            Ok(Ok(blocks)) => Ok(blocks),
+                            Ok(Err(error)) => Err(format!("Error: {}", error)),
+                            Err(_) => Err(format!(
+                                "Error: tool '{}' timed out after {}s",
+                                tool_name, timeout_secs
+                            )),
+                        }
+                    }
                 }
             } else {
-                manager
-                    .call_tool_rich(tool_name, args)
-                    .await
-                    .map_err(|error| format!("Error: {}", error))
+                tokio::select! {
+                    _ = runtime.cancel_token.cancelled() => Err(tool_execution_cancelled_error_text(tool_name)),
+                    outcome = manager.call_tool_rich(tool_name, args) => {
+                        outcome.map_err(|error| format!("Error: {}", error))
+                    }
+                }
+            };
+            let result = if runtime.cancel_token.is_cancelled() && result.is_ok() {
+                Err(tool_execution_cancelled_error_text(tool_name))
+            } else {
+                result
             };
             return (started_at.elapsed().as_millis() as u64, result);
         }
     }
 
-    TaskExecutor::execute_standard_tool_call(
+    let (duration_ms, result) = TaskExecutor::execute_standard_tool_call(
         runtime.dynamic_state.clone(),
         runtime.task_manager.clone(),
         runtime.task_id.clone(),
@@ -2287,7 +3472,15 @@ async fn execute_direct_tool_call(
         tool_name.to_string(),
         args,
     )
-    .await
+    .await;
+    if runtime.cancel_token.is_cancelled() && result.is_ok() {
+        (
+            duration_ms,
+            Err(tool_execution_cancelled_error_text(tool_name)),
+        )
+    } else {
+        (duration_ms, result)
+    }
 }
 
 fn blocks_to_call_result(blocks: &[ToolContentBlock]) -> CallToolResult {
@@ -2297,6 +3490,12 @@ fn blocks_to_call_result(blocks: &[ToolContentBlock]) -> CallToolResult {
             ToolContentBlock::Text(text) => Some(Content::text(text.clone())),
             ToolContentBlock::Image { mime_type, data } => {
                 Some(Content::image(data.clone(), mime_type.clone()))
+            }
+            ToolContentBlock::Resource { uri, mime_type, .. } => {
+                Some(Content::text(match mime_type.as_deref() {
+                    Some(mime) => format!("[Resource: {} ({})]", uri, mime),
+                    None => format!("[Resource: {}]", uri),
+                }))
             }
             ToolContentBlock::StructuredJson(_) => None,
         })
@@ -2328,6 +3527,20 @@ mod tests {
     use agime_team::models::TeamAgent;
     use serde_json::json;
     use std::sync::{Mutex, OnceLock};
+    use tokio::sync::Mutex as AsyncMutex;
+
+    #[derive(Default)]
+    struct RecordingControlSink {
+        envelopes: AsyncMutex<Vec<HarnessControlEnvelope>>,
+    }
+
+    #[async_trait::async_trait]
+    impl HarnessControlSink for RecordingControlSink {
+        async fn handle(&self, envelope: &HarnessControlEnvelope) -> Result<()> {
+            self.envelopes.lock().await.push(envelope.clone());
+            Ok(())
+        }
+    }
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -2443,7 +3656,7 @@ mod tests {
             total_tokens: None,
             input_tokens: None,
             output_tokens: None,
-            compaction_count: 0,
+            context_runtime_state: None,
             disabled_extensions: Vec::new(),
             enabled_extensions: Vec::new(),
             created_at: bson::DateTime::now(),
@@ -2457,6 +3670,7 @@ mod tests {
             last_execution_error: None,
             last_execution_finished_at: None,
             last_runtime_session_id: None,
+            last_delegation_runtime: None,
             attached_document_ids: vec!["doc-a".to_string(), "doc-b".to_string()],
             workspace_path: None,
             workspace_id: None,
@@ -2482,7 +3696,10 @@ mod tests {
             source_channel_id: Some("channel-1".to_string()),
             source_channel_name: None,
             source_thread_root_id: Some("thread-1".to_string()),
+            thread_branch: None,
+            thread_repo_ref: None,
             hidden_from_chat_list: false,
+            pending_message_workspace_files: Vec::new(),
         };
 
         let targets = host_target_artifacts(&session);
@@ -2541,7 +3758,7 @@ mod tests {
             total_tokens: None,
             input_tokens: None,
             output_tokens: None,
-            compaction_count: 0,
+            context_runtime_state: None,
             disabled_extensions: Vec::new(),
             enabled_extensions: Vec::new(),
             created_at: bson::DateTime::now(),
@@ -2555,6 +3772,7 @@ mod tests {
             last_execution_error: None,
             last_execution_finished_at: None,
             last_runtime_session_id: None,
+            last_delegation_runtime: None,
             attached_document_ids: vec!["doc-a".to_string()],
             workspace_path: None,
             workspace_id: None,
@@ -2580,7 +3798,10 @@ mod tests {
             source_channel_id: Some("channel-1".to_string()),
             source_channel_name: None,
             source_thread_root_id: None,
+            thread_branch: None,
+            thread_repo_ref: None,
             hidden_from_chat_list: false,
+            pending_message_workspace_files: Vec::new(),
         };
 
         let inferred = infer_targets_from_user_message(
@@ -2710,6 +3931,92 @@ mod tests {
             harness_mode_for_session_source("chat"),
             HarnessMode::Conversation
         );
+        assert_eq!(
+            harness_mode_for_session_source("portal"),
+            HarnessMode::Conversation
+        );
+    }
+
+    #[test]
+    fn explicit_delegation_request_is_detected_for_chat_runtime() {
+        assert!(has_explicit_delegation_request(
+            "Use exactly one subagent to inspect the current environment."
+        ));
+        assert!(has_explicit_delegation_request(
+            "Use a swarm with multiple workers to inspect the repo."
+        ));
+        assert!(has_explicit_delegation_request(
+            "请并行用多代理检查当前仓库。"
+        ));
+        assert!(!has_explicit_delegation_request(
+            "Please inspect the current environment."
+        ));
+    }
+
+    #[test]
+    fn digital_avatar_language_does_not_count_as_explicit_delegation_request() {
+        assert!(!has_explicit_delegation_request(
+            "请帮我创建一个数字分身，并配置它的服务能力。"
+        ));
+        assert!(!has_explicit_delegation_request(
+            "这个分身 Agent 需要绑定哪些文档？"
+        ));
+        assert!(has_explicit_delegation_request(
+            "请用一个子代理检查当前环境。"
+        ));
+    }
+
+    #[test]
+    fn explicit_delegation_forces_execute_for_chat_and_channel_conversation() {
+        assert!(should_force_execute_for_explicit_delegation(
+            "chat",
+            "Use exactly one subagent to inspect the current environment.",
+            false,
+        ));
+        assert!(should_force_execute_for_explicit_delegation(
+            "automation_runtime",
+            "Use exactly one subagent to inspect the current environment.",
+            false,
+        ));
+        assert!(should_force_execute_for_explicit_delegation(
+            "channel_conversation",
+            "Use swarm with multiple workers to inspect the repo.",
+            false,
+        ));
+        assert!(!should_force_execute_for_explicit_delegation(
+            "portal",
+            "Use swarm with multiple workers to inspect the repo.",
+            false,
+        ));
+        assert!(should_force_execute_for_explicit_delegation(
+            "portal",
+            "Please inspect the repo.",
+            true,
+        ));
+    }
+
+    #[test]
+    fn non_delegating_surfaces_never_force_execute_for_explicit_delegation() {
+        assert!(!should_force_execute_for_explicit_delegation(
+            "portal_manager",
+            "Use exactly one subagent to inspect the current environment.",
+            false,
+        ));
+        assert!(!should_force_execute_for_explicit_delegation(
+            "portal_manager",
+            "Please inspect the repo.",
+            true,
+        ));
+        assert!(!should_force_execute_for_explicit_delegation(
+            "scheduled_task",
+            "Use exactly one subagent to inspect the current environment.",
+            false,
+        ));
+        assert!(!should_force_execute_for_explicit_delegation(
+            "scheduled_task",
+            "Please inspect the repo.",
+            true,
+        ));
     }
 
     #[test]
@@ -2734,6 +4041,94 @@ mod tests {
             provider_turn_mode_for_session_source("system", HarnessMode::Execute),
             ProviderTurnMode::Aggregated
         );
+        assert_eq!(
+            provider_turn_mode_for_session_source("portal", HarnessMode::Conversation),
+            ProviderTurnMode::Streaming
+        );
+    }
+
+    #[test]
+    fn completion_surface_policy_tracks_channel_and_system_sources() {
+        assert_eq!(
+            completion_surface_policy_for_session_source("channel_runtime", HarnessMode::Execute),
+            CompletionSurfacePolicy::Execute
+        );
+        assert_eq!(
+            completion_surface_policy_for_session_source("chat", HarnessMode::Execute),
+            CompletionSurfacePolicy::Conversation
+        );
+        assert_eq!(
+            completion_surface_policy_for_session_source(
+                "automation_runtime",
+                HarnessMode::Conversation
+            ),
+            CompletionSurfacePolicy::Conversation
+        );
+        assert_eq!(
+            completion_surface_policy_for_session_source(
+                "channel_conversation",
+                HarnessMode::Conversation
+            ),
+            CompletionSurfacePolicy::Conversation
+        );
+        assert_eq!(
+            completion_surface_policy_for_session_source("system", HarnessMode::Execute),
+            CompletionSurfacePolicy::SystemDocumentAnalysis
+        );
+        assert_eq!(
+            completion_surface_policy_for_session_source("portal", HarnessMode::Conversation),
+            CompletionSurfacePolicy::Conversation
+        );
+    }
+
+    #[test]
+    fn completion_contract_tracks_execute_and_system_surfaces() {
+        let execute_contract =
+            completion_contract_for_session_source("channel_runtime", HarnessMode::Execute, true)
+                .expect("execute contract");
+        let execute_schema = execute_contract.json_schema.expect("execute schema");
+        assert!(execute_schema["required"].to_string().contains("summary"));
+        assert!(!execute_schema["required"]
+            .to_string()
+            .contains("reason_code"));
+
+        assert!(completion_contract_for_session_source(
+            "channel_runtime",
+            HarnessMode::Execute,
+            false
+        )
+        .is_none());
+        assert!(completion_contract_for_session_source(
+            "channel_conversation",
+            HarnessMode::Conversation,
+            true
+        )
+        .is_none());
+        assert!(
+            completion_contract_for_session_source("portal", HarnessMode::Conversation, true)
+                .is_none()
+        );
+
+        let system_contract =
+            completion_contract_for_session_source("system", HarnessMode::Execute, false)
+                .expect("system contract");
+        let system_schema = system_contract.json_schema.expect("system schema");
+        assert!(system_schema["required"]
+            .to_string()
+            .contains("reason_code"));
+        assert!(system_schema["required"]
+            .to_string()
+            .contains("analysis_complete"));
+    }
+
+    #[test]
+    fn system_sessions_require_document_tool_contract() {
+        let prefixes = required_tool_prefixes_for_session_source("system");
+        assert!(prefixes.contains(&"document_tools__read_document".to_string()));
+        assert!(prefixes.contains(&"document_tools__export_document".to_string()));
+        assert!(prefixes.contains(&"document_tools__import_document_to_workspace".to_string()));
+        assert!(required_tool_prefixes_for_session_source("chat").is_empty());
+        assert!(required_tool_prefixes_for_session_source("portal").is_empty());
     }
 
     #[test]
@@ -2786,6 +4181,549 @@ mod tests {
     }
 
     #[test]
+    fn context_runtime_compaction_event_reflects_projection_transition() {
+        let initial = ContextRuntimeState::default();
+        let mut final_state = ContextRuntimeState {
+            runtime_compactions: 1,
+            last_compact_reason: Some("budget_exceeded".to_string()),
+            ..ContextRuntimeState::default()
+        };
+        final_state.last_projection_stats = Some(agime::context_runtime::ProjectionStats {
+            base_agent_messages: 10,
+            projected_agent_messages: 4,
+            snip_removed_count: 2,
+            microcompacted_count: 1,
+            raw_token_estimate: 2000,
+            projected_token_estimate: 1200,
+            freed_token_estimate: 800,
+            updated_at: 1,
+        });
+        final_state.set_session_memory(Some(agime::context_runtime::SessionMemoryState {
+            summary: "compact".to_string(),
+            summarized_through_message_id: None,
+            preserved_start_index: 0,
+            preserved_end_index: 0,
+            preserved_start_message_id: None,
+            preserved_end_message_id: None,
+            preserved_message_count: 0,
+            preserved_token_estimate: 0,
+            tail_anchor_index: 0,
+            tail_anchor_message_id: None,
+            updated_at: 1,
+        }));
+
+        let event = build_context_runtime_compaction_event(Some(&initial), Some(&final_state))
+            .expect("compaction event");
+
+        match event {
+            StreamEvent::Compaction {
+                strategy,
+                before_tokens,
+                after_tokens,
+                phase,
+                reason,
+            } => {
+                assert_eq!(strategy, "context_runtime");
+                assert_eq!(before_tokens, 2000);
+                assert_eq!(after_tokens, 1200);
+                assert_eq!(phase.as_deref(), Some("session_memory_compaction"));
+                assert_eq!(reason.as_deref(), Some("budget_exceeded"));
+            }
+            other => panic!("expected compaction event, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn compaction_mirror_keeps_stream_and_control_aligned() {
+        let event = StreamEvent::Compaction {
+            strategy: "context_runtime".to_string(),
+            before_tokens: 2000,
+            after_tokens: 1200,
+            phase: Some("session_memory_compaction".to_string()),
+            reason: Some("budget_exceeded".to_string()),
+        };
+        let mirror = compaction_mirror(&event).expect("compaction mirror");
+        let stream_event =
+            stream_event_for_control_projection(&mirror).expect("project compaction stream");
+        let stream_value =
+            serde_json::to_value(&stream_event).expect("serialize compaction stream");
+        let control_value = serde_json::to_value(&mirror).expect("serialize compaction control");
+
+        assert_eq!(stream_value["strategy"], "context_runtime");
+        assert_eq!(control_value["event"]["type"], "compaction_observed");
+        assert_eq!(control_value["event"]["strategy"], "context_runtime");
+        assert_eq!(control_value["event"]["reason"], "budget_exceeded");
+    }
+
+    #[test]
+    fn control_label_helpers_cover_tool_and_runtime_messages() {
+        let tool_message =
+            HarnessControlMessage::Tool(agime::agents::ToolControlEvent::TransportRequested {
+                request_id: "req-1".to_string(),
+                tool_name: "document_tools__read_document".to_string(),
+                transport: "server_local".to_string(),
+                surface: "execute_host".to_string(),
+            });
+        assert_eq!(control_channel_label(&tool_message), "tool");
+        assert_eq!(
+            control_event_type_label(&tool_message),
+            "transport_requested"
+        );
+
+        let runtime_message =
+            HarnessControlMessage::Runtime(RuntimeControlEvent::CompactionObserved {
+                strategy: Some("history_replaced".to_string()),
+                reason: Some("agent_event_history_replaced".to_string()),
+                before_tokens: None,
+                after_tokens: None,
+                phase: None,
+            });
+        assert_eq!(control_channel_label(&runtime_message), "runtime");
+        assert_eq!(
+            control_event_type_label(&runtime_message),
+            "compaction_observed"
+        );
+    }
+
+    #[test]
+    fn worker_control_messages_preserve_attempt_identity() {
+        let mut snapshot = agime::agents::TaskSnapshot {
+            task_id: "task-1".to_string(),
+            parent_session_id: "runtime-1".to_string(),
+            depth: 1,
+            kind: TaskKind::SwarmWorker,
+            status: agime::agents::TaskStatus::Running,
+            description: Some("worker".to_string()),
+            write_scope: vec!["docs".to_string()],
+            target_artifacts: vec!["docs/a.md".to_string()],
+            result_contract: vec!["docs/a.md".to_string()],
+            summary: None,
+            produced_delta: false,
+            accepted_targets: Vec::new(),
+            metadata: HashMap::new(),
+            started_at: 1,
+            updated_at: 1,
+            finished_at: None,
+        };
+        let attempt_identity =
+            WorkerAttemptIdentity::followup("worker-1", "attempt-2", 2, "correction", "task-0");
+        attempt_identity.write_to_metadata(&mut snapshot.metadata);
+
+        let started = build_worker_started_control_message(&snapshot);
+        let finished = build_worker_finished_control_message(
+            "task-1".to_string(),
+            TaskKind::SwarmWorker,
+            "completed",
+            "done".to_string(),
+            true,
+            Some(&attempt_identity),
+        );
+
+        let started_value = serde_json::to_value(started).expect("serialize started");
+        let finished_value = serde_json::to_value(finished).expect("serialize finished");
+        assert_eq!(started_value["event"]["logical_worker_id"], "worker-1");
+        assert_eq!(started_value["event"]["attempt_id"], "attempt-2");
+        assert_eq!(finished_value["event"]["attempt_index"], 2);
+        assert_eq!(finished_value["event"]["previous_task_id"], "task-0");
+    }
+
+    #[tokio::test]
+    async fn worker_started_mirror_keeps_stream_and_control_aligned() {
+        let mut snapshot = agime::agents::TaskSnapshot {
+            task_id: "task-1".to_string(),
+            parent_session_id: "runtime-1".to_string(),
+            depth: 1,
+            kind: TaskKind::SwarmWorker,
+            status: agime::agents::TaskStatus::Running,
+            description: Some("worker".to_string()),
+            write_scope: vec!["docs".to_string()],
+            target_artifacts: vec!["docs/a.md".to_string()],
+            result_contract: vec!["docs/a.md".to_string()],
+            summary: None,
+            produced_delta: false,
+            accepted_targets: Vec::new(),
+            metadata: HashMap::new(),
+            started_at: 1,
+            updated_at: 1,
+            finished_at: None,
+        };
+        let attempt_identity =
+            WorkerAttemptIdentity::followup("worker-1", "attempt-2", 2, "correction", "task-0");
+        attempt_identity.write_to_metadata(&mut snapshot.metadata);
+
+        let mirror = worker_started_mirror(&snapshot, Some(&attempt_identity));
+        let stream_event =
+            stream_event_for_control_projection(&mirror).expect("project worker started stream");
+        let stream_value =
+            serde_json::to_value(&stream_event).expect("serialize worker started stream");
+        let control_value =
+            serde_json::to_value(&mirror).expect("serialize worker started control");
+
+        assert_eq!(stream_value["task_id"], "task-1");
+        assert_eq!(stream_value["logical_worker_id"], "worker-1");
+        assert_eq!(control_value["event"]["task_id"], "task-1");
+        assert_eq!(control_value["event"]["logical_worker_id"], "worker-1");
+    }
+
+    #[tokio::test]
+    async fn permission_requested_mirror_keeps_stream_and_control_aligned() {
+        let attempt_identity = WorkerAttemptIdentity::fresh("worker-1", "attempt-1");
+        let mirror = permission_requested_mirror(
+            "task-1".to_string(),
+            Some("worker-a".to_string()),
+            "developer__shell".to_string(),
+            Some(&attempt_identity),
+        );
+        let stream_event =
+            stream_event_for_control_projection(&mirror).expect("project permission stream");
+        let stream_value =
+            serde_json::to_value(&stream_event).expect("serialize permission stream");
+        let control_value = serde_json::to_value(&mirror).expect("serialize permission control");
+
+        assert_eq!(stream_value["task_id"], "task-1");
+        assert_eq!(stream_value["tool_name"], "developer__shell");
+        assert_eq!(control_value["event"]["request_id"], "task-1");
+        assert_eq!(control_value["event"]["attempt_id"], "attempt-1");
+    }
+
+    #[tokio::test]
+    async fn permission_resolved_mirror_keeps_stream_and_control_aligned() {
+        let attempt_identity = WorkerAttemptIdentity::fresh("worker-1", "attempt-1");
+        let mirror = permission_resolved_mirror(
+            "task-1".to_string(),
+            Some("worker-a".to_string()),
+            "developer__shell".to_string(),
+            "allow_once".to_string(),
+            Some("config".to_string()),
+            Some(&attempt_identity),
+        );
+        let stream_event = stream_event_for_control_projection(&mirror)
+            .expect("project permission resolved stream");
+        let stream_value =
+            serde_json::to_value(&stream_event).expect("serialize permission resolved stream");
+        let control_value =
+            serde_json::to_value(&mirror).expect("serialize permission resolved control");
+
+        assert_eq!(stream_value["task_id"], "task-1");
+        assert_eq!(stream_value["decision"], "allow_once");
+        assert_eq!(stream_value["source"], "config");
+        assert_eq!(control_value["event"]["request_id"], "task-1");
+        assert_eq!(control_value["event"]["decision"], "allow_once");
+        assert_eq!(control_value["event"]["source"], "config");
+    }
+
+    #[tokio::test]
+    async fn worker_progress_mirror_keeps_stream_and_control_aligned() {
+        let mirror = worker_progress_mirror("task-1".to_string(), "halfway".to_string(), Some(50));
+        let stream_event =
+            stream_event_for_control_projection(&mirror).expect("project progress stream");
+        let stream_value = serde_json::to_value(&stream_event).expect("serialize progress stream");
+        let control_value = serde_json::to_value(&mirror).expect("serialize progress control");
+
+        assert_eq!(stream_value["task_id"], "task-1");
+        assert_eq!(stream_value["percent"], 50);
+        assert_eq!(control_value["event"]["task_id"], "task-1");
+        assert_eq!(control_value["event"]["percent"], 50);
+    }
+
+    #[tokio::test]
+    async fn worker_followup_mirror_keeps_stream_and_control_aligned() {
+        let attempt_identity =
+            WorkerAttemptIdentity::followup("worker-1", "attempt-2", 2, "correction", "task-0");
+        let mirror = worker_followup_mirror(
+            "task-1".to_string(),
+            "correction".to_string(),
+            "validator asked for retry".to_string(),
+            Some(&attempt_identity),
+        );
+        let stream_event =
+            stream_event_for_control_projection(&mirror).expect("project followup stream");
+        let stream_value = serde_json::to_value(&stream_event).expect("serialize followup stream");
+        let control_value = serde_json::to_value(&mirror).expect("serialize followup control");
+
+        assert_eq!(stream_value["task_id"], "task-1");
+        assert_eq!(stream_value["previous_task_id"], "task-0");
+        assert_eq!(control_value["event"]["task_id"], "task-1");
+        assert_eq!(control_value["event"]["kind"], "correction");
+    }
+
+    #[tokio::test]
+    async fn worker_idle_mirror_keeps_stream_and_control_aligned() {
+        let attempt_identity = WorkerAttemptIdentity::fresh("worker-1", "attempt-1");
+        let mirror = worker_idle_mirror(
+            "task-1".to_string(),
+            "waiting".to_string(),
+            Some(&attempt_identity),
+        );
+        let stream_event =
+            stream_event_for_control_projection(&mirror).expect("project idle stream");
+        let stream_value = serde_json::to_value(&stream_event).expect("serialize idle stream");
+        let control_value = serde_json::to_value(&mirror).expect("serialize idle control");
+
+        assert_eq!(stream_value["task_id"], "task-1");
+        assert_eq!(stream_value["attempt_id"], "attempt-1");
+        assert_eq!(control_value["event"]["task_id"], "task-1");
+        assert_eq!(control_value["event"]["message"], "waiting");
+    }
+
+    #[tokio::test]
+    async fn permission_timed_out_mirror_keeps_stream_and_control_aligned() {
+        let attempt_identity = WorkerAttemptIdentity::fresh("worker-1", "attempt-1");
+        let mirror = permission_timed_out_mirror(
+            "task-1".to_string(),
+            Some("worker-a".to_string()),
+            "developer__shell".to_string(),
+            5000,
+            Some(&attempt_identity),
+        );
+        let stream_event =
+            stream_event_for_control_projection(&mirror).expect("project timed out stream");
+        let stream_value = serde_json::to_value(&stream_event).expect("serialize timed out stream");
+        let control_value = serde_json::to_value(&mirror).expect("serialize timed out control");
+
+        assert_eq!(stream_value["task_id"], "task-1");
+        assert_eq!(stream_value["timeout_ms"], 5000);
+        assert_eq!(control_value["event"]["request_id"], "task-1");
+        assert_eq!(control_value["event"]["timeout_ms"], 5000);
+    }
+
+    #[tokio::test]
+    async fn worker_finished_mirror_keeps_stream_and_control_aligned() {
+        let attempt_identity =
+            WorkerAttemptIdentity::followup("worker-1", "attempt-2", 2, "correction", "task-0");
+        let mirror = worker_finished_mirror(
+            "task-1".to_string(),
+            TaskKind::SwarmWorker,
+            "completed",
+            "done".to_string(),
+            true,
+            Some(&attempt_identity),
+        );
+        let stream_event =
+            stream_event_for_control_projection(&mirror).expect("project finished stream");
+        let stream_value = serde_json::to_value(&stream_event).expect("serialize finished stream");
+        let control_value = serde_json::to_value(&mirror).expect("serialize finished control");
+
+        assert_eq!(stream_value["task_id"], "task-1");
+        assert_eq!(stream_value["previous_task_id"], "task-0");
+        assert_eq!(control_value["event"]["task_id"], "task-1");
+        assert_eq!(control_value["event"]["status"], "completed");
+    }
+
+    #[tokio::test]
+    async fn tool_started_mirror_keeps_stream_and_control_aligned() {
+        let mirror = tool_started_mirror("req-1".to_string(), "developer__shell".to_string());
+        let stream_event =
+            stream_event_for_control_projection(&mirror).expect("project tool started stream");
+        let stream_value =
+            serde_json::to_value(&stream_event).expect("serialize tool started stream");
+        let control_value = serde_json::to_value(&mirror).expect("serialize tool started control");
+
+        assert_eq!(stream_value["id"], "req-1");
+        assert_eq!(stream_value["name"], "developer__shell");
+        assert_eq!(control_value["event"]["request_id"], "req-1");
+        assert_eq!(control_value["event"]["tool_name"], "developer__shell");
+    }
+
+    #[tokio::test]
+    async fn tool_finished_mirror_keeps_stream_and_control_aligned() {
+        let mirror = tool_finished_mirror(
+            "req-1".to_string(),
+            "developer__shell".to_string(),
+            true,
+            "done".to_string(),
+            Some(42),
+        );
+        let stream_event =
+            stream_event_for_control_projection(&mirror).expect("project tool result stream");
+        let stream_value =
+            serde_json::to_value(&stream_event).expect("serialize tool result stream");
+        let control_value = serde_json::to_value(&mirror).expect("serialize tool result control");
+
+        assert_eq!(stream_value["id"], "req-1");
+        assert_eq!(stream_value["success"], true);
+        assert_eq!(control_value["event"]["request_id"], "req-1");
+        assert_eq!(control_value["event"]["success"], true);
+        assert_eq!(control_value["event"]["duration_ms"], 42);
+    }
+
+    #[test]
+    fn runtime_control_registry_suppresses_duplicate_permission_resolution() {
+        let registry = RuntimeControlRegistry::default();
+        let message = build_permission_resolved_control_message(
+            "perm-1",
+            "developer__shell",
+            "allow_once",
+            Some("config".to_string()),
+            None,
+            Some("worker-a".to_string()),
+            Some(&WorkerAttemptIdentity::fresh("worker-1", "attempt-1")),
+        );
+        assert!(matches!(
+            registry.classify(&message),
+            ControlEmissionDecision::Emit
+        ));
+        assert!(matches!(
+            registry.classify(&message),
+            ControlEmissionDecision::Duplicate(_)
+        ));
+    }
+
+    #[test]
+    fn runtime_control_registry_suppresses_stale_permission_timeout_after_resolution() {
+        let registry = RuntimeControlRegistry::default();
+        let resolved = build_permission_resolved_control_message(
+            "perm-1",
+            "developer__shell",
+            "allow_once",
+            Some("config".to_string()),
+            None,
+            Some("worker-a".to_string()),
+            Some(&WorkerAttemptIdentity::fresh("worker-1", "attempt-1")),
+        );
+        let timed_out = build_permission_timed_out_control_message(
+            "perm-1",
+            "developer__shell",
+            5000,
+            Some("worker-a".to_string()),
+            Some(&WorkerAttemptIdentity::fresh("worker-1", "attempt-1")),
+        );
+        assert!(matches!(
+            registry.classify(&resolved),
+            ControlEmissionDecision::Emit
+        ));
+        assert!(matches!(
+            registry.classify(&timed_out),
+            ControlEmissionDecision::Stale(_)
+        ));
+    }
+
+    #[test]
+    fn runtime_control_registry_suppresses_duplicate_tool_finished() {
+        let registry = RuntimeControlRegistry::default();
+        let message = build_tool_finished_control_message(
+            "req-1",
+            "developer__shell",
+            true,
+            Some("done".to_string()),
+            Some(42),
+        );
+        assert!(matches!(
+            registry.classify(&message),
+            ControlEmissionDecision::Emit
+        ));
+        assert!(matches!(
+            registry.classify(&message),
+            ControlEmissionDecision::Duplicate(_)
+        ));
+    }
+
+    #[test]
+    fn runtime_control_registry_suppresses_stale_worker_finished_attempt() {
+        let registry = RuntimeControlRegistry::default();
+        let first_attempt = WorkerAttemptIdentity::fresh("worker-1", "attempt-1");
+        let second_attempt =
+            WorkerAttemptIdentity::followup("worker-1", "attempt-2", 1, "correction", "task-1");
+        let mut first_snapshot = agime::agents::TaskSnapshot {
+            task_id: "task-1".to_string(),
+            parent_session_id: "runtime-1".to_string(),
+            depth: 1,
+            kind: TaskKind::SwarmWorker,
+            status: agime::agents::TaskStatus::Running,
+            description: Some("worker".to_string()),
+            write_scope: Vec::new(),
+            target_artifacts: Vec::new(),
+            result_contract: Vec::new(),
+            summary: None,
+            produced_delta: false,
+            accepted_targets: Vec::new(),
+            metadata: HashMap::new(),
+            started_at: 1,
+            updated_at: 1,
+            finished_at: None,
+        };
+        first_attempt.write_to_metadata(&mut first_snapshot.metadata);
+        let mut second_snapshot = first_snapshot.clone();
+        second_snapshot.task_id = "task-2".to_string();
+        second_snapshot.metadata.clear();
+        second_attempt.write_to_metadata(&mut second_snapshot.metadata);
+
+        assert!(matches!(
+            registry.classify(&build_worker_started_control_message(&first_snapshot)),
+            ControlEmissionDecision::Emit
+        ));
+        assert!(matches!(
+            registry.classify(&build_worker_started_control_message(&second_snapshot)),
+            ControlEmissionDecision::Emit
+        ));
+        let stale_finished = build_worker_finished_control_message(
+            "task-1",
+            TaskKind::SwarmWorker,
+            "failed",
+            "old attempt".to_string(),
+            false,
+            Some(&first_attempt),
+        );
+        assert!(matches!(
+            registry.classify(&stale_finished),
+            ControlEmissionDecision::Stale(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn emit_task_control_message_uses_registered_sequencer() {
+        let sink = RecordingControlSink::default();
+        let runtime_session_id = "runtime-control-test";
+        let sequencer = Arc::new(agime::agents::HarnessControlSequencer::new(
+            "logical-control-test",
+            runtime_session_id,
+        ));
+        agime::agents::register_harness_control_sequencer(runtime_session_id, sequencer);
+
+        emit_task_control_message(
+            &sink,
+            runtime_session_id,
+            HarnessControlMessage::Worker(WorkerControlEvent::Idle {
+                task_id: "task-1".to_string(),
+                message: "waiting".to_string(),
+                logical_worker_id: None,
+                attempt_id: None,
+            }),
+        )
+        .await;
+
+        let envelopes = sink.envelopes.lock().await.clone();
+        agime::agents::unregister_harness_control_sequencer(runtime_session_id);
+
+        assert_eq!(envelopes.len(), 1);
+        assert_eq!(envelopes[0].session_id, "logical-control-test");
+        assert_eq!(envelopes[0].runtime_session_id, runtime_session_id);
+        assert_eq!(envelopes[0].sequence, 1);
+        assert_eq!(control_channel_label(&envelopes[0].payload), "worker");
+    }
+
+    #[tokio::test]
+    async fn emit_task_control_message_is_noop_without_registered_sequencer() {
+        let sink = RecordingControlSink::default();
+
+        emit_task_control_message(
+            &sink,
+            "runtime-missing-sequencer",
+            HarnessControlMessage::Permission(PermissionControlEvent::TimedOut {
+                request_id: "perm-1".to_string(),
+                tool_name: "developer__shell".to_string(),
+                timeout_ms: 5000,
+                worker_name: None,
+                logical_worker_id: None,
+                attempt_id: None,
+            }),
+        )
+        .await;
+
+        assert!(sink.envelopes.lock().await.is_empty());
+    }
+
+    #[test]
     fn parses_execution_host_completion_report() {
         let report = agime::agents::parse_execution_host_completion_report(Some(
             r#"{"status":"completed","summary":"done","produced_artifacts":["artifacts/a.md"],"accepted_artifacts":["artifacts/a.md"],"next_steps":[]}"#,
@@ -2811,6 +4749,7 @@ mod tests {
             messages_json: "[]".to_string(),
             message_count: 0,
             total_tokens: None,
+            context_runtime_state: None,
             last_assistant_text: Some("assistant text".to_string()),
             completion_report: Some(ExecutionHostCompletionReport {
                 status: "completed".to_string(),
@@ -2824,6 +4763,9 @@ mod tests {
                 content_accessed: None,
                 analysis_complete: None,
             }),
+            persisted_child_evidence: Vec::new(),
+            persisted_child_transcript_resume: Vec::new(),
+            transition_trace: None,
             events_emitted: 0,
             signal_summary: Some(agime::agents::CoordinatorSignalSummary {
                 completion_ready: true,
@@ -2841,8 +4783,12 @@ mod tests {
             messages_json: "[]".to_string(),
             message_count: 0,
             total_tokens: None,
+            context_runtime_state: None,
             last_assistant_text: None,
             completion_report: None,
+            persisted_child_evidence: Vec::new(),
+            persisted_child_transcript_resume: Vec::new(),
+            transition_trace: None,
             events_emitted: 0,
             signal_summary: Some(agime::agents::CoordinatorSignalSummary::default()),
             completion_outcome: Some(ExecuteCompletionOutcome {
@@ -2868,11 +4814,15 @@ mod tests {
             messages_json: "[]".to_string(),
             message_count: 0,
             total_tokens: None,
+            context_runtime_state: None,
             last_assistant_text: Some(
                 "你好！我们可以先聊清楚问题。\nValidation: not_run\nNext steps:\n- retry later\n(no_tool_backed_progress)"
                     .to_string(),
             ),
             completion_report: None,
+            persisted_child_evidence: Vec::new(),
+            persisted_child_transcript_resume: Vec::new(),
+            transition_trace: None,
             events_emitted: 0,
             signal_summary: None,
             completion_outcome: None,
@@ -2880,6 +4830,17 @@ mod tests {
         assert_eq!(
             outcome.user_visible_summary().as_deref(),
             Some("你好！我们可以先聊清楚问题。")
+        );
+    }
+
+    #[test]
+    fn sanitize_user_visible_runtime_text_normalizes_noise_separator() {
+        assert_eq!(
+            sanitize_user_visible_runtime_text(Some(
+                "Result: README.md **does not exist** бк file not found."
+            ))
+            .as_deref(),
+            Some("Result: README.md **does not exist** - file not found.")
         );
     }
 
@@ -2998,7 +4959,9 @@ mod tests {
         assert_eq!(report.status, "blocked");
         assert_eq!(
             report.blocking_reason.as_deref(),
-            Some("document analysis summary is still future intent; final analysis content is missing")
+            Some(
+                "document analysis summary is still future intent; final analysis content is missing"
+            )
         );
     }
 

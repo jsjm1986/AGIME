@@ -26,9 +26,13 @@ import {
   CustomExtensionConfig,
   DEFAULT_EXTENSIONS,
   DelegationPolicy,
+  RuntimeProfilePreview,
+  RuntimeOptimizationMode,
   SkillBindingMode,
 } from '../../api/agent';
 import { userGroupApi, UserGroupSummary } from '../../api/userGroups';
+
+const normalizeMaxConcurrentTasks = (value: number) => Math.max(1, value || 1);
 
 interface Props {
   teamId: string;
@@ -36,6 +40,17 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   onCreated: () => void;
 }
+
+type AttachedTeamExtensionWire = {
+  extensionId: string;
+  enabled: boolean;
+  runtimeName?: string;
+  displayName?: string;
+  transport?: string;
+};
+
+const MAX_MODEL_RUNTIME_TOKENS = 2_000_000;
+const MAX_MODEL_CONTEXT_LIMIT = 2_000_000;
 
 export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Props) {
   const { t } = useTranslation();
@@ -53,6 +68,13 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
   const [maxTokens, setMaxTokens] = useState<string>('');
   const [contextLimit, setContextLimit] = useState<string>('');
   const [thinkingEnabled, setThinkingEnabled] = useState(true);
+  const [thinkingBudget, setThinkingBudget] = useState<string>('');
+  const [reasoningEffort, setReasoningEffort] = useState('auto');
+  const [outputReserveTokens, setOutputReserveTokens] = useState<string>('');
+  const [autoCompactThreshold, setAutoCompactThreshold] = useState<string>('');
+  const [promptCachingMode, setPromptCachingMode] = useState<RuntimeOptimizationMode>('auto');
+  const [cacheEditMode, setCacheEditMode] = useState<RuntimeOptimizationMode>('auto');
+  const [runtimePreview, setRuntimePreview] = useState<RuntimeProfilePreview | null>(null);
 
   // Extension configuration state
   const [enabledExtensions, setEnabledExtensions] = useState<AgentExtensionConfig[]>(
@@ -76,6 +98,83 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
     }
   }, [teamId, open]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const trimmed = model.trim();
+    if (!open || !trimmed) {
+        setRuntimePreview(null);
+      return;
+    }
+    agentApi.runtimeProfilePreview(trimmed, apiFormat, {
+      apiUrl: apiUrl.trim() || undefined,
+      contextLimit: contextLimit ? parseInt(contextLimit, 10) : undefined,
+      maxTokens: maxTokens ? parseInt(maxTokens, 10) : undefined,
+      thinkingEnabled,
+      thinkingBudget: thinkingBudget ? parseInt(thinkingBudget, 10) : undefined,
+      reasoningEffort: reasoningEffort === 'auto' ? undefined : reasoningEffort,
+      outputReserveTokens: outputReserveTokens ? parseInt(outputReserveTokens, 10) : undefined,
+      autoCompactThreshold: autoCompactThreshold ? parseFloat(autoCompactThreshold) : undefined,
+      promptCachingMode,
+      cacheEditMode,
+    })
+      .then((preview) => {
+        if (!cancelled) setRuntimePreview(preview);
+      })
+      .catch(() => {
+        if (!cancelled) setRuntimePreview(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    apiFormat,
+    apiUrl,
+    autoCompactThreshold,
+    cacheEditMode,
+    contextLimit,
+    maxTokens,
+    model,
+    open,
+    outputReserveTokens,
+    promptCachingMode,
+    reasoningEffort,
+    thinkingBudget,
+    thinkingEnabled,
+  ]);
+
+  useEffect(() => {
+    if (!runtimePreview) return;
+
+    const effective = runtimePreview.effectiveExecution;
+    const hinted = runtimePreview.hintedCapabilities;
+    const runtimeCaps = runtimePreview.runtimeCapabilities;
+    const suggestedMaxTokens =
+      typeof effective?.maxCompletionTokens === 'number'
+        ? effective.maxCompletionTokens
+        : hinted?.maxCompletionTokens ?? runtimeCaps?.maxCompletionTokens;
+    const suggestedContextLimit =
+      typeof effective?.contextLimit === 'number'
+        ? effective.contextLimit
+        : runtimeCaps?.contextLength ?? hinted?.contextLength;
+
+    if (!maxTokens && suggestedMaxTokens) {
+      setMaxTokens(String(Math.min(suggestedMaxTokens, MAX_MODEL_RUNTIME_TOKENS)));
+    }
+    if (!contextLimit && suggestedContextLimit) {
+      setContextLimit(String(Math.min(suggestedContextLimit, MAX_MODEL_CONTEXT_LIMIT)));
+    }
+  }, [
+    cacheEditMode,
+    contextLimit,
+    maxTokens,
+    promptCachingMode,
+    reasoningEffort,
+    runtimePreview,
+    temperature,
+    thinkingBudget,
+    thinkingEnabled,
+  ]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
@@ -94,17 +193,34 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
         api_format: apiFormat,
         enabled_extensions: enabledExtensions,
         custom_extensions: customExtensions,
-        attached_team_extensions: attachedTeamExtensions,
         skill_binding_mode: skillBindingMode,
         delegation_policy: delegationPolicy,
         allowed_groups: allowedGroups,
-        max_concurrent_tasks: maxConcurrent,
+        max_concurrent_tasks: normalizeMaxConcurrentTasks(maxConcurrent),
         temperature: temperature ? parseFloat(temperature) : undefined,
         max_tokens: maxTokens ? parseInt(maxTokens) : undefined,
         context_limit: contextLimit ? parseInt(contextLimit) : undefined,
         thinking_enabled: thinkingEnabled,
+        thinking_budget: thinkingBudget ? parseInt(thinkingBudget) : undefined,
+        reasoning_effort: reasoningEffort === 'auto' ? undefined : reasoningEffort.trim(),
+        output_reserve_tokens: outputReserveTokens ? parseInt(outputReserveTokens) : undefined,
+        auto_compact_threshold: autoCompactThreshold ? parseFloat(autoCompactThreshold) : undefined,
+        prompt_caching_mode: promptCachingMode,
+        cache_edit_mode: cacheEditMode,
       };
-      await agentApi.createAgent(req);
+      const wireReq: Omit<CreateAgentRequest, 'attached_team_extensions'> & {
+        attached_team_extensions: AttachedTeamExtensionWire[];
+      } = {
+        ...req,
+        attached_team_extensions: attachedTeamExtensions.map((item) => ({
+          extensionId: item.extension_id,
+          enabled: item.enabled,
+          runtimeName: item.runtime_name,
+          displayName: item.display_name,
+          transport: item.transport,
+        })),
+      };
+      await agentApi.createAgent(wireReq as unknown as CreateAgentRequest);
       onCreated();
       onOpenChange(false);
       resetForm();
@@ -135,6 +251,12 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
     setMaxTokens('');
     setContextLimit('');
     setThinkingEnabled(true);
+    setThinkingBudget('');
+    setReasoningEffort('auto');
+    setOutputReserveTokens('');
+    setAutoCompactThreshold('');
+    setPromptCachingMode('auto');
+    setCacheEditMode('auto');
     setShowApiKey(false);
   };
 
@@ -157,7 +279,12 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
             <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="basic">{t('agent.tabs.basic')}</TabsTrigger>
               <TabsTrigger value="extensions">{t('agent.tabs.extensions')}</TabsTrigger>
-              <TabsTrigger value="execution">{t('agent.tabs.execution', '执行策略')}</TabsTrigger>
+              <TabsTrigger value="execution">
+                {t(
+                  'agent.tabs.execution',
+                  t('agent.execution.title', 'Execution Policy')
+                )}
+              </TabsTrigger>
               <TabsTrigger value="access">{t('agent.tabs.access')}</TabsTrigger>
             </TabsList>
 
@@ -209,6 +336,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
                   <SelectContent>
                     <SelectItem value="openai">OpenAI {t('agent.create.compatible')}</SelectItem>
                     <SelectItem value="anthropic">Anthropic {t('agent.create.compatible')}</SelectItem>
+                    <SelectItem value="litellm">LiteLLM {t('agent.create.compatible')}</SelectItem>
                     <SelectItem value="local">{t('agent.create.localModel')}</SelectItem>
                   </SelectContent>
                 </Select>
@@ -283,10 +411,16 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
                       id="maxTokens"
                       type="number"
                       min="1"
-                      max="200000"
+                      max={MAX_MODEL_RUNTIME_TOKENS}
                       value={maxTokens}
                       onChange={(e) => setMaxTokens(e.target.value)}
-                      placeholder="4096"
+                      placeholder={
+                        runtimePreview?.hintedCapabilities?.maxCompletionTokens
+                          ? String(Math.min(runtimePreview.hintedCapabilities.maxCompletionTokens, MAX_MODEL_RUNTIME_TOKENS))
+                          : runtimePreview?.runtimeCapabilities?.maxCompletionTokens
+                            ? String(Math.min(runtimePreview.runtimeCapabilities.maxCompletionTokens, MAX_MODEL_RUNTIME_TOKENS))
+                            : '4096'
+                      }
                       className="h-8 text-sm"
                     />
                   </div>
@@ -296,12 +430,103 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
                       id="contextLimit"
                       type="number"
                       min="1024"
-                      max="2000000"
+                      max={MAX_MODEL_CONTEXT_LIMIT}
                       value={contextLimit}
                       onChange={(e) => setContextLimit(e.target.value)}
-                      placeholder="128000"
+                      placeholder={
+                        runtimePreview?.runtimeCapabilities?.contextLength
+                          ? String(Math.min(runtimePreview.runtimeCapabilities.contextLength, MAX_MODEL_CONTEXT_LIMIT))
+                          : runtimePreview?.hintedCapabilities?.contextLength
+                            ? String(Math.min(runtimePreview.hintedCapabilities.contextLength, MAX_MODEL_CONTEXT_LIMIT))
+                            : '128000'
+                      }
                       className="h-8 text-sm"
                     />
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="thinkingBudget" className="text-xs">{t('agent.create.thinkingBudget', 'Thinking Budget')}</Label>
+                    <Input
+                      id="thinkingBudget"
+                      type="number"
+                      min="0"
+                      max="100000"
+                      disabled={!thinkingEnabled}
+                      value={thinkingBudget}
+                      onChange={(e) => setThinkingBudget(e.target.value)}
+                      placeholder="16000"
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="reasoningEffort" className="text-xs">{t('agent.create.reasoningEffort', 'Reasoning Effort')}</Label>
+                    <Select value={reasoningEffort} onValueChange={setReasoningEffort}>
+                      <SelectTrigger id="reasoningEffort" className="h-8 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">auto</SelectItem>
+                        <SelectItem value="low">low</SelectItem>
+                        <SelectItem value="medium">medium</SelectItem>
+                        <SelectItem value="high">high</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="outputReserveTokens" className="text-xs">{t('agent.create.outputReserveTokens', 'Output Reserve')}</Label>
+                    <Input
+                      id="outputReserveTokens"
+                      type="number"
+                      min="0"
+                      max="500000"
+                      value={outputReserveTokens}
+                      onChange={(e) => setOutputReserveTokens(e.target.value)}
+                      placeholder="8000"
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="autoCompactThreshold" className="text-xs">{t('agent.create.autoCompactThreshold', 'Auto Compact Threshold')}</Label>
+                    <Input
+                      id="autoCompactThreshold"
+                      type="number"
+                      min="0.1"
+                      max="0.99"
+                      step="0.01"
+                      value={autoCompactThreshold}
+                      onChange={(e) => setAutoCompactThreshold(e.target.value)}
+                      placeholder="0.80"
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="promptCachingMode" className="text-xs">{t('agent.create.promptCachingMode', 'Prompt Caching')}</Label>
+                    <Select value={promptCachingMode} onValueChange={(value) => setPromptCachingMode(value as RuntimeOptimizationMode)}>
+                      <SelectTrigger id="promptCachingMode" className="h-8 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">auto</SelectItem>
+                        <SelectItem value="off">off</SelectItem>
+                        <SelectItem value="prefer">prefer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="cacheEditMode" className="text-xs">{t('agent.create.cacheEditMode', 'Cache Edit')}</Label>
+                    <Select value={cacheEditMode} onValueChange={(value) => setCacheEditMode(value as RuntimeOptimizationMode)}>
+                      <SelectTrigger id="cacheEditMode" className="h-8 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">auto</SelectItem>
+                        <SelectItem value="off">off</SelectItem>
+                        <SelectItem value="prefer">prefer</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
                 <div className="mt-3 rounded-md border border-border/70 p-3">
@@ -313,7 +538,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
                       <p className="text-xs text-muted-foreground">
                         {t(
                           'agent.create.thinkingEnabledHint',
-                          'Enabled by default. If the selected model does not support think mode, it automatically falls back to normal mode.'
+                          'Enabled by default. If the current provider/runtime does not support Think, execution will downgrade automatically without clearing your settings.'
                         )}
                       </p>
                     </div>
@@ -408,9 +633,10 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
                   id="create-maxConcurrent"
                   type="number"
                   min={1}
-                  max={100}
                   value={maxConcurrent}
-                  onChange={(e) => setMaxConcurrent(parseInt(e.target.value) || 5)}
+                  onChange={(e) =>
+                    setMaxConcurrent(normalizeMaxConcurrentTasks(parseInt(e.target.value, 10)))
+                  }
                 />
               </div>
             </TabsContent>

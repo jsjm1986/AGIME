@@ -12,10 +12,10 @@ use crate::{
     prompt_template::render_global_file,
     recipe::Recipe,
     session::{ExtensionState, SessionManager, SessionType, TaskStatus},
+    utils::normalize_delegation_summary_text,
 };
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
-use rmcp::model::{ErrorCode, ErrorData};
 use serde::Serialize;
 use std::future::Future;
 use std::pin::Pin;
@@ -24,11 +24,15 @@ use tracing::{debug, info};
 
 use crate::agents::harness::coordinator::CoordinatorRole;
 use crate::agents::harness::permission_bridge::{
-    await_permission_resolution, permission_bridge_timeout, timeout_resolution,
-    to_permission_confirmation, write_permission_request, PermissionBridgeRequest,
+    await_permission_resolution, permission_bridge_timeout, permission_decision_source_label,
+    timeout_resolution, to_permission_confirmation, write_permission_request,
+    PermissionBridgeRequest,
 };
 use crate::agents::harness::{
-    save_worker_runtime_state, HarnessWorkerRuntimeState, TaskRuntimeHost, WorkerAttemptIdentity,
+    annotate_task_ledger_child_evidence_view, annotate_task_ledger_child_session,
+    annotate_task_ledger_child_transcript_resume, build_child_transcript_excerpt,
+    build_child_transcript_resume_lines, save_worker_runtime_state, HarnessWorkerRuntimeState,
+    TaskRuntimeHost, WorkerAttemptIdentity,
 };
 
 #[derive(Serialize)]
@@ -57,6 +61,12 @@ struct WorkerPromptContext {
 
 type AgentMessagesFuture =
     Pin<Box<dyn Future<Output = Result<(Conversation, Option<String>)>> + Send>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletedSubagentTaskResult {
+    pub summary: String,
+    pub recovered_terminal_summary: bool,
+}
 
 fn extract_message_output_text(message: &Message) -> Option<String> {
     let assistant_text = if message.role == rmcp::model::Role::Assistant {
@@ -91,6 +101,140 @@ fn extract_message_output_text(message: &Message) -> Option<String> {
             _ => None,
         })
     })
+}
+
+fn extract_message_runtime_trace_text(message: &Message) -> Option<String> {
+    for content in &message.content {
+        if let Some(text) = content.as_text() {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        if let Some(text) = content.as_tool_response_text() {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        match content {
+            MessageContent::SystemNotification(notification) => {
+                let trimmed = notification.msg.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+            MessageContent::ActionRequired(action) => {
+                let description = match &action.data {
+                    ActionRequiredData::ToolConfirmation {
+                        tool_name, prompt, ..
+                    } => prompt
+                        .as_deref()
+                        .filter(|value| !value.trim().is_empty())
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| format!("permission requested for {}", tool_name)),
+                    ActionRequiredData::Elicitation { message, .. } => message.clone(),
+                    ActionRequiredData::ElicitationResponse { id, .. } => {
+                        format!("elicitation response recorded for {}", id)
+                    }
+                };
+                let trimmed = description.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+            MessageContent::ToolRequest(request) => {
+                if let Ok(tool_call) = &request.tool_call {
+                    return Some(format!("called tool {}", tool_call.name));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn synthesize_subagent_fallback_summary(messages: &Conversation) -> Option<String> {
+    let assistant_trace = messages
+        .messages()
+        .iter()
+        .rev()
+        .filter(|message| message.role == rmcp::model::Role::Assistant)
+        .find_map(extract_message_runtime_trace_text);
+    if let Some(trace) = assistant_trace {
+        return Some(format!(
+            "Scope: recovered bounded worker trace\nResult: {}\nBlocker: worker finished without an explicit terminal summary",
+            normalize_delegation_summary_text(&trace)
+        ));
+    }
+
+    let excerpt = build_child_transcript_excerpt(messages);
+    if !excerpt.is_empty() {
+        return Some(format!(
+            "Scope: recovered bounded worker transcript\nResult: {}\nBlocker: worker finished without an explicit terminal summary",
+            normalize_delegation_summary_text(&excerpt.join(" | "))
+        ));
+    }
+
+    (!messages.messages().is_empty()).then(|| {
+        format!(
+            "Scope: bounded worker session\nResult: worker session produced {} message(s)\nBlocker: worker finished without an explicit terminal summary",
+            messages.messages().len()
+        )
+    })
+}
+
+async fn persist_child_replay_evidence(
+    parent_session_id: &str,
+    task_id: &str,
+    conversation: Option<&Conversation>,
+    preview_fallback: Option<&str>,
+    child_updated_at: Option<i64>,
+) {
+    let excerpt = conversation
+        .map(build_child_transcript_excerpt)
+        .unwrap_or_default();
+    let resume_lines = conversation
+        .map(build_child_transcript_resume_lines)
+        .unwrap_or_default();
+    let _ = annotate_task_ledger_child_evidence_view(
+        parent_session_id,
+        task_id,
+        preview_fallback.filter(|value| !value.trim().is_empty()),
+        &excerpt,
+    )
+    .await;
+    let _ = annotate_task_ledger_child_transcript_resume(
+        parent_session_id,
+        task_id,
+        &resume_lines,
+        resume_lines.len(),
+        child_updated_at,
+    )
+    .await;
+}
+
+async fn persist_child_replay_evidence_from_session(
+    parent_session_id: &str,
+    task_id: &str,
+    child_session_id: &str,
+    preview_fallback: Option<&str>,
+) {
+    let session = SessionManager::get_session(child_session_id, true)
+        .await
+        .ok();
+    let child_updated_at = session
+        .as_ref()
+        .map(|session| session.updated_at.timestamp());
+    let conversation = session.and_then(|session| session.conversation);
+    persist_child_replay_evidence(
+        parent_session_id,
+        task_id,
+        conversation.as_ref(),
+        preview_fallback,
+        child_updated_at,
+    )
+    .await;
 }
 
 async fn maybe_handle_worker_permission_bridge(
@@ -197,6 +341,7 @@ async fn maybe_handle_worker_permission_bridge(
                 Some(worker_name.to_string()),
                 tool_name.clone(),
                 format!("{:?}", resolution.permission),
+                Some(permission_decision_source_label(&resolution.source).to_string()),
             )
             .await;
     }
@@ -349,43 +494,66 @@ pub async fn run_complete_subagent_task(
     return_last_only: bool,
     session_id: String,
     cancellation_token: Option<CancellationToken>,
-) -> Result<String, anyhow::Error> {
+) -> Result<CompletedSubagentTaskResult, anyhow::Error> {
     let settlement_task_config = task_config.clone();
     let settlement_session_id = session_id.clone();
     let (messages, final_output) =
-        get_agent_messages(recipe, task_config, session_id, cancellation_token)
-            .await
-            .map_err(|e| {
-                ErrorData::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("Failed to execute task: {}", e),
-                    None,
-                )
-            })?;
+        match get_agent_messages(recipe, task_config, session_id, cancellation_token).await {
+            Ok(value) => value,
+            Err(e) => {
+                if let Some(task_id) = settlement_task_config.current_task_id.as_deref() {
+                    persist_child_replay_evidence_from_session(
+                        &settlement_task_config.parent_session_id,
+                        task_id,
+                        &settlement_session_id,
+                        Some(&format!("Failed to execute task: {}", e)),
+                    )
+                    .await;
+                }
+                return Err(anyhow!("Failed to execute task: {}", e));
+            }
+        };
 
     if let Some(output) = final_output {
+        if let Some(task_id) = settlement_task_config.current_task_id.as_deref() {
+            persist_child_replay_evidence(
+                &settlement_task_config.parent_session_id,
+                task_id,
+                Some(&messages),
+                Some(&output),
+                None,
+            )
+            .await;
+        }
         settle_worker_task_board_after_success(&settlement_task_config, &settlement_session_id)
             .await?;
-        return Ok(output);
+        return Ok(CompletedSubagentTaskResult {
+            summary: output,
+            recovered_terminal_summary: false,
+        });
     }
 
-    let response_text = if return_last_only {
+    let (response_text, recovered_terminal_summary) = if return_last_only {
         let latest_message_text = messages
             .messages()
             .last()
             .and_then(extract_message_output_text);
 
-        latest_message_text
-            .or_else(|| {
-                messages
-                    .messages()
-                    .iter()
-                    .rev()
-                    .find_map(|message| extract_message_output_text(message))
-            })
-            .ok_or_else(|| {
-                anyhow!("Subagent completed without terminal assistant or tool-result content")
-            })?
+        if let Some(text) = latest_message_text.or_else(|| {
+            messages
+                .messages()
+                .iter()
+                .rev()
+                .find_map(|message| extract_message_output_text(message))
+        }) {
+            (text, false)
+        } else if let Some(text) = synthesize_subagent_fallback_summary(&messages) {
+            (text, true)
+        } else {
+            return Err(anyhow!(
+                "Subagent completed without recoverable terminal output"
+            ));
+        }
     } else {
         let all_text_content: Vec<String> = messages
             .iter()
@@ -429,15 +597,32 @@ pub async fn run_complete_subagent_task(
             .collect();
 
         if all_text_content.is_empty() {
-            return Err(anyhow!(
-                "Subagent completed without any assistant or tool-result content"
-            ));
+            let text = synthesize_subagent_fallback_summary(&messages).ok_or_else(|| {
+                anyhow!(
+                    "Subagent completed without any recoverable assistant or tool-result content"
+                )
+            })?;
+            (text, true)
+        } else {
+            (all_text_content.join("\n"), false)
         }
-        all_text_content.join("\n")
     };
 
+    if let Some(task_id) = settlement_task_config.current_task_id.as_deref() {
+        persist_child_replay_evidence(
+            &settlement_task_config.parent_session_id,
+            task_id,
+            Some(&messages),
+            Some(&response_text),
+            None,
+        )
+        .await;
+    }
     settle_worker_task_board_after_success(&settlement_task_config, &settlement_session_id).await?;
-    Ok(response_text)
+    Ok(CompletedSubagentTaskResult {
+        summary: response_text,
+        recovered_terminal_summary,
+    })
 }
 
 fn get_agent_messages(
@@ -520,6 +705,15 @@ fn get_agent_messages(
             },
         )
         .await;
+        if let Some(task_id) = task_config.current_task_id.as_deref() {
+            let _ = annotate_task_ledger_child_session(
+                &task_config.parent_session_id,
+                task_id,
+                &session_id,
+                "sub_agent",
+            )
+            .await;
+        }
 
         let agent_manager = AgentManager::instance()
             .await
@@ -653,6 +847,7 @@ fn get_agent_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::harness::load_task_ledger_state;
     use crate::conversation::message::Message;
     use crate::model::ModelConfig;
     use crate::providers::base::{Provider, ProviderMetadata, ProviderUsage};
@@ -727,6 +922,42 @@ mod tests {
         assert_eq!(
             extract_message_output_text(&message).as_deref(),
             Some("tool output")
+        );
+    }
+
+    #[test]
+    fn synthesize_subagent_fallback_summary_uses_runtime_trace_when_terminal_output_is_missing() {
+        let conversation = Conversation::new_unvalidated(vec![
+            Message::user().with_text("inspect the repo"),
+            Message::assistant().with_system_notification(
+                crate::conversation::message::SystemNotificationType::InlineMessage,
+                "worker requested leader approval",
+            ),
+        ]);
+
+        assert_eq!(
+            synthesize_subagent_fallback_summary(&conversation).as_deref(),
+            Some(
+                "Scope: recovered bounded worker trace\nResult: worker requested leader approval\nBlocker: worker finished without an explicit terminal summary"
+            )
+        );
+    }
+
+    #[test]
+    fn synthesize_subagent_fallback_summary_normalizes_noise_separator() {
+        let conversation = Conversation::new_unvalidated(vec![
+            Message::user().with_text("inspect the repo"),
+            Message::assistant().with_system_notification(
+                crate::conversation::message::SystemNotificationType::InlineMessage,
+                "worker result бк file not found",
+            ),
+        ]);
+
+        assert_eq!(
+            synthesize_subagent_fallback_summary(&conversation).as_deref(),
+            Some(
+                "Scope: recovered bounded worker trace\nResult: worker result - file not found\nBlocker: worker finished without an explicit terminal summary"
+            )
         );
     }
 
@@ -833,6 +1064,136 @@ mod tests {
                 .get("runtime_auto_completed")
                 .and_then(serde_json::Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_child_replay_evidence_from_session_uses_child_transcript_on_failure() {
+        let parent_session_id = format!("parent-ledger-{}", Uuid::new_v4());
+        let child_session_id = format!("child-ledger-{}", Uuid::new_v4());
+        SessionManager::create_session_with_id(
+            parent_session_id.clone(),
+            std::env::current_dir().unwrap_or_else(|_| ".".into()),
+            "parent".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create parent");
+        SessionManager::create_session_with_id(
+            child_session_id.clone(),
+            std::env::current_dir().unwrap_or_else(|_| ".".into()),
+            "child".to_string(),
+            SessionType::SubAgent,
+        )
+        .await
+        .expect("create child");
+        SessionManager::add_message(
+            &child_session_id,
+            &Message::assistant().with_text("child failure context"),
+        )
+        .await
+        .expect("append child message");
+
+        let snapshot = crate::agents::harness::TaskSnapshot {
+            task_id: "task-1".to_string(),
+            parent_session_id: parent_session_id.clone(),
+            depth: 1,
+            kind: crate::agents::harness::TaskKind::Subagent,
+            status: crate::agents::harness::TaskStatus::Failed,
+            description: Some("subagent".to_string()),
+            write_scope: vec!["docs".to_string()],
+            target_artifacts: vec!["docs/a.md".to_string()],
+            result_contract: vec!["docs/a.md".to_string()],
+            summary: Some("failed".to_string()),
+            produced_delta: false,
+            accepted_targets: Vec::new(),
+            metadata: HashMap::new(),
+            started_at: 1,
+            updated_at: 1,
+            finished_at: Some(2),
+        };
+        crate::agents::harness::upsert_task_ledger_snapshot(&parent_session_id, &snapshot)
+            .await
+            .expect("persist task snapshot");
+
+        persist_child_replay_evidence_from_session(
+            &parent_session_id,
+            "task-1",
+            &child_session_id,
+            Some("Failed to execute task: boom"),
+        )
+        .await;
+
+        let ledger = load_task_ledger_state(&parent_session_id)
+            .await
+            .expect("load ledger");
+        let task = &ledger.tasks[0];
+        assert_eq!(
+            task.metadata
+                .get("child_session_preview")
+                .map(String::as_str),
+            Some("Failed to execute task: boom")
+        );
+        let excerpt = task
+            .metadata
+            .get("child_session_excerpt")
+            .cloned()
+            .expect("excerpt persisted");
+        assert!(excerpt.contains("child failure context"));
+    }
+
+    #[tokio::test]
+    async fn persist_child_replay_evidence_from_session_falls_back_to_error_preview_without_transcript(
+    ) {
+        let parent_session_id = format!("parent-ledger-preview-{}", Uuid::new_v4());
+        SessionManager::create_session_with_id(
+            parent_session_id.clone(),
+            std::env::current_dir().unwrap_or_else(|_| ".".into()),
+            "parent".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create parent");
+
+        let snapshot = crate::agents::harness::TaskSnapshot {
+            task_id: "task-1".to_string(),
+            parent_session_id: parent_session_id.clone(),
+            depth: 1,
+            kind: crate::agents::harness::TaskKind::Subagent,
+            status: crate::agents::harness::TaskStatus::Failed,
+            description: Some("subagent".to_string()),
+            write_scope: vec!["docs".to_string()],
+            target_artifacts: vec!["docs/a.md".to_string()],
+            result_contract: vec!["docs/a.md".to_string()],
+            summary: Some("failed".to_string()),
+            produced_delta: false,
+            accepted_targets: Vec::new(),
+            metadata: HashMap::new(),
+            started_at: 1,
+            updated_at: 1,
+            finished_at: Some(2),
+        };
+        crate::agents::harness::upsert_task_ledger_snapshot(&parent_session_id, &snapshot)
+            .await
+            .expect("persist task snapshot");
+
+        persist_child_replay_evidence_from_session(
+            &parent_session_id,
+            "task-1",
+            "missing-child-session",
+            Some("Failed to execute task: boom"),
+        )
+        .await;
+
+        let ledger = load_task_ledger_state(&parent_session_id)
+            .await
+            .expect("load ledger");
+        let task = &ledger.tasks[0];
+        assert_eq!(
+            task.metadata
+                .get("child_session_preview")
+                .map(String::as_str),
+            Some("Failed to execute task: boom")
         );
     }
 }

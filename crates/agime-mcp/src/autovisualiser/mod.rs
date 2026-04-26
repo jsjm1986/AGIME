@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
-/// Validates that the data parameter is a proper JSON value and not a string
+/// Validates that the data parameter is a proper JSON value.
 fn validate_data_param(params: &Value, allow_array: bool) -> Result<Value, ErrorData> {
     let data_value = params.get("data").ok_or_else(|| {
         ErrorData::new(
@@ -23,13 +23,22 @@ fn validate_data_param(params: &Value, allow_array: bool) -> Result<Value, Error
         )
     })?;
 
-    if data_value.is_string() {
-        return Err(ErrorData::new(
-            ErrorCode::INVALID_PARAMS,
-            "The 'data' parameter must be a JSON object, not a JSON string. Please provide valid JSON without comments.".to_string(),
-            None,
-        ));
-    }
+    let parsed_data;
+    let data_value = if let Some(raw) = data_value.as_str() {
+        parsed_data = serde_json::from_str::<Value>(raw).map_err(|err| {
+            ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                format!(
+                    "The 'data' parameter was provided as a string but is not valid JSON: {}",
+                    err
+                ),
+                None,
+            )
+        })?;
+        &parsed_data
+    } else {
+        data_value
+    };
 
     if allow_array {
         if !data_value.is_object() && !data_value.is_array() {
@@ -84,7 +93,7 @@ pub struct SankeyData {
 #[derive(Debug, Serialize, Deserialize, rmcp::schemars::JsonSchema)]
 pub struct RenderSankeyParams {
     /// The data for the Sankey diagram
-    pub data: SankeyData,
+    pub data: Value,
 }
 
 /// Radar dataset structure
@@ -1126,21 +1135,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_validate_data_param_rejects_string() {
-        // Test that a string value for data is rejected
+    fn test_validate_data_param_accepts_json_string() {
+        // Some models send nested JSON as a string; accept valid JSON and normalize it.
         let params = json!({
             "data": "{\"labels\": [\"A\", \"B\"], \"matrix\": [[0, 1], [1, 0]]}"
         });
 
         let result = validate_data_param(&params, false);
-        assert!(result.is_err());
+        assert!(result.is_ok());
 
-        let err = result.unwrap_err();
-        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
-        assert!(err
-            .message
-            .contains("must be a JSON object, not a JSON string"));
-        assert!(err.message.contains("without comments"));
+        let data = result.unwrap();
+        assert!(data.is_object());
+        assert_eq!(data["labels"][0], "A");
     }
 
     #[test]
@@ -1255,31 +1261,22 @@ mod tests {
 
         let err = result.unwrap_err();
         assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
-        assert!(err.message.contains("not a JSON string"));
-        assert!(err.message.contains("without comments"));
+        assert!(err.message.contains("not valid JSON"));
     }
 
     #[tokio::test]
     async fn test_render_sankey() {
         let router = AutoVisualiserRouter::new();
         let params = Parameters(RenderSankeyParams {
-            data: SankeyData {
-                nodes: vec![
-                    SankeyNode {
-                        name: "A".to_string(),
-                        category: None,
-                    },
-                    SankeyNode {
-                        name: "B".to_string(),
-                        category: None,
-                    },
+            data: json!({
+                "nodes": [
+                    { "name": "A" },
+                    { "name": "B" }
                 ],
-                links: vec![SankeyLink {
-                    source: "A".to_string(),
-                    target: "B".to_string(),
-                    value: 10.0,
-                }],
-            },
+                "links": [
+                    { "source": "A", "target": "B", "value": 10.0 }
+                ]
+            }),
         });
 
         let result = router.render_sankey(params).await;

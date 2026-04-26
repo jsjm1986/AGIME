@@ -106,6 +106,8 @@ pub enum StreamEvent {
         tool_name: String,
         decision: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         worker_name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         logical_worker_id: Option<String>,
@@ -132,6 +134,10 @@ pub enum StreamEvent {
         strategy: String,
         before_tokens: usize,
         after_tokens: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     /// Session ID notification
     SessionId { session_id: String },
@@ -222,6 +228,13 @@ impl TaskManager {
         &self,
         task_id: &str,
     ) -> (CancellationToken, broadcast::Sender<StreamEvent>) {
+        {
+            let tasks = self.tasks.read().await;
+            if let Some(existing) = tasks.get(task_id) {
+                return (existing.cancel_token.clone(), existing.stream_tx.clone());
+            }
+        }
+
         let token = CancellationToken::new();
         // Create broadcast channel with buffer for 512 events
         let (tx, _) = broadcast::channel(512);
@@ -250,9 +263,11 @@ impl TaskManager {
         let tasks = self.tasks.read().await;
         if let Some(task) = tasks.get(task_id) {
             if let Err(e) = task.stream_tx.send(event) {
-                // Only warn if there are active receivers (lagged = buffer overflow)
-                // SendError means no receivers, which is normal
-                warn!("broadcast to task {}: no active receivers ({})", task_id, e);
+                tracing::debug!(
+                    "broadcast to task {} dropped because there are no active receivers ({})",
+                    task_id,
+                    e
+                );
             }
         }
     }

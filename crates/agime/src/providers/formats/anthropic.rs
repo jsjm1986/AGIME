@@ -35,7 +35,10 @@ const DATA_FIELD: &str = "data";
 
 /// Convert internal Message format to Anthropic's API message specification
 #[allow(clippy::too_many_lines)]
-pub fn format_messages(messages: &[Message]) -> Vec<Value> {
+fn format_messages_with_prompt_caching(
+    messages: &[Message],
+    enable_prompt_caching: bool,
+) -> Vec<Value> {
     let mut anthropic_messages = Vec::new();
 
     for message in messages.iter().filter(|m| m.is_agent_visible()) {
@@ -240,27 +243,33 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {
     // During each turn, we mark the final message with cache_control so the conversation can be
     // incrementally cached. The second-to-last user message is also marked for caching with the
     // cache_control parameter, so that this checkpoint can read from the previous cache.
-    let mut user_count = 0;
-    for message in anthropic_messages.iter_mut().rev() {
-        if message.get(ROLE_FIELD) == Some(&json!(USER_ROLE)) {
-            if let Some(content) = message.get_mut(CONTENT_FIELD) {
-                if let Some(content_array) = content.as_array_mut() {
-                    if let Some(last_content) = content_array.last_mut() {
-                        last_content.as_object_mut().unwrap().insert(
-                            CACHE_CONTROL_FIELD.to_string(),
-                            json!({ TYPE_FIELD: "ephemeral" }),
-                        );
+    if enable_prompt_caching {
+        let mut user_count = 0;
+        for message in anthropic_messages.iter_mut().rev() {
+            if message.get(ROLE_FIELD) == Some(&json!(USER_ROLE)) {
+                if let Some(content) = message.get_mut(CONTENT_FIELD) {
+                    if let Some(content_array) = content.as_array_mut() {
+                        if let Some(last_content) = content_array.last_mut() {
+                            last_content.as_object_mut().unwrap().insert(
+                                CACHE_CONTROL_FIELD.to_string(),
+                                json!({ TYPE_FIELD: "ephemeral" }),
+                            );
+                        }
                     }
                 }
-            }
-            user_count += 1;
-            if user_count >= 2 {
-                break;
+                user_count += 1;
+                if user_count >= 2 {
+                    break;
+                }
             }
         }
     }
 
     anthropic_messages
+}
+
+pub fn format_messages(messages: &[Message]) -> Vec<Value> {
+    format_messages_with_prompt_caching(messages, true)
 }
 
 fn anthropic_flavored_input_schema(input_schema: Arc<JsonObject>) -> Arc<JsonObject> {
@@ -273,7 +282,7 @@ fn anthropic_flavored_input_schema(input_schema: Arc<JsonObject>) -> Arc<JsonObj
 }
 
 /// Convert internal Tool format to Anthropic's API tool specification
-pub fn format_tools(tools: &[Tool]) -> Vec<Value> {
+fn format_tools_with_prompt_caching(tools: &[Tool], enable_prompt_caching: bool) -> Vec<Value> {
     let mut unique_tools = HashSet::new();
     let mut tool_specs = Vec::new();
 
@@ -289,23 +298,40 @@ pub fn format_tools(tools: &[Tool]) -> Vec<Value> {
 
     // Add "cache_control" to the last tool spec, if any. This means that all tool definitions,
     // will be cached as a single prefix.
-    if let Some(last_tool) = tool_specs.last_mut() {
-        last_tool.as_object_mut().unwrap().insert(
-            CACHE_CONTROL_FIELD.to_string(),
-            json!({ TYPE_FIELD: "ephemeral" }),
-        );
+    if enable_prompt_caching {
+        if let Some(last_tool) = tool_specs.last_mut() {
+            last_tool.as_object_mut().unwrap().insert(
+                CACHE_CONTROL_FIELD.to_string(),
+                json!({ TYPE_FIELD: "ephemeral" }),
+            );
+        }
     }
 
     tool_specs
 }
 
+pub fn format_tools(tools: &[Tool]) -> Vec<Value> {
+    format_tools_with_prompt_caching(tools, true)
+}
+
 /// Convert system message to Anthropic's API system specification
+fn format_system_with_prompt_caching(system: &str, enable_prompt_caching: bool) -> Value {
+    if enable_prompt_caching {
+        json!([{
+            TYPE_FIELD: TEXT_TYPE,
+            TEXT_TYPE: system,
+            CACHE_CONTROL_FIELD: { TYPE_FIELD: "ephemeral" }
+        }])
+    } else {
+        json!([{
+            TYPE_FIELD: TEXT_TYPE,
+            TEXT_TYPE: system
+        }])
+    }
+}
+
 pub fn format_system(system: &str) -> Value {
-    json!([{
-        TYPE_FIELD: TEXT_TYPE,
-        TEXT_TYPE: system,
-        CACHE_CONTROL_FIELD: { TYPE_FIELD: "ephemeral" }
-    }])
+    format_system_with_prompt_caching(system, true)
 }
 
 /// Convert Anthropic's API response to internal Message format
@@ -438,9 +464,10 @@ pub fn create_request_with_tool_choice(
     tools: &[Tool],
     tool_choice_mode: Option<ToolChoiceMode>,
 ) -> Result<Value> {
-    let anthropic_messages = format_messages(messages);
-    let tool_specs = format_tools(tools);
-    let system_spec = format_system(system);
+    let enable_prompt_caching = !model_config.prompt_caching_mode.is_disabled();
+    let anthropic_messages = format_messages_with_prompt_caching(messages, enable_prompt_caching);
+    let tool_specs = format_tools_with_prompt_caching(tools, enable_prompt_caching);
+    let system_spec = format_system_with_prompt_caching(system, enable_prompt_caching);
 
     // Check if we have any messages to send
     if anthropic_messages.is_empty() {
@@ -479,11 +506,7 @@ pub fn create_request_with_tool_choice(
     }
 
     // Resolve model capabilities from registry
-    let caps = crate::capabilities::resolve_with_thinking_override(
-        &model_config.model_name,
-        model_config.thinking_enabled,
-        model_config.thinking_budget,
-    );
+    let caps = crate::capabilities::resolve_with_model_config(model_config);
 
     // Add temperature if specified and model supports it
     if let Some(temp) = model_config.temperature {
@@ -1115,6 +1138,21 @@ mod tests {
         assert_eq!(spec_array[0]["type"], "text");
         assert_eq!(spec_array[0]["text"], system);
         assert!(spec_array[0].get("cache_control").is_some());
+    }
+
+    #[test]
+    fn test_create_request_respects_prompt_caching_off() -> Result<()> {
+        let mut model_config = ModelConfig::new_or_fail("claude-sonnet-4-20250514");
+        model_config.prompt_caching_mode = crate::model::PromptCachingMode::Off;
+        model_config.cache_edit_mode = crate::model::CacheEditMode::Prefer;
+
+        let system = "You are a helpful assistant.";
+        let messages = vec![Message::user().with_text("Hello")];
+        let payload = create_request(&model_config, system, &messages, &[])?;
+
+        let serialized = serde_json::to_string(&payload)?;
+        assert!(!serialized.contains("cache_control"));
+        Ok(())
     }
 
     #[test]

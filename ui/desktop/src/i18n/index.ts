@@ -22,7 +22,6 @@ import enErrors from './locales/en/errors.json';
 import enRecipes from './locales/en/recipes.json';
 import enSessions from './locales/en/sessions.json';
 import enExtensions from './locales/en/extensions.json';
-import enSchedules from './locales/en/schedules.json';
 import enModes from './locales/en/modes.json';
 import enWelcome from './locales/en/welcome.json';
 import enTools from './locales/en/tools.json';
@@ -39,7 +38,6 @@ import zhErrors from './locales/zh-CN/errors.json';
 import zhRecipes from './locales/zh-CN/recipes.json';
 import zhSessions from './locales/zh-CN/sessions.json';
 import zhExtensions from './locales/zh-CN/extensions.json';
-import zhSchedules from './locales/zh-CN/schedules.json';
 import zhModes from './locales/zh-CN/modes.json';
 import zhWelcome from './locales/zh-CN/welcome.json';
 import zhTools from './locales/zh-CN/tools.json';
@@ -57,7 +55,6 @@ export const resources = {
     recipes: enRecipes,
     sessions: enSessions,
     extensions: enExtensions,
-    schedules: enSchedules,
     modes: enModes,
     welcome: enWelcome,
     tools: enTools,
@@ -74,7 +71,6 @@ export const resources = {
     recipes: zhRecipes,
     sessions: zhSessions,
     extensions: zhExtensions,
-    schedules: zhSchedules,
     modes: zhModes,
     welcome: zhWelcome,
     tools: zhTools,
@@ -95,7 +91,7 @@ i18n
     resources,
     fallbackLng: 'en',
     defaultNS: 'common',
-    ns: ['common', 'sidebar', 'settings', 'chat', 'greeting', 'errors', 'recipes', 'sessions', 'extensions', 'schedules', 'modes', 'welcome', 'tools', 'configCopilot', 'team'],
+    ns: ['common', 'sidebar', 'settings', 'chat', 'greeting', 'errors', 'recipes', 'sessions', 'extensions', 'modes', 'welcome', 'tools', 'configCopilot', 'team'],
     interpolation: {
       escapeValue: false,
     },

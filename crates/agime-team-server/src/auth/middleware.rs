@@ -25,6 +25,7 @@ pub struct UserContext {
     pub user_id: String,
     pub email: String,
     pub display_name: String,
+    pub current_session_id: Option<String>,
 }
 
 /// Authentication middleware
@@ -70,17 +71,22 @@ pub async fn auth_middleware(
                 Err(resp) => return resp,
             };
             let session_service = SessionService::new(pool);
-            session_service.validate_session(&session_id).await.ok()
+            session_service
+                .validate_session(&session_id)
+                .await
+                .ok()
+                .map(|user| (user, session_id))
         } else {
             None
         }
     };
 
-    if let Some(user) = session_user {
+    if let Some((user, session_id)) = session_user {
         let user_context = UserContext {
             user_id: user.id.clone(),
             email: user.email.clone(),
             display_name: user.display_name.clone(),
+            current_session_id: Some(session_id),
         };
         request.extensions_mut().insert(user_context);
         request
@@ -132,6 +138,7 @@ pub async fn auth_middleware(
                 user_id: user.id.clone(),
                 email: user.email.clone(),
                 display_name: user.display_name.clone(),
+                current_session_id: None,
             };
             request.extensions_mut().insert(user_context);
             request

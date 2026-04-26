@@ -544,6 +544,17 @@ impl RequestLog {
     where
         Payload: Serialize,
     {
+        Self::start_with_runtime_profile(model_config, payload, None)
+    }
+
+    pub fn start_with_runtime_profile<Payload>(
+        model_config: &ModelConfig,
+        payload: &Payload,
+        runtime_profile: Option<&crate::runtime_profile::EffectiveModelRuntimeProfile>,
+    ) -> Result<Self>
+    where
+        Payload: Serialize,
+    {
         let logs_dir = Paths::in_state_dir("logs");
         std::fs::create_dir_all(&logs_dir)?;
 
@@ -559,10 +570,13 @@ impl RequestLog {
                 .open(&temp_path)?,
         );
 
-        let data = serde_json::json!({
+        let mut data = serde_json::json!({
             "model_config": model_config,
             "input": payload,
         });
+        if let Some(profile) = runtime_profile {
+            data["runtime_profile"] = serde_json::to_value(profile)?;
+        }
         writeln!(writer, "{}", serde_json::to_string(&data)?)?;
 
         Ok(Self {

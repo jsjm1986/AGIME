@@ -11,8 +11,8 @@ use super::retry::ProviderRetry;
 use super::utils::{get_model, handle_response_openai_compat, RequestLog};
 use crate::config::env_compat::get_env_compat_or;
 use crate::conversation::message::Message;
-
 use crate::model::ModelConfig;
+use crate::runtime_profile::{apply_effective_execution, resolve_for_provider_with_model};
 use rmcp::model::Tool;
 
 pub const LITELLM_DEFAULT_MODEL: &str = "gpt-4o-mini";
@@ -29,6 +29,15 @@ pub struct LiteLLMProvider {
 }
 
 impl LiteLLMProvider {
+    pub fn new(api_client: ApiClient, base_path: String, model: ModelConfig) -> Self {
+        Self {
+            api_client,
+            base_path,
+            model,
+            name: Self::metadata().name,
+        }
+    }
+
     pub async fn from_env(model: ModelConfig) -> Result<Self> {
         let config = crate::config::Config::global();
         let api_key: String = config
@@ -66,12 +75,54 @@ impl LiteLLMProvider {
             api_client = api_client.with_headers(header_map)?;
         }
 
-        Ok(Self {
-            api_client,
-            base_path,
-            model,
-            name: Self::metadata().name,
-        })
+        Ok(Self::new(api_client, base_path, model))
+    }
+
+    pub fn from_custom_endpoint(
+        model: ModelConfig,
+        base_url: &str,
+        api_key: Option<&str>,
+        custom_headers: Option<HashMap<String, String>>,
+    ) -> Result<Self> {
+        let url = url::Url::parse(base_url)
+            .map_err(|e| anyhow::anyhow!("Invalid LiteLLM base URL '{}': {}", base_url, e))?;
+
+        let host = if let Some(port) = url.port() {
+            format!(
+                "{}://{}:{}",
+                url.scheme(),
+                url.host_str().unwrap_or(""),
+                port
+            )
+        } else {
+            format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""))
+        };
+
+        let base_path = url.path().trim_start_matches('/').to_string();
+        let base_path = if base_path.is_empty() {
+            "v1/chat/completions".to_string()
+        } else {
+            base_path
+        };
+
+        let auth = match api_key.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(value) => AuthMethod::BearerToken(value.to_string()),
+            None => AuthMethod::Custom(Box::new(NoAuth)),
+        };
+        let mut api_client =
+            ApiClient::with_timeout(host, auth, std::time::Duration::from_secs(600))?;
+
+        if let Some(headers) = custom_headers {
+            let mut header_map = reqwest::header::HeaderMap::new();
+            for (key, value) in headers {
+                let header_name = reqwest::header::HeaderName::from_bytes(key.as_bytes())?;
+                let header_value = reqwest::header::HeaderValue::from_str(&value)?;
+                header_map.insert(header_name, header_value);
+            }
+            api_client = api_client.with_headers(header_map)?;
+        }
+
+        Ok(Self::new(api_client, base_path, model))
     }
 
     async fn fetch_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
@@ -174,18 +225,22 @@ impl Provider for LiteLLMProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<(Message, ProviderUsage), ProviderError> {
+        let runtime_profile = resolve_for_provider_with_model(self, model_config).await;
+        let effective_model_config = apply_effective_execution(model_config, &runtime_profile);
         // 根据用户选择的模型动态选择图片格式
         // LiteLLM is an OpenAI-compatible endpoint, always use OpenAI image format
         let image_format = super::utils::ImageFormat::OpenAi;
         let mut payload = super::formats::openai::create_request(
-            model_config,
+            &effective_model_config,
             system,
             messages,
             tools,
             &image_format,
         )?;
 
-        if self.supports_cache_control().await {
+        if !effective_model_config.prompt_caching_mode.is_disabled()
+            && self.supports_cache_control().await
+        {
             payload = update_request_for_cache_control(&payload);
         }
 
@@ -198,11 +253,17 @@ impl Provider for LiteLLMProvider {
 
         let message = super::formats::openai::response_to_message(
             &response,
-            Some(&crate::capabilities::resolve(&model_config.model_name)),
+            Some(&crate::capabilities::resolve_with_model_config(
+                &effective_model_config,
+            )),
         )?;
         let usage = super::formats::openai::get_usage(&response);
         let response_model = get_model(&response);
-        let mut log = RequestLog::start(model_config, &payload)?;
+        let mut log = RequestLog::start_with_runtime_profile(
+            &effective_model_config,
+            &payload,
+            Some(&runtime_profile),
+        )?;
         log.write(&response, Some(&usage))?;
         Ok((message, ProviderUsage::new(response_model, usage)))
     }
@@ -212,6 +273,9 @@ impl Provider for LiteLLMProvider {
     }
 
     async fn supports_cache_control(&self) -> bool {
+        if self.model.prompt_caching_mode.is_disabled() {
+            return false;
+        }
         if let Ok(models) = self.fetch_models().await {
             if let Some(model_info) = models.iter().find(|m| m.name == self.model.model_name) {
                 return model_info.supports_cache_control.unwrap_or(false);

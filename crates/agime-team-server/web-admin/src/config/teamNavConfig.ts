@@ -24,6 +24,14 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
     mobileProfile: 'conversation-first',
   },
   {
+    key: 'scheduled-tasks',
+    icon: 'Clock3',
+    labelKey: 'teamNav.scheduledTasks',
+    supportsConversationMode: true,
+    conversationPriority: 'high',
+    mobileProfile: 'task-flow',
+  },
+  {
     key: 'collaboration',
     icon: 'MessageSquareShare',
     labelKey: 'teamNav.collaboration',
@@ -115,6 +123,7 @@ export const SECTION_LABEL_KEYS: Record<string, string> = {
   documents: 'documents.title',
   'agent-manage': 'teamNav.agentManage',
   chat: 'teamNav.chat',
+  'scheduled-tasks': 'teamNav.scheduledTasks',
   collaboration: 'teamNav.collaboration',
   'smart-log': 'smartLog.title',
   ecosystem: 'teamNav.ecosystem',

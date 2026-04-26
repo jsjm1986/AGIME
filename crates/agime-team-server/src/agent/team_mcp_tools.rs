@@ -20,7 +20,18 @@ use super::agent_prompt_composer::build_prompt_introspection_snapshot;
 use super::capability_policy::{
     builtin_registry_entry, AgentRuntimePolicyResolver, ConfiguredBuiltinCapability,
 };
+use super::chat_channel_manager::ChatChannelManager;
 use super::service_mongo::AgentService;
+use crate::auth::middleware::UserContext;
+use crate::auth::service_mongo::UserPreferences;
+use crate::scheduled_tasks::intent::parse_scheduled_task_text;
+use crate::scheduled_tasks::models::{
+    CreateScheduledTaskRequest, ScheduledTaskDeliveryTier, ScheduledTaskSessionBinding,
+    UpdateScheduledTaskRequest,
+};
+use crate::scheduled_tasks::routes::{create_task_internal, update_task_internal};
+use crate::scheduled_tasks::scheduler::start_task_run;
+use crate::scheduled_tasks::service::ScheduledTaskService;
 
 const MCP_TYPES: &[&str] = &["stdio", "sse", "streamable_http"];
 
@@ -584,6 +595,9 @@ pub struct TeamMcpToolsProvider {
     team_id: String,
     actor_user_id: String,
     current_agent_id: Option<String>,
+    current_session_id: Option<String>,
+    channel_manager: Option<Arc<ChatChannelManager>>,
+    workspace_root: Option<String>,
     info: InitializeResult,
 }
 
@@ -593,6 +607,9 @@ impl TeamMcpToolsProvider {
         team_id: String,
         actor_user_id: String,
         current_agent_id: Option<String>,
+        current_session_id: Option<String>,
+        channel_manager: Option<Arc<ChatChannelManager>>,
+        workspace_root: Option<String>,
     ) -> Self {
         let info = InitializeResult {
             protocol_version: ProtocolVersion::V_2025_03_26,
@@ -626,6 +643,9 @@ impl TeamMcpToolsProvider {
             team_id,
             actor_user_id,
             current_agent_id,
+            current_session_id,
+            channel_manager,
+            workspace_root,
             info,
         }
     }
@@ -636,6 +656,57 @@ impl TeamMcpToolsProvider {
 
     fn agent_service(&self) -> AgentService {
         AgentService::new(self.db.clone())
+    }
+
+    fn scheduled_task_service(&self) -> ScheduledTaskService {
+        ScheduledTaskService::new(self.db.clone())
+    }
+
+    fn actor_user_context(&self) -> UserContext {
+        UserContext {
+            user_id: self.actor_user_id.clone(),
+            email: String::new(),
+            display_name: self.actor_user_id.clone(),
+            role: "member".to_string(),
+            preferences: UserPreferences::default(),
+            current_session_id: self.current_session_id.clone(),
+        }
+    }
+
+    async fn current_session_source(&self) -> Result<Option<String>> {
+        let Some(session_id) = self
+            .current_session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(None);
+        };
+        let session = self
+            .db
+            .collection::<bson::Document>("agent_sessions")
+            .find_one(doc! { "session_id": session_id }, None)
+            .await?;
+        Ok(session.and_then(|doc| {
+            doc.get_str("session_source")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        }))
+    }
+
+    async fn ensure_scheduled_task_management_allowed(&self, tool_name: &str) -> Result<()> {
+        let session_source = self.current_session_source().await?;
+        if session_source
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("scheduled_task"))
+        {
+            return Err(anyhow!(
+                "`{}` is a scheduled-task management tool and is not available inside scheduled task execution runtime",
+                tool_name
+            ));
+        }
+        Ok(())
     }
 
     async fn ensure_admin(&self) -> Result<()> {
@@ -668,6 +739,276 @@ impl TeamMcpToolsProvider {
         list.into_iter()
             .find(|extension| extension.name.eq_ignore_ascii_case(extension_id_or_name))
             .ok_or_else(|| anyhow!("Team MCP extension '{}' not found", extension_id_or_name))
+    }
+
+    fn resolve_scheduled_task_agent_id(&self, requested: Option<String>) -> Result<String> {
+        requested
+            .or_else(|| self.current_agent_id.clone())
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                anyhow!("scheduled task creation requires an agent_id or an active session agent")
+            })
+    }
+
+    async fn resolve_scheduled_task_id(&self, task_id_or_title: &str) -> Result<String> {
+        let needle = task_id_or_title.trim();
+        if needle.is_empty() {
+            return Err(anyhow!("task_id_or_title is required"));
+        }
+        if let Some(task) = self
+            .scheduled_task_service()
+            .get_task(&self.team_id, needle)
+            .await?
+        {
+            return Ok(task.task_id);
+        }
+        let list = self
+            .scheduled_task_service()
+            .list_tasks(&self.team_id)
+            .await?;
+        list.tasks
+            .into_iter()
+            .find(|task| task.title.eq_ignore_ascii_case(needle) || task.title.contains(needle))
+            .map(|task| task.task_id)
+            .ok_or_else(|| anyhow!("Scheduled task '{}' not found", needle))
+    }
+
+    async fn handle_parse_scheduled_task(
+        &self,
+        args: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<String> {
+        self.ensure_scheduled_task_management_allowed("parse_scheduled_task")
+            .await?;
+        let text = parse_required_string(args, "text")?;
+        let timezone = parse_optional_string(args, "timezone");
+        let agent_id =
+            self.resolve_scheduled_task_agent_id(parse_optional_string(args, "agent_id"))?;
+        let preview = parse_scheduled_task_text(&text, timezone.as_deref(), Some(agent_id));
+        Ok(serde_json::to_string_pretty(
+            &serde_json::json!({ "preview": preview }),
+        )?)
+    }
+
+    async fn handle_create_scheduled_task(
+        &self,
+        args: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<String> {
+        self.ensure_scheduled_task_management_allowed("create_scheduled_task")
+            .await?;
+        let text = parse_required_string(args, "text")?;
+        let timezone = parse_optional_string(args, "timezone");
+        let agent_id =
+            self.resolve_scheduled_task_agent_id(parse_optional_string(args, "agent_id"))?;
+        let preview = parse_scheduled_task_text(&text, timezone.as_deref(), Some(agent_id.clone()));
+        if !preview.ready_to_create {
+            return Ok(serde_json::to_string_pretty(&serde_json::json!({
+                "created": false,
+                "preview": preview,
+                "guidance": "请先补充明确的时间描述，再重新调用 create_scheduled_task。"
+            }))?);
+        }
+        let user = self.actor_user_context();
+        let request = CreateScheduledTaskRequest {
+            agent_id,
+            title: preview.title.clone(),
+            prompt: preview.prompt.clone(),
+            task_kind: preview.task_kind,
+            one_shot_at: preview
+                .schedule_spec
+                .one_shot_at
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&chrono::Utc)),
+            cron_expression: preview.schedule_spec.cron_expression.clone(),
+            timezone: Some(preview.schedule_spec.timezone.clone()),
+            delivery_tier: Some(match preview.session_binding {
+                ScheduledTaskSessionBinding::IsolatedTask => ScheduledTaskDeliveryTier::Durable,
+                ScheduledTaskSessionBinding::BoundSession => {
+                    ScheduledTaskDeliveryTier::SessionScoped
+                }
+            }),
+            owner_session_id: None,
+            schedule_config: preview.schedule_spec.schedule_config.clone(),
+            task_profile: Some(preview.task_profile),
+            payload_kind: Some(preview.payload_kind),
+            session_binding: Some(preview.session_binding),
+            delivery_plan: Some(preview.delivery_plan),
+            execution_contract: Some(preview.execution_contract.clone()),
+        };
+        let created = create_task_internal(
+            &self.agent_service(),
+            self.db.clone(),
+            &user,
+            &self.team_id,
+            request,
+        )
+        .await
+        .map_err(|(status, payload)| {
+            anyhow!("create scheduled task failed ({}): {}", status, payload.0)
+        })?;
+        Ok(serde_json::to_string_pretty(&created.0)?)
+    }
+
+    async fn handle_list_scheduled_tasks(
+        &self,
+        _args: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<String> {
+        self.ensure_scheduled_task_management_allowed("list_scheduled_tasks")
+            .await?;
+        let list = self
+            .scheduled_task_service()
+            .list_tasks(&self.team_id)
+            .await?;
+        Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "tasks": list.tasks,
+            "repair_events": list.repair_events,
+        }))?)
+    }
+
+    async fn handle_remove_scheduled_task(
+        &self,
+        args: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<String> {
+        self.ensure_scheduled_task_management_allowed("remove_scheduled_task")
+            .await?;
+        let task_id = self
+            .resolve_scheduled_task_id(&parse_required_string(args, "task_id_or_title")?)
+            .await?;
+        self.scheduled_task_service()
+            .update_task_doc(
+                &self.team_id,
+                &task_id,
+                doc! {
+                    "status": "deleted",
+                    "next_fire_at": bson::Bson::Null,
+                    "lease_owner": bson::Bson::Null,
+                    "lease_expires_at": bson::Bson::Null,
+                    "updated_at": bson::DateTime::now(),
+                },
+            )
+            .await?;
+        Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "removed": true,
+            "task_id": task_id,
+        }))?)
+    }
+
+    async fn handle_update_scheduled_task(
+        &self,
+        args: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<String> {
+        self.ensure_scheduled_task_management_allowed("update_scheduled_task")
+            .await?;
+        let task_id = self
+            .resolve_scheduled_task_id(&parse_required_string(args, "task_id_or_title")?)
+            .await?;
+        let text = parse_required_string(args, "text")?;
+        let timezone = parse_optional_string(args, "timezone");
+        let agent_id =
+            self.resolve_scheduled_task_agent_id(parse_optional_string(args, "agent_id"))?;
+        let preview = parse_scheduled_task_text(&text, timezone.as_deref(), Some(agent_id.clone()));
+        if !preview.ready_to_create {
+            return Ok(serde_json::to_string_pretty(&serde_json::json!({
+                "updated": false,
+                "preview": preview,
+                "guidance": "请先补充明确的时间描述，再重新调用 update_scheduled_task。"
+            }))?);
+        }
+        let request = UpdateScheduledTaskRequest {
+            agent_id: Some(agent_id),
+            title: Some(preview.title.clone()),
+            prompt: Some(preview.prompt.clone()),
+            task_kind: Some(preview.task_kind),
+            one_shot_at: preview
+                .schedule_spec
+                .one_shot_at
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&chrono::Utc)),
+            cron_expression: Some(preview.schedule_spec.cron_expression.clone()),
+            timezone: Some(preview.schedule_spec.timezone.clone()),
+            delivery_tier: Some(match preview.session_binding {
+                ScheduledTaskSessionBinding::IsolatedTask => ScheduledTaskDeliveryTier::Durable,
+                ScheduledTaskSessionBinding::BoundSession => {
+                    ScheduledTaskDeliveryTier::SessionScoped
+                }
+            }),
+            owner_session_id: None,
+            schedule_config: preview.schedule_spec.schedule_config.clone(),
+            task_profile: Some(preview.task_profile),
+            payload_kind: Some(preview.payload_kind),
+            session_binding: Some(preview.session_binding),
+            delivery_plan: Some(preview.delivery_plan),
+            execution_contract: Some(preview.execution_contract.clone()),
+        };
+        let user = self.actor_user_context();
+        let updated = update_task_internal(
+            &self.agent_service(),
+            self.db.clone(),
+            &user,
+            &self.team_id,
+            &task_id,
+            request,
+        )
+        .await
+        .map_err(|(status, payload)| {
+            anyhow!("update scheduled task failed ({}): {}", status, payload.0)
+        })?;
+        Ok(serde_json::to_string_pretty(&updated.0)?)
+    }
+
+    async fn handle_run_scheduled_task_now(
+        &self,
+        args: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<String> {
+        self.ensure_scheduled_task_management_allowed("run_scheduled_task_now")
+            .await?;
+        let task_id = self
+            .resolve_scheduled_task_id(&parse_required_string(args, "task_id_or_title")?)
+            .await?;
+        let task = self
+            .scheduled_task_service()
+            .get_task(&self.team_id, &task_id)
+            .await?
+            .ok_or_else(|| anyhow!("Scheduled task '{}' not found", task_id))?;
+        let channel_manager = self
+            .channel_manager
+            .clone()
+            .ok_or_else(|| anyhow!("ChatChannelManager is unavailable in current runtime"))?;
+        let workspace_root = self
+            .workspace_root
+            .clone()
+            .ok_or_else(|| anyhow!("workspace_root is unavailable in current runtime"))?;
+        let lease_owner = format!("team-mcp-run-now:{}", uuid::Uuid::new_v4());
+        let scheduled_service = self.scheduled_task_service();
+        let claimed = scheduled_service
+            .claim_task_for_manual_run(&self.team_id, &task_id, &lease_owner, 120)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "Scheduled task '{}' is already running or unavailable",
+                    task_id
+                )
+            })?;
+        let run = start_task_run(
+            self.db.clone(),
+            channel_manager,
+            workspace_root,
+            claimed,
+            "manual",
+            lease_owner,
+        )
+        .await?;
+        Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "task_id": task.task_id,
+            "title": task.title,
+            "run": {
+                "run_id": run.run_id,
+                "status": run.status,
+                "trigger_source": run.trigger_source,
+                "runtime_session_id": run.runtime_session_id,
+            }
+        }))?)
     }
 
     fn template_matches(template: &McpTemplatePreset, query: &str, category: Option<&str>) -> bool {
@@ -2227,6 +2568,112 @@ impl TeamMcpToolsProvider {
                 icons: None,
                 meta: None,
             },
+            Tool {
+                name: "parse_scheduled_task".into(),
+                title: None,
+                description: Some("Parse one natural-language task request into a scheduled-task preview. Use this before creating a scheduled task. The preview returns schedule, task type, output contract, warnings, and whether it is ready to create. Prefer this over manually inventing cron expressions or task payloads.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "text": { "type": "string", "description": "One-sentence task request, e.g. '每天早上 9 点总结团队文档变化并保存成 md'" },
+                        "agent_id": { "type": "string", "description": "Optional. Defaults to the current session agent when available." },
+                        "timezone": { "type": "string", "description": "Optional timezone, e.g. Asia/Shanghai" }
+                    },
+                    "required": ["text"]
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            Tool {
+                name: "create_scheduled_task".into(),
+                title: None,
+                description: Some("Create a scheduled task from one natural-language request. This tool internally parses and normalizes the task before creating the scheduled-task channel. Use this only when the user clearly asked to create a recurring or delayed task, not when they are only asking a question.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "text": { "type": "string", "description": "Natural-language scheduled task request." },
+                        "agent_id": { "type": "string", "description": "Optional execution agent. Defaults to current session agent when available." },
+                        "timezone": { "type": "string", "description": "Optional timezone." }
+                    },
+                    "required": ["text"]
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            Tool {
+                name: "list_scheduled_tasks".into(),
+                title: None,
+                description: Some("List scheduled tasks in the current team, including their current status, schedule, and contract summary.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {}
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            Tool {
+                name: "run_scheduled_task_now".into(),
+                title: None,
+                description: Some("Trigger one existing scheduled task immediately by task id or recognizable title. Use this when the user explicitly asks to run an existing task now.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "task_id_or_title": { "type": "string", "description": "Task id or recognizable title." }
+                    },
+                    "required": ["task_id_or_title"]
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            Tool {
+                name: "update_scheduled_task".into(),
+                title: None,
+                description: Some("Update one existing scheduled task from a new natural-language request. This reparses and renormalizes the task contract instead of manually editing low-level fields.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "task_id_or_title": { "type": "string", "description": "Task id or recognizable title." },
+                        "text": { "type": "string", "description": "New natural-language task request." },
+                        "agent_id": { "type": "string", "description": "Optional execution agent override." },
+                        "timezone": { "type": "string", "description": "Optional timezone override." }
+                    },
+                    "required": ["task_id_or_title", "text"]
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            Tool {
+                name: "remove_scheduled_task".into(),
+                title: None,
+                description: Some("Delete one scheduled task by task id or exact/recognizable title. Use list_scheduled_tasks first when the target is ambiguous.".into()),
+                input_schema: serde_json::from_value(json!({
+                    "type": "object",
+                    "properties": {
+                        "task_id_or_title": { "type": "string", "description": "Task id or title." }
+                    },
+                    "required": ["task_id_or_title"]
+                })).unwrap_or_default(),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
         ]
     }
 }
@@ -2281,6 +2728,12 @@ impl McpClientTrait for TeamMcpToolsProvider {
             "attach_team_mcp" => self.handle_attach_team_mcp(&args).await,
             "update_team_mcp" => self.handle_update_team_mcp(&args).await,
             "remove_team_mcp" => self.handle_remove_team_mcp(&args).await,
+            "parse_scheduled_task" => self.handle_parse_scheduled_task(&args).await,
+            "create_scheduled_task" => self.handle_create_scheduled_task(&args).await,
+            "list_scheduled_tasks" => self.handle_list_scheduled_tasks(&args).await,
+            "run_scheduled_task_now" => self.handle_run_scheduled_task_now(&args).await,
+            "update_scheduled_task" => self.handle_update_scheduled_task(&args).await,
+            "remove_scheduled_task" => self.handle_remove_scheduled_task(&args).await,
             _ => Err(anyhow!("Unknown tool: {}", name)),
         };
 

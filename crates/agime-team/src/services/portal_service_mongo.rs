@@ -104,14 +104,7 @@ pub struct PortalService {
 
 impl PortalService {
     fn active_portal_partial_index_filter() -> bson::Document {
-        // Mongo partial indexes do not accept `$ne`, so match active rows via
-        // `false` plus `null` (which also covers legacy documents with no field).
-        doc! {
-            "$or": [
-                { "is_deleted": false },
-                { "is_deleted": Bson::Null }
-            ]
-        }
+        doc! { "is_deleted": { "$eq": false } }
     }
 
     pub fn new(db: MongoDb) -> Self {
@@ -7239,12 +7232,7 @@ mod tests {
     fn active_portal_partial_index_filter_matches_false_and_missing_rows() {
         assert_eq!(
             PortalService::active_portal_partial_index_filter(),
-            doc! {
-                "$or": [
-                    { "is_deleted": false },
-                    { "is_deleted": Bson::Null }
-                ]
-            }
+            doc! { "is_deleted": { "$eq": false } }
         );
     }
 }

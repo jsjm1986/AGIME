@@ -14,6 +14,36 @@ use super::task_runtime::{
     TaskKind, TaskRuntime, TaskRuntimeEvent, TaskRuntimeHost, WorkerAttemptIdentity,
 };
 use super::tools::ToolTransportKind;
+use super::transcript::{annotate_task_ledger_runtime_state, upsert_task_ledger_snapshot};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentAnalysisPhase {
+    AccessNotEstablished,
+    AccessEstablished,
+    ContentRead,
+    AnalysisReadyForValidation,
+}
+
+impl DocumentAnalysisPhase {
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::AccessNotEstablished => 0,
+            Self::AccessEstablished => 1,
+            Self::ContentRead => 2,
+            Self::AnalysisReadyForValidation => 3,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AccessNotEstablished => "access_not_established",
+            Self::AccessEstablished => "access_established",
+            Self::ContentRead => "content_read",
+            Self::AnalysisReadyForValidation => "analysis_ready_for_validation",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoordinatorSignal {
@@ -34,16 +64,25 @@ pub enum CoordinatorSignal {
         summary: String,
         accepted_targets: Vec<String>,
         produced_delta: bool,
+        recovered_terminal_summary: bool,
         attempt_identity: Option<WorkerAttemptIdentity>,
     },
     WorkerFailed {
         task_id: String,
         kind: TaskKind,
         summary: String,
+        recovered_terminal_summary: bool,
         attempt_identity: Option<WorkerAttemptIdentity>,
     },
     ValidationReported {
         report: ValidationReport,
+    },
+    DocumentPhaseUpdated {
+        phase: DocumentAnalysisPhase,
+        workspace_path: Option<String>,
+        doc_id: Option<String>,
+        reason_code: Option<String>,
+        next_action: Option<String>,
     },
     WorkerIdle {
         task_id: String,
@@ -67,6 +106,7 @@ pub enum CoordinatorSignal {
         worker_name: Option<String>,
         tool_name: String,
         decision: String,
+        source: Option<String>,
         attempt_identity: Option<WorkerAttemptIdentity>,
     },
     PermissionTimedOut {
@@ -100,6 +140,8 @@ pub struct WorkerOutcome {
     pub summary: String,
     pub accepted_targets: Vec<String>,
     pub produced_delta: bool,
+    #[serde(default)]
+    pub recovered_terminal_summary: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt_identity: Option<WorkerAttemptIdentity>,
 }
@@ -113,6 +155,7 @@ impl Default for WorkerOutcome {
             summary: String::new(),
             accepted_targets: Vec::new(),
             produced_delta: false,
+            recovered_terminal_summary: false,
             attempt_identity: None,
         }
     }
@@ -180,6 +223,12 @@ pub struct CoordinatorSignalSummary {
     pub latest_completion_summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_structured_completion: Option<StructuredCompletionSignal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_phase: Option<DocumentAnalysisPhase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_workspace_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_next_action: Option<String>,
     pub worker_outcomes: Vec<WorkerOutcome>,
     pub validation_outcomes: Vec<ValidationSignalOutcome>,
     pub accepted_targets: Vec<String>,
@@ -199,6 +248,8 @@ pub struct RuntimeNotificationInput {
 }
 
 pub type SharedCoordinatorSignalStore = Arc<CoordinatorSignalStore>;
+
+const RECOVERED_TERMINAL_SUMMARY_KEY: &str = "recovered_terminal_summary";
 
 impl CoordinatorSignalSummary {
     pub fn from_signals(signals: &[CoordinatorSignal]) -> Self {
@@ -231,6 +282,7 @@ impl CoordinatorSignalSummary {
                     summary: text,
                     accepted_targets,
                     produced_delta,
+                    recovered_terminal_summary,
                     attempt_identity,
                 } => {
                     summary.worker_completed += 1;
@@ -246,6 +298,7 @@ impl CoordinatorSignalSummary {
                             summary: text.clone(),
                             accepted_targets: accepted_targets.clone(),
                             produced_delta: *produced_delta,
+                            recovered_terminal_summary: *recovered_terminal_summary,
                             attempt_identity: attempt_identity.clone(),
                         });
                     }
@@ -264,6 +317,7 @@ impl CoordinatorSignalSummary {
                     task_id,
                     kind,
                     summary: text,
+                    recovered_terminal_summary,
                     attempt_identity,
                 } => {
                     summary.worker_failed += 1;
@@ -279,6 +333,7 @@ impl CoordinatorSignalSummary {
                             summary: text.clone(),
                             accepted_targets: Vec::new(),
                             produced_delta: false,
+                            recovered_terminal_summary: *recovered_terminal_summary,
                             attempt_identity: attempt_identity.clone(),
                         });
                     }
@@ -300,6 +355,32 @@ impl CoordinatorSignalSummary {
                             && outcome.target_artifacts == report.target_artifacts
                     }) {
                         summary.validation_outcomes.push(report.clone());
+                    }
+                }
+                CoordinatorSignal::DocumentPhaseUpdated {
+                    phase,
+                    workspace_path,
+                    next_action,
+                    ..
+                } => {
+                    let should_replace = summary
+                        .document_phase
+                        .map(|existing| phase.rank() >= existing.rank())
+                        .unwrap_or(true);
+                    if should_replace {
+                        summary.document_phase = Some(*phase);
+                        if let Some(path) = workspace_path
+                            .as_ref()
+                            .filter(|value| !value.trim().is_empty())
+                        {
+                            summary.document_workspace_path = Some(path.clone());
+                        }
+                        if let Some(action) = next_action
+                            .as_ref()
+                            .filter(|value| !value.trim().is_empty())
+                        {
+                            summary.document_next_action = Some(action.clone());
+                        }
                     }
                 }
                 CoordinatorSignal::PermissionRequested { .. } => summary.permission_requested += 1,
@@ -374,41 +455,12 @@ impl CoordinatorSignalSummary {
                         }
                     }
                 }
-                CoordinatorSignal::FallbackRequested { reason }
-                | CoordinatorSignal::WorkerFollowupRequested { reason, .. } => {
-                    if !reason.trim().is_empty() {
-                        summary.latest_completion_summary = Some(reason.trim().to_string());
-                    }
-                }
-                CoordinatorSignal::PermissionTimedOut {
-                    tool_name,
-                    timeout_ms,
-                    ..
-                } => {
-                    summary.latest_completion_summary = Some(format!(
-                        "permission bridge timed out while waiting for `{}` after {} ms",
-                        tool_name, timeout_ms
-                    ));
-                }
-                CoordinatorSignal::WorkerIdle { message, .. } => {
-                    if !message.trim().is_empty() {
-                        summary.latest_completion_summary = Some(message.trim().to_string());
-                    }
-                }
-                CoordinatorSignal::PermissionResolved {
-                    decision,
-                    tool_name,
-                    ..
-                } => {
-                    summary.latest_completion_summary = Some(format!(
-                        "permission `{}` resolved for `{}`",
-                        decision, tool_name
-                    ));
-                }
-                CoordinatorSignal::PermissionRequested { tool_name, .. } => {
-                    summary.latest_completion_summary =
-                        Some(format!("permission requested for `{}`", tool_name));
-                }
+                CoordinatorSignal::FallbackRequested { .. }
+                | CoordinatorSignal::WorkerFollowupRequested { .. }
+                | CoordinatorSignal::PermissionTimedOut { .. }
+                | CoordinatorSignal::WorkerIdle { .. }
+                | CoordinatorSignal::PermissionResolved { .. }
+                | CoordinatorSignal::PermissionRequested { .. } => {}
                 CoordinatorSignal::MailboxMessageReceived {
                     kind,
                     text,
@@ -422,16 +474,9 @@ impl CoordinatorSignalSummary {
                             .or_else(|| (!text.trim().is_empty()).then(|| text.trim().to_string()));
                     }
                 }
-                CoordinatorSignal::ToolCompleted { tool_name, .. } => {
-                    summary.latest_completion_summary =
-                        Some(format!("tool `{}` completed", tool_name));
-                }
-                CoordinatorSignal::ToolFailed {
-                    tool_name, error, ..
-                } => {
-                    summary.latest_completion_summary =
-                        Some(format!("tool `{}` failed: {}", tool_name, error));
-                }
+                CoordinatorSignal::ToolCompleted { .. }
+                | CoordinatorSignal::ToolFailed { .. }
+                | CoordinatorSignal::DocumentPhaseUpdated { .. } => {}
                 CoordinatorSignal::CompletionReady { report } => {
                     if let Some(text) = report.summary.as_deref().map(str::trim) {
                         if !text.is_empty() {
@@ -455,17 +500,54 @@ impl CoordinatorSignalSummary {
             || self.fallback_requested > 0
     }
 
-    pub fn validation_status(&self) -> Option<&'static str> {
-        if self
-            .validation_outcomes
+    fn completed_document_read_tool(&self) -> bool {
+        self.completed_tool_names
             .iter()
-            .any(|report| report.status == ValidationStatus::Failed)
+            .any(|name| name == "document_tools__read_document")
+    }
+
+    fn validation_failure_contradicted_by_document_read(&self, report: &ValidationReport) -> bool {
+        if report.status != ValidationStatus::Failed || !self.completed_document_read_tool() {
+            return false;
+        }
+        if !report
+            .target_artifacts
+            .iter()
+            .any(|artifact| artifact.starts_with("document:"))
         {
+            return false;
+        }
+        let reason = report
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        reason.contains("no document read tools")
+            || reason.contains("no document tools")
+            || reason.contains("document read tools")
+            || reason.contains("missing document access")
+    }
+
+    pub fn has_hard_blocking_signals(&self) -> bool {
+        self.permission_timed_out > 0
+            || self.fallback_requested > 0
+            || self.validation_outcomes.iter().any(|report| {
+                report.status == ValidationStatus::Failed
+                    && !self.validation_failure_contradicted_by_document_read(report)
+            })
+    }
+
+    pub fn validation_status(&self) -> Option<&'static str> {
+        if self.validation_outcomes.iter().any(|report| {
+            report.status == ValidationStatus::Failed
+                && !self.validation_failure_contradicted_by_document_read(report)
+        }) {
             Some("failed")
         } else if self
             .validation_outcomes
             .iter()
             .any(|report| report.status == ValidationStatus::Passed)
+            || self.completed_document_read_tool()
         {
             Some("passed")
         } else {
@@ -474,6 +556,12 @@ impl CoordinatorSignalSummary {
     }
 
     pub fn document_access_established(&self) -> bool {
+        if self
+            .document_phase
+            .is_some_and(|phase| phase.rank() >= DocumentAnalysisPhase::AccessEstablished.rank())
+        {
+            return true;
+        }
         self.validation_outcomes.iter().any(|report| {
             report
                 .target_artifacts
@@ -483,12 +571,26 @@ impl CoordinatorSignalSummary {
     }
 
     pub fn document_content_accessed(&self) -> bool {
+        if self
+            .document_phase
+            .is_some_and(|phase| phase.rank() >= DocumentAnalysisPhase::ContentRead.rank())
+        {
+            return true;
+        }
+        if self.completed_document_read_tool() {
+            return true;
+        }
         self.validation_outcomes
             .iter()
             .any(|report| report.content_accessed)
     }
 
     pub fn document_analysis_complete(&self) -> bool {
+        if self.document_phase.is_some_and(|phase| {
+            phase.rank() >= DocumentAnalysisPhase::AnalysisReadyForValidation.rank()
+        }) {
+            return true;
+        }
         self.validation_outcomes
             .iter()
             .any(|report| report.analysis_complete)
@@ -498,11 +600,14 @@ impl CoordinatorSignalSummary {
         if let Some(reason) = self
             .validation_outcomes
             .iter()
-            .find(|report| report.status == ValidationStatus::Failed)
+            .find(|report| {
+                report.status == ValidationStatus::Failed
+                    && !self.validation_failure_contradicted_by_document_read(report)
+            })
             .and_then(|report| report.reason.clone())
         {
             Some(reason)
-        } else if self.validation_failed > 0 {
+        } else if self.has_hard_blocking_signals() && self.validation_failed > 0 {
             Some("validation failed".to_string())
         } else if self.worker_failed > 0 {
             Some("worker execution failed".to_string())
@@ -632,6 +737,7 @@ impl RuntimeNotificationInput {
                     kind,
                     summary,
                     attempt_identity,
+                    ..
                 } => {
                     lines.push("<task-notification>".to_string());
                     lines.push("<kind>worker-failed</kind>".to_string());
@@ -738,6 +844,7 @@ impl RuntimeNotificationInput {
                     task_id,
                     tool_name,
                     decision,
+                    source,
                     attempt_identity,
                     ..
                 } => {
@@ -753,6 +860,9 @@ impl RuntimeNotificationInput {
                     }
                     lines.push(format!("<tool>{}</tool>", tool_name));
                     lines.push(format!("<decision>{}</decision>", decision));
+                    if let Some(source) = source.as_ref() {
+                        lines.push(format!("<source>{}</source>", source));
+                    }
                     lines.push("</task-notification>".to_string());
                 }
                 CoordinatorSignal::PermissionTimedOut {
@@ -834,6 +944,30 @@ impl RuntimeNotificationInput {
                             "<blocking-reason>{}</blocking-reason>",
                             blocking_reason
                         ));
+                    }
+                    lines.push("</task-notification>".to_string());
+                }
+                CoordinatorSignal::DocumentPhaseUpdated {
+                    phase,
+                    workspace_path,
+                    doc_id,
+                    reason_code,
+                    next_action,
+                } => {
+                    lines.push("<task-notification>".to_string());
+                    lines.push("<kind>document-phase</kind>".to_string());
+                    lines.push(format!("<phase>{}</phase>", phase.as_str()));
+                    if let Some(doc_id) = doc_id.as_deref() {
+                        lines.push(format!("<document-id>{}</document-id>", doc_id));
+                    }
+                    if let Some(path) = workspace_path.as_deref() {
+                        lines.push(format!("<workspace-path>{}</workspace-path>", path));
+                    }
+                    if let Some(reason_code) = reason_code.as_deref() {
+                        lines.push(format!("<reason-code>{}</reason-code>", reason_code));
+                    }
+                    if let Some(next_action) = next_action.as_deref() {
+                        lines.push(format!("<next-action>{}</next-action>", next_action));
                     }
                     lines.push("</task-notification>".to_string());
                 }
@@ -970,6 +1104,7 @@ pub fn spawn_task_runtime_signal_bridge(
             match event {
                 TaskRuntimeEvent::Started(snapshot) => {
                     if snapshot.parent_session_id == parent_session_id {
+                        let _ = upsert_task_ledger_snapshot(&parent_session_id, &snapshot).await;
                         tracked_tasks.insert(
                             snapshot.task_id,
                             TrackedTaskState {
@@ -987,6 +1122,18 @@ pub fn spawn_task_runtime_signal_bridge(
                     tool_name,
                     timeout_ms,
                 } => {
+                    let _ = annotate_task_ledger_runtime_state(
+                        &parent_session_id,
+                        &task_id,
+                        "permission_timed_out",
+                        worker_name
+                            .clone()
+                            .map(|name| format!("{} timed out on {}", name, tool_name)),
+                        Some(tool_name.clone()),
+                        None,
+                        Some(timeout_ms),
+                    )
+                    .await;
                     if let Some(state) = tracked_tasks.get(&task_id) {
                         signal_store
                             .record(CoordinatorSignal::PermissionTimedOut {
@@ -1004,6 +1151,18 @@ pub fn spawn_task_runtime_signal_bridge(
                     worker_name,
                     tool_name,
                 } => {
+                    let _ = annotate_task_ledger_runtime_state(
+                        &parent_session_id,
+                        &task_id,
+                        "permission_requested",
+                        worker_name
+                            .clone()
+                            .map(|name| format!("{} waiting on {}", name, tool_name)),
+                        Some(tool_name.clone()),
+                        None,
+                        None,
+                    )
+                    .await;
                     if let Some(state) = tracked_tasks.get(&task_id) {
                         signal_store
                             .record(CoordinatorSignal::PermissionRequested {
@@ -1020,7 +1179,20 @@ pub fn spawn_task_runtime_signal_bridge(
                     worker_name,
                     tool_name,
                     decision,
+                    source,
                 } => {
+                    let _ = annotate_task_ledger_runtime_state(
+                        &parent_session_id,
+                        &task_id,
+                        "permission_resolved",
+                        worker_name
+                            .clone()
+                            .map(|name| format!("{} resolved {}", name, tool_name)),
+                        Some(tool_name.clone()),
+                        Some(decision.clone()),
+                        None,
+                    )
+                    .await;
                     if let Some(state) = tracked_tasks.get(&task_id) {
                         signal_store
                             .record(CoordinatorSignal::PermissionResolved {
@@ -1028,6 +1200,7 @@ pub fn spawn_task_runtime_signal_bridge(
                                 worker_name,
                                 tool_name,
                                 decision,
+                                source,
                                 attempt_identity: state.attempt_identity.clone(),
                             })
                             .await;
@@ -1038,6 +1211,16 @@ pub fn spawn_task_runtime_signal_bridge(
                     kind,
                     reason,
                 } => {
+                    let _ = annotate_task_ledger_runtime_state(
+                        &parent_session_id,
+                        &task_id,
+                        "followup_requested",
+                        Some(format!("{}: {}", kind, reason)),
+                        None,
+                        None,
+                        None,
+                    )
+                    .await;
                     if let Some(state) = tracked_tasks.get(&task_id) {
                         signal_store
                             .record(CoordinatorSignal::WorkerFollowupRequested {
@@ -1050,6 +1233,16 @@ pub fn spawn_task_runtime_signal_bridge(
                     }
                 }
                 TaskRuntimeEvent::Idle { task_id, message } => {
+                    let _ = annotate_task_ledger_runtime_state(
+                        &parent_session_id,
+                        &task_id,
+                        "idle",
+                        Some(message.clone()),
+                        None,
+                        None,
+                        None,
+                    )
+                    .await;
                     if let Some(state) = tracked_tasks.get(&task_id) {
                         signal_store
                             .record(CoordinatorSignal::WorkerIdle {
@@ -1061,53 +1254,91 @@ pub fn spawn_task_runtime_signal_bridge(
                     }
                 }
                 TaskRuntimeEvent::Completed(result) => {
-                    if let Some(state) = tracked_tasks.get(&result.task_id) {
+                    let task_id = result.task_id.clone();
+                    if let Some(snapshot) = task_runtime.snapshot(&result.task_id).await {
+                        if snapshot.parent_session_id != parent_session_id {
+                            continue;
+                        }
+                        let _ = upsert_task_ledger_snapshot(&parent_session_id, &snapshot).await;
+                        let attempt_identity = tracked_tasks
+                            .get(&result.task_id)
+                            .and_then(|state| state.attempt_identity.clone())
+                            .or_else(|| WorkerAttemptIdentity::from_metadata(&snapshot.metadata));
+                        let target_artifacts = tracked_tasks
+                            .get(&result.task_id)
+                            .map(|state| state.target_artifacts.clone())
+                            .unwrap_or_else(|| snapshot.target_artifacts.clone());
                         if result.kind == TaskKind::ValidationWorker {
                             let report = parse_validation_outcome(&result.summary)
-                                .with_validator_context(
-                                    Some(result.task_id),
-                                    state.target_artifacts.clone(),
-                                );
+                                .with_validator_context(Some(task_id.clone()), target_artifacts);
                             let signal = CoordinatorSignal::ValidationReported { report };
                             signal_store.record(signal).await;
                         } else {
+                            let recovered_terminal_summary = result
+                                .metadata
+                                .get(RECOVERED_TERMINAL_SUMMARY_KEY)
+                                .is_some_and(|value| value == "true");
                             signal_store
                                 .record(CoordinatorSignal::WorkerCompleted {
-                                    task_id: result.task_id,
+                                    task_id,
                                     kind: result.kind,
                                     summary: result.summary,
                                     accepted_targets: result.accepted_targets,
                                     produced_delta: result.produced_delta,
-                                    attempt_identity: state.attempt_identity.clone(),
+                                    recovered_terminal_summary,
+                                    attempt_identity,
                                 })
                                 .await;
                         }
+                        tracked_tasks.remove(&result.task_id);
                     }
                 }
                 TaskRuntimeEvent::Failed(result) => {
-                    if let Some(state) = tracked_tasks.get(&result.task_id) {
+                    let task_id = result.task_id.clone();
+                    if let Some(snapshot) = task_runtime.snapshot(&result.task_id).await {
+                        if snapshot.parent_session_id != parent_session_id {
+                            continue;
+                        }
+                        let _ = upsert_task_ledger_snapshot(&parent_session_id, &snapshot).await;
+                        let attempt_identity = tracked_tasks
+                            .get(&result.task_id)
+                            .and_then(|state| state.attempt_identity.clone())
+                            .or_else(|| WorkerAttemptIdentity::from_metadata(&snapshot.metadata));
+                        let target_artifacts = tracked_tasks
+                            .get(&result.task_id)
+                            .map(|state| state.target_artifacts.clone())
+                            .unwrap_or_else(|| snapshot.target_artifacts.clone());
                         if result.kind == TaskKind::ValidationWorker {
                             let report = parse_validation_outcome(&result.summary)
-                                .with_validator_context(
-                                    Some(result.task_id),
-                                    state.target_artifacts.clone(),
-                                );
+                                .with_validator_context(Some(task_id.clone()), target_artifacts);
                             signal_store
                                 .record(CoordinatorSignal::ValidationReported { report })
                                 .await;
                         } else {
+                            let recovered_terminal_summary = result
+                                .metadata
+                                .get(RECOVERED_TERMINAL_SUMMARY_KEY)
+                                .is_some_and(|value| value == "true");
                             signal_store
                                 .record(CoordinatorSignal::WorkerFailed {
-                                    task_id: result.task_id,
+                                    task_id,
                                     kind: result.kind,
                                     summary: result.summary,
-                                    attempt_identity: state.attempt_identity.clone(),
+                                    recovered_terminal_summary,
+                                    attempt_identity,
                                 })
                                 .await;
                         }
+                        tracked_tasks.remove(&result.task_id);
                     }
                 }
                 TaskRuntimeEvent::Cancelled { task_id } => {
+                    if let Some(snapshot) = task_runtime.snapshot(&task_id).await {
+                        if snapshot.parent_session_id == parent_session_id {
+                            let _ =
+                                upsert_task_ledger_snapshot(&parent_session_id, &snapshot).await;
+                        }
+                    }
                     tracked_tasks.remove(&task_id);
                 }
                 TaskRuntimeEvent::Progress { .. } => {}
@@ -1119,25 +1350,38 @@ pub fn spawn_task_runtime_signal_bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::harness::load_task_ledger_state;
     use crate::agents::harness::task_runtime::{TaskResultEnvelope, TaskRuntimeHost};
     use crate::conversation::message::MessageMetadata;
     use crate::conversation::message::{MessageContent, SystemNotificationType};
+    use crate::session::{SessionManager, SessionType};
     use std::collections::HashMap;
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn task_runtime_signal_bridge_records_worker_and_validation_signals() {
+        let parent_session_id = format!("parent-{}", Uuid::new_v4());
+        SessionManager::create_session_with_id(
+            parent_session_id.clone(),
+            std::env::current_dir().unwrap_or_else(|_| ".".into()),
+            "signal-bridge-parent".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create parent session");
+
         let runtime = TaskRuntime::shared();
         let signals = CoordinatorSignalStore::shared();
         let bridge = spawn_task_runtime_signal_bridge(
             runtime.clone(),
-            "parent-1".to_string(),
+            parent_session_id.clone(),
             signals.clone(),
         );
 
         let handle = runtime
             .spawn_task(super::super::task_runtime::TaskSpec {
                 task_id: "worker-1".to_string(),
-                parent_session_id: "parent-1".to_string(),
+                parent_session_id: parent_session_id.clone(),
                 depth: 1,
                 kind: TaskKind::SwarmWorker,
                 description: None,
@@ -1204,6 +1448,158 @@ mod tests {
         )));
     }
 
+    #[tokio::test]
+    async fn task_runtime_signal_bridge_persists_task_ledger_for_parent_session() {
+        let parent_session_id = format!("parent-ledger-{}", Uuid::new_v4());
+        SessionManager::create_session_with_id(
+            parent_session_id.clone(),
+            std::env::current_dir().unwrap_or_else(|_| ".".into()),
+            "task-ledger-parent".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create parent session");
+
+        let runtime = TaskRuntime::shared();
+        let signals = CoordinatorSignalStore::shared();
+        let bridge =
+            spawn_task_runtime_signal_bridge(runtime.clone(), parent_session_id.clone(), signals);
+        tokio::task::yield_now().await;
+
+        let handle = runtime
+            .spawn_task(super::super::task_runtime::TaskSpec {
+                task_id: "worker-ledger-1".to_string(),
+                parent_session_id: parent_session_id.clone(),
+                depth: 1,
+                kind: TaskKind::SwarmWorker,
+                description: Some("worker".to_string()),
+                write_scope: vec!["docs".to_string()],
+                target_artifacts: vec!["docs/a.md".to_string()],
+                result_contract: vec!["docs/a.md".to_string()],
+                metadata: HashMap::new(),
+            })
+            .await
+            .expect("spawn task");
+
+        runtime
+            .complete(TaskResultEnvelope {
+                task_id: handle.task_id,
+                kind: TaskKind::SwarmWorker,
+                status: super::super::task_runtime::TaskStatus::Completed,
+                summary: "updated docs/a.md".to_string(),
+                accepted_targets: vec!["docs/a.md".to_string()],
+                produced_delta: true,
+                metadata: HashMap::new(),
+            })
+            .await
+            .expect("complete task");
+
+        let mut ledger = load_task_ledger_state(&parent_session_id)
+            .await
+            .expect("load task ledger");
+        for _ in 0..20 {
+            if !ledger.tasks.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            ledger = load_task_ledger_state(&parent_session_id)
+                .await
+                .expect("reload task ledger");
+        }
+        bridge.abort();
+
+        assert_eq!(ledger.tasks.len(), 1);
+        assert_eq!(ledger.tasks[0].task_id, "worker-ledger-1");
+        assert_eq!(
+            ledger.tasks[0].status,
+            super::super::task_runtime::TaskStatus::Completed
+        );
+        assert_eq!(
+            ledger.tasks[0].summary.as_deref(),
+            Some("updated docs/a.md")
+        );
+    }
+
+    #[tokio::test]
+    async fn task_runtime_signal_bridge_persists_runtime_markers_to_task_ledger() {
+        let parent_session_id = format!("parent-ledger-runtime-{}", Uuid::new_v4());
+        SessionManager::create_session_with_id(
+            parent_session_id.clone(),
+            std::env::current_dir().unwrap_or_else(|_| ".".into()),
+            "task-ledger-runtime-parent".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create parent session");
+
+        let runtime = TaskRuntime::shared();
+        let signals = CoordinatorSignalStore::shared();
+        let bridge =
+            spawn_task_runtime_signal_bridge(runtime.clone(), parent_session_id.clone(), signals);
+        tokio::task::yield_now().await;
+
+        let handle = runtime
+            .spawn_task(super::super::task_runtime::TaskSpec {
+                task_id: "worker-runtime-1".to_string(),
+                parent_session_id: parent_session_id.clone(),
+                depth: 1,
+                kind: TaskKind::SwarmWorker,
+                description: Some("worker".to_string()),
+                write_scope: vec!["docs".to_string()],
+                target_artifacts: vec!["docs/a.md".to_string()],
+                result_contract: vec!["docs/a.md".to_string()],
+                metadata: HashMap::new(),
+            })
+            .await
+            .expect("spawn task");
+
+        runtime
+            .record_permission_requested(
+                &handle.task_id,
+                Some("worker-a".to_string()),
+                "developer__shell".to_string(),
+            )
+            .await
+            .expect("record permission requested");
+
+        let mut ledger = load_task_ledger_state(&parent_session_id)
+            .await
+            .expect("load task ledger");
+        for _ in 0..20 {
+            let task = ledger
+                .tasks
+                .iter()
+                .find(|task| task.task_id == handle.task_id);
+            if task
+                .and_then(|task| task.metadata.get("runtime_state"))
+                .is_some()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            ledger = load_task_ledger_state(&parent_session_id)
+                .await
+                .expect("reload task ledger");
+        }
+        bridge.abort();
+
+        let task = ledger
+            .tasks
+            .iter()
+            .find(|task| task.task_id == "worker-runtime-1")
+            .expect("persisted task");
+        assert_eq!(
+            task.metadata.get("runtime_state").map(String::as_str),
+            Some("permission_requested")
+        );
+        assert_eq!(
+            task.metadata
+                .get("permission_tool_name")
+                .map(String::as_str),
+            Some("developer__shell")
+        );
+    }
+
     #[test]
     fn coordinator_signal_summary_counts_blocking_and_completion_state() {
         let summary = CoordinatorSignalSummary::from_signals(&[
@@ -1216,6 +1612,7 @@ mod tests {
                 task_id: "worker-1".to_string(),
                 kind: TaskKind::SwarmWorker,
                 summary: "FAIL: worker crashed".to_string(),
+                recovered_terminal_summary: false,
                 attempt_identity: None,
             },
             CoordinatorSignal::CompletionReady {
@@ -1242,6 +1639,7 @@ mod tests {
         assert!(summary.completion_ready);
         assert_eq!(summary.latest_completion_summary.as_deref(), Some("done"));
         assert!(summary.has_blocking_signals());
+        assert!(!summary.has_hard_blocking_signals());
     }
 
     #[test]
@@ -1254,6 +1652,62 @@ mod tests {
 
         assert!(summary.satisfies_required_tool_prefixes(&["document_tools__".to_string()]));
         assert!(!summary.satisfies_required_tool_prefixes(&["developer__".to_string()]));
+    }
+
+    #[test]
+    fn document_read_evidence_overrides_stale_missing_tool_validation_failure() {
+        let summary = CoordinatorSignalSummary::from_signals(&[
+            CoordinatorSignal::ToolCompleted {
+                request_id: "req-1".to_string(),
+                tool_name: "document_tools__read_document".to_string(),
+                transport: ToolTransportKind::ServerLocal,
+            },
+            CoordinatorSignal::ValidationReported {
+                report: ValidationReport {
+                    status: ValidationStatus::Failed,
+                    reason: Some(
+                        "No document read tools are available in the current tool surface."
+                            .to_string(),
+                    ),
+                    reason_code: None,
+                    validator_task_id: Some("validator-1".to_string()),
+                    target_artifacts: vec!["document:doc-1".to_string()],
+                    evidence_summary: None,
+                    content_accessed: false,
+                    analysis_complete: false,
+                },
+            },
+        ]);
+
+        assert!(!summary.has_hard_blocking_signals());
+        assert_eq!(summary.validation_status(), Some("passed"));
+        assert!(summary.document_content_accessed());
+        assert_eq!(summary.default_blocking_reason(), None);
+    }
+
+    #[test]
+    fn tool_and_document_progress_do_not_become_completion_summary() {
+        let summary = CoordinatorSignalSummary::from_signals(&[
+            CoordinatorSignal::ToolCompleted {
+                request_id: "req-1".to_string(),
+                tool_name: "document_tools__document_inventory".to_string(),
+                transport: ToolTransportKind::ServerLocal,
+            },
+            CoordinatorSignal::DocumentPhaseUpdated {
+                phase: DocumentAnalysisPhase::AccessEstablished,
+                workspace_path: Some("/tmp/docs".to_string()),
+                doc_id: Some("doc-1".to_string()),
+                reason_code: None,
+                next_action: Some("read_document".to_string()),
+            },
+        ]);
+
+        assert_eq!(summary.tool_completed, 1);
+        assert_eq!(
+            summary.document_phase,
+            Some(DocumentAnalysisPhase::AccessEstablished)
+        );
+        assert_eq!(summary.latest_completion_summary, None);
     }
 
     #[tokio::test]
@@ -1273,6 +1727,7 @@ mod tests {
                 summary: "worker finished".to_string(),
                 accepted_targets: vec!["docs/a.md".to_string()],
                 produced_delta: true,
+                recovered_terminal_summary: false,
                 attempt_identity: None,
             })
             .await;
@@ -1297,6 +1752,7 @@ mod tests {
                 summary: "implemented the change".to_string(),
                 accepted_targets: vec!["docs/a.md".to_string()],
                 produced_delta: true,
+                recovered_terminal_summary: false,
                 attempt_identity: None,
             }],
             summary: CoordinatorSignalSummary {

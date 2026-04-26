@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::agents::harness::child_tasks::{
     build_swarm_worker_instructions, build_validation_worker_instructions,
     classify_child_task_result, parse_validation_outcome, validation_response_schema,
+    ChildExecutionExpectation, ValidationReport,
 };
 use crate::agents::harness::coordinator::{
     leader_permission_bridge_enabled, swarm_scratchpad_enabled, worker_name_for_target,
@@ -45,9 +46,16 @@ enum WorkerFollowupKind {
     Correction,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkerExecutionExpectation {
+    ReadOnlyInspection,
+    MaterializingChange,
+}
+
 #[derive(Clone, Debug)]
 struct WorkerExecutionResult {
     summary: String,
+    accepted_targets: Vec<String>,
     produced_targets: Vec<String>,
     produced_delta: bool,
 }
@@ -216,6 +224,77 @@ async fn drive_permission_bridge(
             }
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn is_logical_artifact_target(target: &str) -> bool {
+    target.contains(':') && !Path::new(target).is_absolute()
+}
+
+fn resolve_workspace_validation_target(working_dir: &Path, target: &str) -> Option<PathBuf> {
+    let trimmed = target.trim();
+    if trimmed.is_empty() || is_logical_artifact_target(trimmed) {
+        return None;
+    }
+    let normalized = trimmed.replace('\\', "/");
+    let candidate = PathBuf::from(&normalized);
+    if candidate.is_absolute() {
+        return candidate.starts_with(working_dir).then_some(candidate);
+    }
+    if Path::new(&normalized).components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    }) {
+        return None;
+    }
+    Some(working_dir.join(candidate))
+}
+
+fn precheck_materialized_validation_target(
+    working_dir: &Path,
+    target_artifact: &str,
+) -> Option<ValidationReport> {
+    let target_path = resolve_workspace_validation_target(working_dir, target_artifact)?;
+    (!target_path.exists()).then(|| ValidationReport::artifact_not_materialized(target_artifact))
+}
+
+fn summarize_validation_report(report: &ValidationReport) -> String {
+    if report.passed() {
+        report
+            .evidence_summary
+            .clone()
+            .unwrap_or_else(|| "PASS: validation passed".to_string())
+    } else if let Some(reason) = report.failure_reason() {
+        format!("FAIL: {}", reason)
+    } else {
+        report
+            .evidence_summary
+            .clone()
+            .unwrap_or_else(|| "FAIL: validation failed".to_string())
+    }
+}
+
+fn accepts_recovered_worker_summary(worker_summary: &str, produced_delta: bool) -> bool {
+    produced_delta
+        && worker_summary
+            .to_ascii_lowercase()
+            .contains("worker finished without an explicit terminal summary")
+}
+
+fn summarize_worker_for_leader(worker_summary: &str, recovered_terminal_summary: bool) -> String {
+    if !recovered_terminal_summary {
+        return worker_summary.to_string();
+    }
+    "completed via recovered worker trace".to_string()
+}
+
+fn worker_execution_expectation(worker: &SwarmWorkerSpec) -> WorkerExecutionExpectation {
+    if worker.write_scope.is_empty() {
+        WorkerExecutionExpectation::ReadOnlyInspection
+    } else {
+        WorkerExecutionExpectation::MaterializingChange
     }
 }
 
@@ -548,7 +627,7 @@ async fn execute_worker_attempt(
         )
         .with_task_runtime(Some(task_runtime.clone()), Some(handle.task_id.clone()));
 
-    let summary = run_complete_subagent_task(
+    let task_result = run_complete_subagent_task(
         worker_recipe(instruction)?,
         worker_task_config,
         true,
@@ -556,10 +635,23 @@ async fn execute_worker_attempt(
         Some(worker_cancel),
     )
     .await
-    .unwrap_or_else(|error| format!("FAIL: {}", error));
+    .unwrap_or_else(
+        |error| crate::agents::subagent_handler::CompletedSubagentTaskResult {
+            summary: format!("FAIL: {}", error),
+            recovered_terminal_summary: false,
+        },
+    );
+    let summary = task_result.summary;
 
     let classification = classify_child_task_result(
-        TaskKind::SwarmWorker,
+        match worker_execution_expectation(&attempt_spec) {
+            WorkerExecutionExpectation::ReadOnlyInspection => {
+                ChildExecutionExpectation::ReadOnlyInspection
+            }
+            WorkerExecutionExpectation::MaterializingChange => {
+                ChildExecutionExpectation::MaterializingChange
+            }
+        },
         &[attempt_spec.target_artifact.clone()],
         &attempt_spec.write_scope,
         &summary,
@@ -608,6 +700,9 @@ async fn execute_worker_attempt(
         metadata: {
             let mut metadata = HashMap::new();
             attempt_identity.write_to_metadata(&mut metadata);
+            if task_result.recovered_terminal_summary {
+                metadata.insert("recovered_terminal_summary".to_string(), "true".to_string());
+            }
             metadata
         },
     };
@@ -618,8 +713,9 @@ async fn execute_worker_attempt(
     }
 
     Ok(WorkerExecutionResult {
-        summary,
-        produced_targets: classification.accepted_targets,
+        summary: summarize_worker_for_leader(&summary, task_result.recovered_terminal_summary),
+        accepted_targets: classification.accepted_targets,
+        produced_targets: classification.produced_targets,
         produced_delta: classification.produced_delta,
     })
 }
@@ -636,7 +732,13 @@ async fn execute_validation_worker(
     scratchpad: Option<&SwarmScratchpad>,
     worker_summary: &str,
     attempt_suffix: Option<&str>,
-) -> Result<String> {
+) -> Result<ValidationReport> {
+    if let Some(report) =
+        precheck_materialized_validation_target(working_dir, &worker.target_artifact)
+    {
+        return Ok(report.with_validator_context(None, vec![worker.target_artifact.clone()]));
+    }
+
     let worker_name = format!(
         "validator_{}",
         worker_name_for_target(&worker.target_artifact, idx)
@@ -725,7 +827,7 @@ async fn execute_validation_worker(
         )
         .with_task_runtime(Some(task_runtime.clone()), Some(handle.task_id.clone()));
 
-    let summary = run_complete_subagent_task(
+    let task_result = run_complete_subagent_task(
         worker_recipe_with_response(
             instruction,
             Some(Response {
@@ -738,15 +840,22 @@ async fn execute_validation_worker(
         Some(validation_cancel),
     )
     .await
-    .unwrap_or_else(|error| format!("FAIL: {}", error));
+    .unwrap_or_else(
+        |error| crate::agents::subagent_handler::CompletedSubagentTaskResult {
+            summary: format!("FAIL: {}", error),
+            recovered_terminal_summary: false,
+        },
+    );
+    let summary = task_result.summary;
     let validation_classification = classify_child_task_result(
-        TaskKind::ValidationWorker,
+        ChildExecutionExpectation::Validation,
         &[worker.target_artifact.clone()],
         &[],
         &summary,
     );
+    let validation_task_id = handle.task_id.clone();
     let validation_envelope = TaskResultEnvelope {
-        task_id: handle.task_id,
+        task_id: validation_task_id.clone(),
         kind: TaskKind::ValidationWorker,
         status: if summary.trim_start().starts_with("FAIL:") {
             crate::agents::harness::TaskStatus::Failed
@@ -767,7 +876,104 @@ async fn execute_validation_worker(
     } else {
         let _ = task_runtime.complete(validation_envelope).await;
     }
-    Ok(summary)
+    Ok(parse_validation_outcome(&summary).with_validator_context(
+        Some(validation_task_id),
+        vec![worker.target_artifact.clone()],
+    ))
+}
+
+pub(crate) async fn validate_single_worker_execute_summary(
+    base_task_config: &TaskConfig,
+    working_dir: &Path,
+    target_artifact: String,
+    result_contract: Vec<String>,
+    worker_summary: &str,
+    cancel_token: Option<CancellationToken>,
+) -> Result<crate::agents::harness::ValidationReport> {
+    if let Some(report) = precheck_materialized_validation_target(working_dir, &target_artifact) {
+        return Ok(report.with_validator_context(None, vec![target_artifact]));
+    }
+
+    let run_id = format!("single-worker-{}", Uuid::new_v4().simple());
+    let effective_result_contract = if result_contract.is_empty() {
+        vec![target_artifact.clone()]
+    } else {
+        result_contract
+    };
+    let validation_session_id = format!("single-worker-validation-{}", Uuid::new_v4().simple());
+    let instruction = worker_instruction_with_prompts(
+        base_task_config,
+        &build_validation_worker_instructions(
+            &target_artifact,
+            &effective_result_contract,
+            worker_summary,
+        ),
+        "validator_single_worker",
+        &SwarmWorkerSpec {
+            task_id: "single-worker-validation".to_string(),
+            target_artifact: target_artifact.clone(),
+            write_scope: Vec::new(),
+            result_contract: effective_result_contract.clone(),
+            validation_mode: true,
+        },
+        None,
+        working_dir,
+        &run_id,
+        false,
+        Vec::new(),
+        Vec::new(),
+        true,
+        None,
+    )?;
+    let validation_task_config = base_task_config
+        .clone()
+        .with_summary_only(true)
+        .with_write_scope(Vec::new())
+        .with_runtime_contract(vec![target_artifact.clone()], effective_result_contract)
+        .with_delegation_mode(DelegationMode::Disabled)
+        .with_worker_runtime(
+            Some(run_id),
+            Some("validator_single_worker".to_string()),
+            Some("leader".to_string()),
+            CoordinatorRole::Worker,
+            None,
+            Some(mailbox_dir(working_dir, "single-worker-validation")),
+            Some(
+                working_dir
+                    .join(".agime")
+                    .join("single_worker")
+                    .join("permissions"),
+            ),
+            leader_permission_bridge_enabled(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            true,
+        )
+        .with_task_runtime(None, None);
+    let validation_result = run_complete_subagent_task(
+        worker_recipe_with_response(
+            instruction,
+            Some(Response {
+                json_schema: Some(validation_response_schema()),
+            }),
+        )?,
+        validation_task_config,
+        true,
+        validation_session_id,
+        cancel_token,
+    )
+    .await
+    .unwrap_or_else(
+        |error| crate::agents::subagent_handler::CompletedSubagentTaskResult {
+            summary: format!("FAIL: {}", error),
+            recovered_terminal_summary: false,
+        },
+    );
+    let validation_summary = validation_result.summary;
+
+    Ok(parse_validation_outcome(&validation_summary)
+        .with_validator_context(None, vec![target_artifact]))
 }
 
 pub async fn execute_swarm_request(
@@ -956,9 +1162,15 @@ pub async fn execute_swarm_request(
         }
     }
 
+    let any_materializing_workers = runtime_plan.workers.iter().any(|worker| {
+        worker_execution_expectation(worker) == WorkerExecutionExpectation::MaterializingChange
+    });
     let validation_enabled = request.validation_mode
-        || (!swarm_plan.result_contract.is_empty() && runtime_plan.workers.len() > 1);
+        || (any_materializing_workers
+            && !swarm_plan.result_contract.is_empty()
+            && runtime_plan.workers.len() > 1);
     let mut worker_summaries = Vec::new();
+    let mut accepted_targets = Vec::new();
     let mut produced_targets = Vec::new();
     let mut validation_summaries = Vec::new();
 
@@ -966,9 +1178,22 @@ pub async fn execute_swarm_request(
         let mut worker_result = worker_results[idx]
             .take()
             .ok_or_else(|| anyhow!("missing swarm worker result for {}", worker.target_artifact))?;
+        let execution_expectation = worker_execution_expectation(worker);
 
         if validation_enabled {
-            let mut validation_summary = execute_validation_worker(
+            if accepts_recovered_worker_summary(
+                &worker_result.summary,
+                worker_result.produced_delta,
+            ) {
+                validation_summaries.push(
+                    "PASS: accepted recovered worker summary without additional validation retry"
+                        .to_string(),
+                );
+                produced_targets.extend(worker_result.produced_targets.clone());
+                worker_summaries.push(worker_result.summary.clone());
+                continue;
+            }
+            let mut validation_outcome = execute_validation_worker(
                 &task_config,
                 task_runtime.clone(),
                 &leader_name,
@@ -982,8 +1207,10 @@ pub async fn execute_swarm_request(
                 None,
             )
             .await?;
-            let mut validation_outcome = parse_validation_outcome(&validation_summary);
-            let needs_followup = !worker_result.produced_delta || !validation_outcome.passed();
+            let mut validation_summary = summarize_validation_report(&validation_outcome);
+            let needs_followup = (!worker_result.produced_delta
+                && execution_expectation == WorkerExecutionExpectation::MaterializingChange)
+                || !validation_outcome.passed();
             if needs_followup {
                 let followup_kind = if worker_result.produced_delta && !validation_outcome.passed()
                 {
@@ -1040,7 +1267,7 @@ pub async fn execute_swarm_request(
                     Some("retry1"),
                 )
                 .await?;
-                validation_summary = execute_validation_worker(
+                validation_outcome = execute_validation_worker(
                     &task_config,
                     task_runtime.clone(),
                     &leader_name,
@@ -1054,14 +1281,15 @@ pub async fn execute_swarm_request(
                     Some("retry1"),
                 )
                 .await?;
-                validation_outcome = parse_validation_outcome(&validation_summary);
+                validation_summary = summarize_validation_report(&validation_outcome);
             }
             validation_summaries.push(validation_summary.clone());
             if !validation_outcome.passed() {
                 worker_result.produced_targets.clear();
                 worker_result.produced_delta = false;
             }
-        } else if !worker_result.produced_delta
+        } else if execution_expectation == WorkerExecutionExpectation::MaterializingChange
+            && !worker_result.produced_delta
             && !worker_result.summary.trim_start().starts_with("FAIL:")
         {
             let retry_base_instructions = build_swarm_worker_instructions(
@@ -1103,6 +1331,7 @@ pub async fn execute_swarm_request(
         }
 
         worker_summaries.push(worker_result.summary.clone());
+        accepted_targets.extend(worker_result.accepted_targets.clone());
         produced_targets.extend(worker_result.produced_targets.clone());
     }
 
@@ -1113,14 +1342,15 @@ pub async fn execute_swarm_request(
 
     let outcome = decide_bounded_swarm_outcome(
         &swarm_plan.targets,
-        &produced_targets,
+        &accepted_targets,
         Some(worker_summaries.join("\n\n")),
     );
     Ok(SwarmExecutionResult {
         run_id: run_id.clone(),
         worker_summaries,
         validation_summaries,
-        produced_targets: outcome.accepted_targets.clone(),
+        accepted_targets: outcome.accepted_targets.clone(),
+        produced_targets,
         downgraded: !outcome.produced_delta,
         downgrade_message: outcome.downgrade_message,
         scratchpad_path: scratchpad
@@ -1128,4 +1358,60 @@ pub async fn execute_swarm_request(
             .map(|value| value.root.display().to_string()),
         mailbox_path: Some(mailbox_dir(&working_dir, &run_id).display().to_string()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use uuid::Uuid;
+
+    #[test]
+    fn precheck_materialized_validation_target_ignores_logical_targets() {
+        assert!(
+            precheck_materialized_validation_target(Path::new("."), "document:doc-1").is_none()
+        );
+    }
+
+    #[test]
+    fn precheck_materialized_validation_target_fails_when_workspace_file_missing() {
+        let root = std::env::temp_dir().join(format!("validation-missing-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("workspace root");
+        let report = precheck_materialized_validation_target(&root, "artifacts/out.md")
+            .expect("missing artifact should fail");
+        assert_eq!(
+            report.reason_code.as_deref(),
+            Some("artifact_not_materialized")
+        );
+        assert_eq!(
+            report.target_artifacts,
+            vec!["artifacts/out.md".to_string()]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn precheck_materialized_validation_target_accepts_existing_workspace_file() {
+        let root = std::env::temp_dir().join(format!("validation-existing-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join("artifacts")).expect("artifacts dir");
+        fs::write(root.join("artifacts/out.md"), "# ok").expect("artifact file");
+        assert!(precheck_materialized_validation_target(&root, "artifacts/out.md").is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn accepts_recovered_worker_summary_only_when_delta_exists() {
+        assert!(accepts_recovered_worker_summary(
+            "Scope: recovered bounded worker trace\nResult: something\nBlocker: worker finished without an explicit terminal summary",
+            true,
+        ));
+        assert!(!accepts_recovered_worker_summary(
+            "Scope: recovered bounded worker trace\nResult: something\nBlocker: worker finished without an explicit terminal summary",
+            false,
+        ));
+        assert!(!accepts_recovered_worker_summary(
+            "PASS: validation passed",
+            true,
+        ));
+    }
 }

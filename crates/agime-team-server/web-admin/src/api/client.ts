@@ -510,9 +510,10 @@ class ApiClient {
 
   async previewSkillRegistrySkill(data: {
     teamId: string;
-    source: string;
-    skillId: string;
+    source?: string;
+    skillId?: string;
     sourceRef?: string;
+    installSpec?: string;
   }): Promise<SkillRegistryPreviewResponse> {
     return this.request("/team/skill-registry/preview", {
       method: "POST",
@@ -522,9 +523,10 @@ class ApiClient {
 
   async importSkillRegistrySkill(data: {
     teamId: string;
-    source: string;
-    skillId: string;
+    source?: string;
+    skillId?: string;
     sourceRef?: string;
+    installSpec?: string;
     visibility?: string;
   }): Promise<SkillRegistryImportResponse> {
     return this.request("/team/skill-registry/import", {

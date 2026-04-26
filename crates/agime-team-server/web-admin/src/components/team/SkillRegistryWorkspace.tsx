@@ -38,6 +38,7 @@ export function SkillRegistryWorkspace({
   const { t } = useTranslation();
   const { addToast } = useToast();
   const [registryQuery, setRegistryQuery] = useState('');
+  const [directInstallSpec, setDirectInstallSpec] = useState('');
   const [registrySearching, setRegistrySearching] = useState(false);
   const [registrySearchPerformed, setRegistrySearchPerformed] = useState(false);
   const [registryResults, setRegistryResults] = useState<SkillRegistrySearchItem[]>([]);
@@ -47,6 +48,7 @@ export function SkillRegistryWorkspace({
   const [previewLoadingKey, setPreviewLoadingKey] = useState<string | null>(null);
   const [previewSkill, setPreviewSkill] = useState<SkillRegistryPreviewResponse | null>(null);
   const [importingRegistryKey, setImportingRegistryKey] = useState<string | null>(null);
+  const [directSpecAction, setDirectSpecAction] = useState<'preview' | 'import' | null>(null);
   const [checkingRegistryUpdates, setCheckingRegistryUpdates] = useState(false);
   const [registryUpdatesLoaded, setRegistryUpdatesLoaded] = useState(false);
   const [registryUpdates, setRegistryUpdates] = useState<Record<string, SkillRegistryUpdateInspection>>({});
@@ -120,6 +122,43 @@ export function SkillRegistryWorkspace({
       setRegistryInlineError(getErrorMsg(err));
     } finally {
       setPreviewLoadingKey(null);
+    }
+  };
+
+  const handleDirectRegistryPreview = async () => {
+    const installSpec = directInstallSpec.trim();
+    if (!installSpec) return;
+    setDirectSpecAction('preview');
+    setRegistryInlineError('');
+    try {
+      const response = await apiClient.previewSkillRegistrySkill({
+        teamId,
+        installSpec,
+      });
+      setPreviewSkill(response);
+    } catch (err) {
+      setRegistryInlineError(getErrorMsg(err));
+    } finally {
+      setDirectSpecAction(null);
+    }
+  };
+
+  const handleDirectRegistryImport = async () => {
+    const installSpec = directInstallSpec.trim();
+    if (!installSpec) return;
+    setDirectSpecAction('import');
+    setRegistryInlineError('');
+    try {
+      const response = await apiClient.importSkillRegistrySkill({
+        teamId,
+        installSpec,
+      });
+      addToast('success', t('teams.resource.skillRegistry.importSuccess', { name: response.name }));
+      await loadImportedRegistrySkills();
+    } catch (err) {
+      setRegistryInlineError(getErrorMsg(err));
+    } finally {
+      setDirectSpecAction(null);
     }
   };
 
@@ -223,6 +262,50 @@ export function SkillRegistryWorkspace({
             </Button>
           </div>
 
+          <div className="ui-subtle-panel p-4 space-y-3">
+            <div>
+              <h3 className="text-sm font-medium">
+                {t('teams.resource.skillRegistry.directInstallTitle', 'Install by spec or URL')}
+              </h3>
+              <p className="ui-tertiary-text text-xs">
+                {t(
+                  'teams.resource.skillRegistry.directInstallDescription',
+                  'Paste owner/repo@skill, a skills.sh URL, or a GitHub repo/tree URL. AGIME imports into the team skill library, not the local filesystem.',
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Input
+                className="min-w-[260px] flex-1"
+                placeholder="vercel-labs/skills@find-skills"
+                value={directInstallSpec}
+                onChange={(e) => setDirectInstallSpec(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleDirectRegistryPreview();
+                }}
+              />
+              <Button
+                variant="outline"
+                onClick={() => void handleDirectRegistryPreview()}
+                disabled={!directInstallSpec.trim() || directSpecAction !== null}
+              >
+                <Eye className="h-4 w-4 mr-2" />
+                {directSpecAction === 'preview'
+                  ? t('common.loading')
+                  : t('teams.resource.skillRegistry.previewAction')}
+              </Button>
+              <Button
+                onClick={() => void handleDirectRegistryImport()}
+                disabled={!directInstallSpec.trim() || directSpecAction !== null}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                {directSpecAction === 'import'
+                  ? t('teams.resource.skillRegistry.importing')
+                  : t('teams.resource.skillRegistry.importAction')}
+              </Button>
+            </div>
+          </div>
+
           {registryInlineError ? (
             <div className="rounded-[18px] border border-[hsl(var(--destructive))]/30 bg-[hsl(var(--destructive))]/6 px-3 py-2 text-sm text-[hsl(var(--destructive))]">
               {registryInlineError}
@@ -251,6 +334,11 @@ export function SkillRegistryWorkspace({
                           <div className="ui-tertiary-text text-xs">
                             {t('teams.resource.skillRegistry.source')}: {result.source}
                           </div>
+                          {result.install_spec ? (
+                            <div className="ui-tertiary-text text-xs font-mono">
+                              {result.install_spec}
+                            </div>
+                          ) : null}
                         </div>
                         <div className="flex items-center gap-2 flex-wrap">
                           <Badge variant="outline">{t('teams.resource.skillRegistry.installs')}: {result.installs}</Badge>
@@ -365,15 +453,70 @@ export function SkillRegistryWorkspace({
           </DialogHeader>
           {previewSkill ? (
             <div className="space-y-4">
+              {previewSkill.resolution_status === 'multiple_candidates' ? (
+                <div className="space-y-3">
+                  <div className="ui-subtle-panel p-3">
+                    <div className="text-sm font-medium">
+                      {t('teams.resource.skillRegistry.multipleCandidatesTitle', 'Multiple skills found')}
+                    </div>
+                    <p className="ui-secondary-text text-sm">
+                      {previewSkill.message || 'Choose one candidate and preview or import its install spec.'}
+                    </p>
+                  </div>
+                  {(previewSkill.candidates || []).map((candidate) => (
+                    <div key={candidate.install_spec} className="ui-subtle-panel flex flex-col gap-2 p-3">
+                      <div className="text-sm font-semibold">{candidate.name}</div>
+                      <div className="ui-tertiary-text text-xs">{candidate.skill_dir}</div>
+                      <div className="ui-tertiary-text text-xs font-mono">{candidate.install_spec}</div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setDirectInstallSpec(candidate.install_spec);
+                            setPreviewSkill(null);
+                            void apiClient.previewSkillRegistrySkill({
+                              teamId,
+                              installSpec: candidate.install_spec,
+                            }).then(setPreviewSkill).catch((err) => setRegistryInlineError(getErrorMsg(err)));
+                          }}
+                        >
+                          <Eye className="h-4 w-4 mr-2" />
+                          {t('teams.resource.skillRegistry.previewAction')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            setPreviewSkill(null);
+                            setDirectInstallSpec(candidate.install_spec);
+                            void handleRegistryImport(candidate.source, candidate.skill_id, candidate.source_ref);
+                          }}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          {t('teams.resource.skillRegistry.importAction')}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : previewSkill.resolution_status === 'not_found' ? (
+                <div className="ui-empty-panel px-4 py-6 text-sm ui-secondary-text">
+                  {previewSkill.message || t('teams.resource.skillRegistry.noResults')}
+                </div>
+              ) : (
+                <>
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="ui-subtle-panel p-3 space-y-2">
                   <div className="ui-tertiary-text text-xs">{t('teams.resource.skillRegistry.source')}: {previewSkill.source}</div>
                   <div className="ui-tertiary-text text-xs">{t('teams.resource.skillRegistry.sourceRef')}: {previewSkill.source_ref}</div>
                   <div className="ui-tertiary-text text-xs">Commit: {previewSkill.source_commit}</div>
                   <div className="ui-tertiary-text text-xs">Path: {previewSkill.skill_dir}</div>
+                  {previewSkill.install_spec ? (
+                    <div className="ui-tertiary-text text-xs font-mono">{previewSkill.install_spec}</div>
+                  ) : null}
                   <div className="flex items-center gap-2 flex-wrap">
                     {previewSkill.already_imported ? <Badge variant="secondary">{t('teams.resource.skillRegistry.alreadyImported')}</Badge> : null}
-                    {previewSkill.tags.map((tag) => (
+                    {(previewSkill.tags || []).map((tag) => (
                       <Badge key={tag} variant="outline">{tag}</Badge>
                     ))}
                   </div>
@@ -401,19 +544,41 @@ export function SkillRegistryWorkspace({
               </div>
               <div className="space-y-2">
                 <div className="text-sm font-medium">{t('teams.resource.skillRegistry.skillMdPreview')}</div>
-                <Textarea value={previewSkill.skill_md} readOnly className="min-h-[320px] font-mono text-xs" />
+                <Textarea value={previewSkill.skill_md || ''} readOnly className="min-h-[320px] font-mono text-xs" />
                 {previewSkill.truncated ? (
                   <p className="ui-tertiary-text text-xs">{t('teams.resource.skillRegistry.previewTruncated')}</p>
                 ) : null}
               </div>
+                </>
+              )}
             </div>
           ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setPreviewSkill(null)}>{t('common.close')}</Button>
             {previewSkill ? (
               <Button
-                disabled={previewSkill.already_imported || importingRegistryKey === `${previewSkill.source}:${previewSkill.skill_id}`}
-                onClick={() => void handleRegistryImport(previewSkill.source, previewSkill.skill_id, previewSkill.source_ref)}
+                disabled={
+                  previewSkill.resolution_status !== 'resolved'
+                    || previewSkill.already_imported
+                    || importingRegistryKey === `${previewSkill.source}:${previewSkill.skill_id}`
+                }
+                onClick={() => {
+                  if (previewSkill.install_spec) {
+                    setDirectInstallSpec(previewSkill.install_spec);
+                    void apiClient.importSkillRegistrySkill({
+                      teamId,
+                      installSpec: previewSkill.install_spec,
+                    }).then(async (response) => {
+                      addToast('success', t('teams.resource.skillRegistry.importSuccess', { name: response.name }));
+                      await loadImportedRegistrySkills();
+                      setPreviewSkill((prev) => prev ? { ...prev, already_imported: true } : prev);
+                    }).catch((err) => setRegistryInlineError(getErrorMsg(err)));
+                    return;
+                  }
+                  if (previewSkill.skill_id) {
+                    void handleRegistryImport(previewSkill.source, previewSkill.skill_id, previewSkill.source_ref);
+                  }
+                }}
               >
                 <Download className="h-4 w-4 mr-2" />
                 {importingRegistryKey === `${previewSkill.source}:${previewSkill.skill_id}`

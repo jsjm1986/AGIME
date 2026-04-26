@@ -41,9 +41,6 @@ const AppLayoutContent: React.FC = () => {
       case 'sessions':
         navigate('/sessions');
         break;
-      case 'schedules':
-        navigate('/schedules');
-        break;
       case 'recipes':
         navigate('/recipes');
         break;

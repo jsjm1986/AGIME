@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Beaker } from "lucide-react";
 
@@ -15,6 +16,7 @@ interface ExperimentSectionProps {
 }
 
 export function ExperimentSection({ teamId, canManage }: ExperimentSectionProps) {
+  const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedLab = searchParams.get("lab");
   const activeLab = useMemo(() => getExperimentLab(requestedLab), [requestedLab]);
@@ -43,15 +45,20 @@ export function ExperimentSection({ teamId, canManage }: ExperimentSectionProps)
             {activeLab ? (
               <Button variant="outline" size="sm" className="rounded-full" onClick={handleBackToHome}>
                 <ArrowLeft className="h-3.5 w-3.5" />
-                返回实验室首页
+                {t("experimentLab.backToHome", "Back to experiments")}
               </Button>
             ) : null}
             <h2 className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
-              {activeLab ? activeLab.name : "实验室"}
+              {activeLab ? activeLab.name : t("teamNav.experiment", "Experiments")}
             </h2>
           </div>
           <p className="mt-1.5 max-w-3xl text-sm text-muted-foreground">
-            {activeLab ? activeLab.tagline : "每个实验应用只保留一个清晰入口，进入之后再进入真实工作区。"}
+            {activeLab
+              ? activeLab.tagline
+              : t(
+                  "experimentLab.description",
+                  "Each experiment keeps one clear entry point before you enter the real workspace.",
+                )}
           </p>
         </div>
         {activeLab ? (
@@ -67,11 +74,11 @@ export function ExperimentSection({ teamId, canManage }: ExperimentSectionProps)
         ) : activeLab.id === "automation" ? (
           <AutomationLabWorkspace teamId={teamId} canManage={canManage} />
         ) : (
-          <Card className="ui-section-panel">
-            <CardContent className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground">
-              当前实验尚未开放。
-            </CardContent>
-          </Card>
+            <Card className="ui-section-panel">
+              <CardContent className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground">
+                {t("experimentLab.notAvailable", "This experiment is not open yet.")}
+              </CardContent>
+            </Card>
         )}
       </div>
     </div>

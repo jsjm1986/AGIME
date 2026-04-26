@@ -1398,6 +1398,81 @@ function normalizeLoosePipeTables(source: string): string {
   return normalized.join("\n");
 }
 
+function normalizeLatexMathInTextBlock(source: string): string {
+  let result = "";
+  let currentInlineCodeFence = "";
+
+  for (let index = 0; index < source.length; ) {
+    if (source[index] === "`") {
+      let fenceLength = 1;
+      while (source[index + fenceLength] === "`") {
+        fenceLength += 1;
+      }
+      const fence = "`".repeat(fenceLength);
+      if (!currentInlineCodeFence) {
+        currentInlineCodeFence = fence;
+      } else if (currentInlineCodeFence === fence) {
+        currentInlineCodeFence = "";
+      }
+      result += fence;
+      index += fenceLength;
+      continue;
+    }
+
+    if (!currentInlineCodeFence) {
+      if (source.startsWith("\\[", index) || source.startsWith("\\]", index)) {
+        result += "$$";
+        index += 2;
+        continue;
+      }
+      if (source.startsWith("\\(", index) || source.startsWith("\\)", index)) {
+        result += "$";
+        index += 2;
+        continue;
+      }
+    }
+
+    result += source[index];
+    index += 1;
+  }
+
+  return result;
+}
+
+function normalizeLatexMathDelimiters(source: string): string {
+  const lines = source.split("\n");
+  const normalized: string[] = [];
+  const textBuffer: string[] = [];
+  let inFence = false;
+
+  const flushTextBuffer = () => {
+    if (textBuffer.length === 0) {
+      return;
+    }
+    normalized.push(normalizeLatexMathInTextBlock(textBuffer.join("\n")));
+    textBuffer.length = 0;
+  };
+
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      flushTextBuffer();
+      inFence = !inFence;
+      normalized.push(line);
+      continue;
+    }
+
+    if (inFence) {
+      normalized.push(line);
+      continue;
+    }
+
+    textBuffer.push(line);
+  }
+
+  flushTextBuffer();
+  return normalized.join("\n");
+}
+
 const MarkdownContent = memo(function MarkdownContent({
   content,
   className = "",
@@ -1439,10 +1514,12 @@ const MarkdownContent = memo(function MarkdownContent({
 
   const processedContent = useMemo(() => {
     try {
-      const normalized = normalizeLoosePipeTables(wrapHTMLInCodeBlock(content));
+      const normalized = normalizeLoosePipeTables(
+        normalizeLatexMathDelimiters(wrapHTMLInCodeBlock(content)),
+      );
       return preprocessStructuredRefs(normalized);
     } catch {
-      return preprocessStructuredRefs(content);
+      return preprocessStructuredRefs(normalizeLatexMathDelimiters(content));
     }
   }, [content]);
 

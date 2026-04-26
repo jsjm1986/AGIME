@@ -95,7 +95,10 @@ venv/
 .goose/
 .codex-temp/
 **/.codex-temp/
+.codex-tools/
+.codex-check-*.txt
 claude-code-*/
+claude-code-*.zip
 crates/agime-team-server/web-admin/vite.codex*.config.ts
 
 # Docusaurus
@@ -155,4 +158,5 @@ tmp_modelscope_umi.js
 scripts/direct_host_acceptance.py
 scripts/execute_host_acceptance_probe.py
 scripts/cleanup_channel_runtime_diagnostics.py
+scripts/run_remote_team_server_e2e.py
 tmp_test_mobile_mode.sh

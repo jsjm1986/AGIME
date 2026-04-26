@@ -214,6 +214,9 @@ pub fn maybe_plan_swarm_upgrade(
     if !delegation.can_delegate_swarm() {
         return PlannerUpgradeDecision::default();
     }
+    if delegation.swarm_calls_this_run > 0 {
+        return PlannerUpgradeDecision::default();
+    }
     if delegation.downgrade_message.is_some() {
         return PlannerUpgradeDecision::default();
     }
@@ -370,6 +373,32 @@ mod tests {
             &delegation,
         );
         assert!(decision.plan.is_none());
+        std::env::remove_var(super::super::coordinator::AGIME_ENABLE_SWARM_PLANNER_AUTO_ENV);
+    }
+
+    #[test]
+    fn planner_upgrade_does_not_reenter_after_swarm_call_in_same_run() {
+        std::env::set_var(
+            super::super::coordinator::AGIME_ENABLE_SWARM_PLANNER_AUTO_ENV,
+            "true",
+        );
+        let mut delegation = DelegationRuntimeState::new(
+            super::super::delegation::DelegationMode::Swarm,
+            0,
+            1,
+            vec!["README.md".to_string()],
+            vec!["README.md".to_string(), "docs/".to_string()],
+            vec!["README.md".to_string(), "docs/".to_string()],
+        );
+        delegation.swarm_calls_this_run = 1;
+        let decision = maybe_plan_swarm_upgrade(
+            HarnessMode::Conversation,
+            CoordinatorExecutionMode::AutoSwarm,
+            &Conversation::new_unvalidated(vec![Message::user().with_text("split work")]),
+            &delegation,
+        );
+        assert!(decision.plan.is_none());
+        assert!(decision.prompt_addendum.is_none());
         std::env::remove_var(super::super::coordinator::AGIME_ENABLE_SWARM_PLANNER_AUTO_ENV);
     }
 

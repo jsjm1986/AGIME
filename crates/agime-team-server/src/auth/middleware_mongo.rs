@@ -31,6 +31,7 @@ pub struct UserContext {
     pub display_name: String,
     pub role: String,
     pub preferences: UserPreferences,
+    pub current_session_id: Option<String>,
 }
 
 /// Dedicated system-admin context extracted from isolated admin authentication.
@@ -188,7 +189,7 @@ pub async fn auth_middleware(
                             }
                         });
                     }
-                    Some(user)
+                    Some((user, session_id))
                 }
                 Err(e) => {
                     warn!("Session validation failed: {}", e);
@@ -201,7 +202,7 @@ pub async fn auth_middleware(
         }
     };
 
-    if let Some(user) = session_user {
+    if let Some((user, session_id)) = session_user {
         debug!("Authenticated via session cookie");
         let user_context = UserContext {
             user_id: user.id.clone(),
@@ -209,6 +210,7 @@ pub async fn auth_middleware(
             display_name: user.display_name.clone(),
             role: user.role.clone(),
             preferences: user.preferences.clone(),
+            current_session_id: Some(session_id),
         };
         request.extensions_mut().insert(user_context);
         request
@@ -260,6 +262,7 @@ pub async fn auth_middleware(
                 display_name: user.display_name.clone(),
                 role: user.role.clone(),
                 preferences: user.preferences.clone(),
+                current_session_id: None,
             };
             request.extensions_mut().insert(user_context);
             request

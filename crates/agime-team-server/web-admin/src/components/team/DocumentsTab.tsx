@@ -63,7 +63,7 @@ const DocumentPreview = lazy(() =>
 function DocumentPreviewLoading() {
   return (
     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-      正在加载文档预览...
+      Loading document preview...
     </div>
   );
 }
@@ -92,27 +92,42 @@ function getBindingToneClasses(tone: BindingTone): string {
   return 'border-[hsl(var(--status-info-text))/0.16] bg-[hsl(var(--status-info-bg))] text-[hsl(var(--status-info-text))]';
 }
 
-function getBindingLabel(bindings: DocumentBindingPortalRef[], tone: BindingTone): string {
-  const toneLabel = tone === 'write' ? '允许直写' : tone === 'draft' ? '草稿协作' : '读取中';
+function getBindingLabel(
+  bindings: DocumentBindingPortalRef[],
+  tone: BindingTone,
+  translate: (key: string, fallback: string) => string,
+): string {
+  const toneLabel =
+    tone === 'write'
+      ? translate('documents.bindingWrite', 'Controlled write')
+      : tone === 'draft'
+        ? translate('documents.bindingDraft', 'Draft collaboration')
+        : translate('documents.bindingReading', 'Reading');
   if (bindings.length === 0) {
     return '';
   }
   if (bindings.length === 1) {
     return `${bindings[0].portalName} · ${toneLabel}`;
   }
-  return `${bindings.length} 个分身${toneLabel}`;
+  return `${bindings.length} ${translate('documents.bindingPortalCount', 'portal(s)')}${toneLabel}`;
 }
 
-function getBindingModeLabel(mode: DocumentBindingPortalRef['documentAccessMode']): string {
-  if (mode === 'controlled_write') return '允许直写';
-  if (mode === 'co_edit_draft') return '草稿协作';
-  return '只读';
+function getBindingModeLabel(
+  mode: DocumentBindingPortalRef['documentAccessMode'],
+  translate: (key: string, fallback: string) => string,
+): string {
+  if (mode === 'controlled_write') return translate('documents.bindingWrite', 'Controlled write');
+  if (mode === 'co_edit_draft') return translate('documents.bindingDraft', 'Draft collaboration');
+  return translate('documents.bindingReadOnly', 'Read only');
 }
 
-function getPortalStatusLabel(status: DocumentBindingPortalRef['portalStatus']): string {
-  if (status === 'published') return '已发布';
-  if (status === 'archived') return '已归档';
-  return '草稿中';
+function getPortalStatusLabel(
+  status: DocumentBindingPortalRef['portalStatus'],
+  translate: (key: string, fallback: string) => string,
+): string {
+  if (status === 'published') return translate('documents.portalStatusPublished', 'Published');
+  if (status === 'archived') return translate('documents.portalStatusArchived', 'Archived');
+  return translate('documents.portalStatusDraft', 'Draft');
 }
 
 function buildBindingTitle(bindings: DocumentBindingPortalRef[], prefix: string): string {
@@ -692,9 +707,9 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       await Promise.all([loadFolders({ silent: true }), loadDocuments({ silent: true })]);
     } catch (error) {
       console.error('Failed to delete folder:', error);
-      const message = error instanceof Error ? error.message : '删除文件夹失败';
+      const message = error instanceof Error ? error.message : t('documents.deleteFolderFailed', '删除文件夹失败');
       if (message.includes('Cannot delete a system folder')) {
-        addToast('warning', '这个文件夹是系统托管目录，不能手动删除。');
+        addToast('warning', t('documents.systemFolderDeleteForbidden', '这个文件夹是系统托管目录，不能手动删除。'));
       } else {
         addToast('error', message);
       }
@@ -897,9 +912,16 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           <span
             key={tone}
             className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${getBindingToneClasses(tone)}`}
-            title={buildBindingTitle(bindings, tone === 'write' ? '允许直写' : tone === 'draft' ? '草稿协作' : '读取中')}
+            title={buildBindingTitle(
+              bindings,
+              tone === 'write'
+                ? t('documents.bindingWrite', '允许直写')
+                : tone === 'draft'
+                  ? t('documents.bindingDraft', '草稿协作')
+                  : t('documents.bindingReading', '读取中'),
+            )}
           >
-            {getBindingLabel(bindings, tone)}
+            {getBindingLabel(bindings, tone, (key, fallback) => t(key, fallback))}
           </span>
         ))}
       </div>
@@ -916,27 +938,32 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
   const renderBindingUsageDetail = (doc: DocumentSummary) => {
     const usage = bindingUsageByDocId[doc.id];
     const groups: Array<{ title: string; tone: BindingTone; bindings: DocumentBindingPortalRef[] }> = [
-      { title: '允许直写', tone: 'write' as const, bindings: usage?.writeBindings ?? [] },
-      { title: '草稿协作', tone: 'draft' as const, bindings: usage?.draftBindings ?? [] },
-      { title: '读取中', tone: 'read' as const, bindings: usage?.readBindings ?? [] },
+      { title: t('documents.bindingWrite', '允许直写'), tone: 'write' as const, bindings: usage?.writeBindings ?? [] },
+      { title: t('documents.bindingDraft', '草稿协作'), tone: 'draft' as const, bindings: usage?.draftBindings ?? [] },
+      { title: t('documents.bindingReading', '读取中'), tone: 'read' as const, bindings: usage?.readBindings ?? [] },
     ].filter((group) => group.bindings.length > 0);
 
     return (
       <div className="border-t bg-muted/10 px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold">分身占用情况</div>
+            <div className="text-sm font-semibold">
+              {t('documents.bindingUsageTitle', '分身占用情况')}
+            </div>
             <div className="text-xs text-muted-foreground">
-              当前文档被哪些分身读取、草稿协作或允许直写
+              {t(
+                'documents.bindingUsageDescription',
+                 'See which portals currently read this document, collaborate on it as a draft, or have controlled write access.',
+              )}
             </div>
           </div>
           {bindingUsageLoading && (
-            <div className="text-xs text-muted-foreground">加载中...</div>
+            <div className="text-xs text-muted-foreground">{t('common.loading', '加载中...')}</div>
           )}
         </div>
         {groups.length === 0 ? (
           <div className="mt-3 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-            当前文档未被任何服务 Agent 绑定。
+            {t('documents.bindingUsageEmpty', '当前文档未被任何服务 Agent 绑定。')}
           </div>
         ) : (
           <div className="mt-3 space-y-3">
@@ -952,15 +979,29 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                         <div className="min-w-0">
                           <div className="truncate text-sm font-medium">{binding.portalName}</div>
                           <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
-                            <span>{getBindingModeLabel(binding.documentAccessMode)}</span>
+                            <span>
+                              {getBindingModeLabel(binding.documentAccessMode, (key, fallback) =>
+                                t(key, fallback),
+                              )}
+                            </span>
                             <span>·</span>
-                            <span>{getPortalStatusLabel(binding.portalStatus)}</span>
+                            <span>
+                              {getPortalStatusLabel(binding.portalStatus, (key, fallback) =>
+                                t(key, fallback),
+                              )}
+                            </span>
                             <span>·</span>
-                            <span>{binding.publicAccessEnabled ? '公开访问中' : '仅预览'}</span>
+                            <span>
+                              {binding.publicAccessEnabled
+                                ? t('documents.portalPublicAccess', '公开访问中')
+                                : t('documents.portalPreviewOnly', '仅预览')}
+                            </span>
                           </div>
                           {binding.serviceAgentName && (
                             <div className="mt-1 text-xs text-muted-foreground">
-                              服务 Agent：{binding.serviceAgentName}
+                              {t('documents.serviceAgentLabel', '服务 Agent：{{name}}', {
+                                name: binding.serviceAgentName,
+                              })}
                             </div>
                           )}
                         </div>
@@ -971,7 +1012,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                             className="h-7 px-2 text-xs"
                             onClick={() => handleOpenAvatarBinding(binding)}
                           >
-                            查看分身
+                            {t('documents.openAvatar', '查看分身')}
                           </Button>
                         )}
                       </div>
@@ -1127,7 +1168,9 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     }
     return null;
   }, [currentFolderPath, isBrowsingUserUploads]);
-  const userUploadBackLabel = userUploadBackPath ? '返回上一级' : '返回团队资料';
+  const userUploadBackLabel = userUploadBackPath
+    ? t('documents.back', '返回上一级')
+    : t('documents.backToWorkspace', '返回团队资料');
 
   const visibleChildFolders = useMemo(() => {
     if (!currentFolderPath) {
@@ -1220,7 +1263,8 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 previewDocs: response.items,
                 uploaderLabels: uploaderLabels.slice(0, 3),
                 uploaderCount: uploaderLabels.length,
-                primaryUploaderLabel: uploaderLabels[0] || '待识别用户',
+                primaryUploaderLabel:
+                  uploaderLabels[0] || t('documents.unknownUploader', '待识别用户'),
                 latestUpdatedAt,
                 childFolderCount: folder.children?.length ?? 0,
               } satisfies UserUploadFolderSummary,
@@ -1293,18 +1337,21 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3 border-b border-[hsl(var(--ui-line-soft))] pb-2">
             <div className="text-[11px] font-medium text-foreground">
-              上传目录
+              {t('documents.uploadFolders', 'Upload folders')}
             </div>
             <div className="text-[10.5px] text-muted-foreground">
-              按上传者、文档数量和最近更新时间查看
+              {t(
+                'documents.uploadFoldersHint',
+                 'Browse by uploader, document count, and most recent update time',
+              )}
             </div>
           </div>
           <div className="overflow-hidden rounded-[16px] border border-[hsl(var(--ui-line-soft))] bg-background">
             <div className="grid grid-cols-[minmax(0,1.45fr)_110px_128px_minmax(220px,1fr)] gap-3 border-b border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-4 py-2 text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
-              <span>文件夹 / 上传者</span>
-              <span>文档</span>
-              <span>最近更新</span>
-              <span>文档预览</span>
+              <span>{t('documents.folderAndUploader', 'Folder / uploader')}</span>
+              <span>{t('documents.files', '文件')}</span>
+              <span>{t('documents.lastUpdated', 'Last updated')}</span>
+              <span>{t('documents.preview', '预览')}</span>
             </div>
             <div className="divide-y divide-[hsl(var(--ui-line-soft))]">
               {pagedChildFolders.map((folder) => {
@@ -1323,35 +1370,47 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                       </span>
                       <span className="min-w-0">
                         <span className="block truncate text-[12px] font-semibold text-foreground">
-                          {summary?.primaryUploaderLabel || '待识别用户'}
+                          {summary?.primaryUploaderLabel || t('documents.unknownUploader', '待识别用户')}
                         </span>
                         <span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
                           {folder.name}
                         </span>
                         {summary?.uploaderCount && summary.uploaderCount > 1 ? (
                           <span className="mt-1 block truncate text-[10.5px] text-muted-foreground">
-                            其他上传者：{summary.uploaderLabels.slice(1).join('、') || `共 ${summary.uploaderCount} 人`}
+                            {t('documents.otherUploaders', 'Other uploaders: {{value}}', {
+                              value:
+                                summary.uploaderLabels.slice(1).join('、') ||
+                                t('documents.uploaderCount', '{{count}} people total', {
+                                  count: summary.uploaderCount,
+                                }),
+                            })}
                           </span>
                         ) : null}
                       </span>
                     </span>
                     <span className="pt-1 text-[11px] text-foreground">
-                      {summary?.docCount ?? 0} 份
+                      {t('documents.documentCount', '{{count}} 份', {
+                        count: summary?.docCount ?? 0,
+                      })}
                       {(summary?.childFolderCount ?? 0) > 0 ? (
                         <span className="ml-1 text-[10px] text-muted-foreground">
-                          · {summary?.childFolderCount} 子目录
+                          {t('documents.childFolderCount', '· {{count}} 子目录', {
+                            count: summary?.childFolderCount,
+                          })}
                         </span>
                       ) : null}
                     </span>
                     <span className="pt-1 text-[10.5px] text-muted-foreground">
-                      {summary?.latestUpdatedAt ? formatDate(summary.latestUpdatedAt) : '暂无'}
+                      {summary?.latestUpdatedAt
+                        ? formatDate(summary.latestUpdatedAt)
+                        : t('documents.noneShort', '暂无')}
                     </span>
                     <span className="pt-1 text-[10.5px] text-muted-foreground">
                       {summary?.previewDocs?.length
                         ? summary.previewDocs.map((doc) => doc.display_name || doc.name).join('、')
                         : loadingUserUploadSummaries
-                          ? '正在读取文档概览…'
-                          : '当前目录暂无文档'}
+                          ? t('documents.loadingOverview', '正在读取文档概览…')
+                          : t('documents.emptyCurrentFolder', 'No documents in the current folder')}
                     </span>
                   </button>
                 );
@@ -1367,16 +1426,18 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3 border-b border-[hsl(var(--ui-line-soft))] pb-2">
             <div className="text-[11px] font-medium text-foreground">
-              子目录
+              {t('documents.childFolders', 'Child folders')}
             </div>
             <div className="text-[10.5px] text-muted-foreground">
-              当前目录下共 {visibleChildFolders.length} 个文件夹
+              {t('documents.childFolderSummary', '{{count}} folders in the current directory', {
+                count: visibleChildFolders.length,
+              })}
             </div>
           </div>
           <div className="overflow-hidden rounded-[16px] border border-[hsl(var(--ui-line-soft))] bg-background">
             <div className="grid grid-cols-[minmax(0,1fr)_140px] gap-3 border-b border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-4 py-2 text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
-              <span>文件夹</span>
-              <span>子目录</span>
+              <span>{t('documents.folders', 'Folders')}</span>
+              <span>{t('documents.childFolders', 'Child folders')}</span>
             </div>
             <div className="divide-y divide-[hsl(var(--ui-line-soft))]">
               {pagedChildFolders.map((folder) => (
@@ -1401,7 +1462,9 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                     </span>
                   </span>
                   <span className="pt-1 text-[10.5px] text-muted-foreground">
-                    {folder.children?.length ?? 0} 个
+                    {t('documents.folderCountShort', '{{count}} 个', {
+                      count: folder.children?.length ?? 0,
+                    })}
                   </span>
                 </button>
               ))}
@@ -1414,7 +1477,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
     return (
       <div className="space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/82">
-          {t('documents.childFolders', '子目录')}
+          {t('documents.childFolders', 'Child folders')}
         </div>
         <div className="space-y-1.5">
           {pagedChildFolders.map((folder) => (
@@ -1433,19 +1496,23 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                   <span className="flex items-center justify-between gap-3">
                     <span className="min-w-0">
                       <span className="block truncate text-[12px] font-semibold text-foreground">
-                        {userUploadSummaries[folder.fullPath]?.primaryUploaderLabel || '待识别用户'}
+                        {userUploadSummaries[folder.fullPath]?.primaryUploaderLabel || t('documents.unknownUploader', '待识别用户')}
                       </span>
                       <span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
-                        目录：{folder.name}
+                        {t('documents.folderLabel', '目录：{{name}}', { name: folder.name })}
                       </span>
                     </span>
                     <span className="flex shrink-0 items-center gap-1.5">
                       <span className="rounded-full border border-[hsl(var(--ui-line-soft))] bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
-                        {userUploadSummaries[folder.fullPath]?.docCount ?? 0} 份文档
+                        {t('documents.documentCountLong', '{{count}} 份文档', {
+                          count: userUploadSummaries[folder.fullPath]?.docCount ?? 0,
+                        })}
                       </span>
                       {(userUploadSummaries[folder.fullPath]?.childFolderCount ?? 0) > 0 ? (
                         <span className="rounded-full border border-[hsl(var(--ui-line-soft))] bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
-                          {userUploadSummaries[folder.fullPath]?.childFolderCount} 子目录
+                          {t('documents.childFolderCountPlain', '{{count}} 子目录', {
+                            count: userUploadSummaries[folder.fullPath]?.childFolderCount,
+                          })}
                         </span>
                       ) : null}
                     </span>
@@ -1462,27 +1529,33 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                     <span className="flex flex-wrap items-center gap-2 text-[10.5px] text-muted-foreground">
                       {userUploadSummaries[folder.fullPath]?.uploaderCount ? (
                         <span>
-                          上传者：
+                          {t('documents.uploaderPrefix', 'Uploader: ')}
                           {userUploadSummaries[folder.fullPath].uploaderLabels.join('、')}
                           {userUploadSummaries[folder.fullPath].uploaderCount > userUploadSummaries[folder.fullPath].uploaderLabels.length
-                            ? ` 等 ${userUploadSummaries[folder.fullPath].uploaderCount} 人`
+                            ? t('documents.andUploaderCount', ' and {{count}} more', {
+                                count: userUploadSummaries[folder.fullPath].uploaderCount,
+                              })
                             : ''}
                         </span>
                       ) : (
-                        <span>上传者：待识别</span>
+                        <span>{t('documents.unknownUploaderInline', 'Uploader: pending identification')}</span>
                       )}
                       {userUploadSummaries[folder.fullPath]?.latestUpdatedAt ? (
-                        <span>最近更新：{formatDate(userUploadSummaries[folder.fullPath].latestUpdatedAt || '')}</span>
+                        <span>{t('documents.lastUpdatedInline', 'Last updated: {{time}}', {
+                          time: formatDate(userUploadSummaries[folder.fullPath].latestUpdatedAt || ''),
+                        })}</span>
                       ) : null}
                     </span>
                     {userUploadSummaries[folder.fullPath]?.previewDocs?.length ? (
                       <span className="block text-[10.5px] text-muted-foreground">
-                        文档：{userUploadSummaries[folder.fullPath].previewDocs.map((doc) => doc.display_name || doc.name).join('、')}
+                        {t('documents.documentsInline', '文档：{{names}}', {
+                          names: userUploadSummaries[folder.fullPath].previewDocs.map((doc) => doc.display_name || doc.name).join('、'),
+                        })}
                       </span>
                     ) : loadingUserUploadSummaries ? (
-                      <span className="block text-[10.5px] text-muted-foreground">正在读取文档概览…</span>
+                      <span className="block text-[10.5px] text-muted-foreground">{t('documents.loadingOverview', '正在读取文档概览…')}</span>
                     ) : (
-                      <span className="block text-[10.5px] text-muted-foreground">当前目录暂无文档</span>
+                      <span className="block text-[10.5px] text-muted-foreground">{t('documents.emptyCurrentFolder', 'No documents in the current folder')}</span>
                     )}
                   </span>
                 ) : null}
@@ -1516,8 +1589,8 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       nodes={isBrowsingUserUploads ? (userUploadRoot?.children ?? []) : mainFolderNodes}
       currentPath={currentFolderPath}
       rootPath={isBrowsingUserUploads ? USER_UPLOAD_ROOT_PATH : null}
-      rootLabel={isBrowsingUserUploads ? '用户上传资料' : undefined}
-      rootHint={isBrowsingUserUploads ? '返回上传资料的根目录视图' : undefined}
+      rootLabel={isBrowsingUserUploads ? t('documents.userUploads', 'User uploads') : undefined}
+      rootHint={isBrowsingUserUploads ? t('documents.userUploadsRootHint', 'Return to the root view of uploaded materials') : undefined}
       onSelectPath={handleFolderSelect}
       canManage={canManage}
       onCreateFolder={openCreateFolder}
@@ -1593,14 +1666,14 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-[10px] font-medium text-muted-foreground/84">
-            {t('documents.currentFolder', '当前目录')} · {visibleDocs.length}
+            {t('documents.currentFolder', 'Current folder')} · {visibleDocs.length}
           </span>
           <span className="mt-0.5 block truncate text-[12px] font-semibold text-foreground">
             {currentFolderPath || '/'}
           </span>
         </span>
         <span className="shrink-0 rounded-full border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
-          {t('documents.openFolderNavigator', '文件夹')}
+          {t('documents.openFolderNavigator', 'Folders')}
         </span>
       </button>
       {userUploadRoot ? (
@@ -1618,10 +1691,14 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block text-[10px] font-medium text-muted-foreground/84">
-              {isBrowsingUserUploads ? '返回' : '独立入口'}
+              {isBrowsingUserUploads
+                ? t('documents.back', '返回')
+                : t('documents.separateEntry', '独立入口')}
             </span>
             <span className="mt-0.5 block truncate text-[12px] font-semibold text-foreground">
-              {isBrowsingUserUploads ? userUploadBackLabel : '用户上传'}
+              {isBrowsingUserUploads
+                ? userUploadBackLabel
+                : t('documents.userUploadsShort', 'Uploads')}
             </span>
           </span>
           {!isBrowsingUserUploads && userUploadFolderCount > 0 ? (
@@ -1711,7 +1788,11 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
       }
     >
       <div className="min-w-0 text-[11px] text-muted-foreground">
-        文件夹 {childFolderPage} / {childFolderTotalPages} · 共 {visibleChildFolders.length} 个
+        {t('documents.folderPaginationSummary', 'Folders {{page}} / {{totalPages}} · {{count}} total', {
+          page: childFolderPage,
+          totalPages: childFolderTotalPages,
+          count: visibleChildFolders.length,
+        })}
       </div>
       <div className="flex items-center gap-2">
         <Button
@@ -1780,12 +1861,12 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">全部占用</SelectItem>
-          <SelectItem value="bound">已绑定</SelectItem>
-          <SelectItem value="read">被读取</SelectItem>
-          <SelectItem value="draft">草稿协作</SelectItem>
-          <SelectItem value="write">允许直写</SelectItem>
-          <SelectItem value="unbound">未绑定</SelectItem>
+          <SelectItem value="all">{t('documents.bindingFilterAll', '全部占用')}</SelectItem>
+          <SelectItem value="bound">{t('documents.bindingFilterBound', '已绑定')}</SelectItem>
+          <SelectItem value="read">{t('documents.bindingFilterRead', '被读取')}</SelectItem>
+                <SelectItem value="draft">{t('documents.bindingDraft', '草稿协作')}</SelectItem>
+                <SelectItem value="write">{t('documents.bindingWrite', '允许直写')}</SelectItem>
+          <SelectItem value="unbound">{t('documents.bindingFilterUnbound', '未绑定')}</SelectItem>
         </SelectContent>
       </Select>
       <Select value={mimeFilter || '__all__'} onValueChange={v => setMimeFilter(v === '__all__' ? '' : v)}>
@@ -1964,9 +2045,9 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               </button>
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-2 text-[10px] font-medium text-muted-foreground">
-                  <span>{t('documents.currentFolder', '当前目录')}</span>
+                  <span>{t('documents.currentFolder', 'Current folder')}</span>
                   <span>•</span>
-                  <span>{t('documents.folderResultCount', '当前目录 {{count}} 份文档', { count: visibleDocs.length })}</span>
+                  <span>{t('documents.folderResultCount', '{{count}} documents in the current folder', { count: visibleDocs.length })}</span>
                 </div>
                 <div className="mt-1 truncate text-[13px] font-semibold text-foreground">
                   {currentFolderPath || '/'}
@@ -2008,7 +2089,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               <div className="space-y-3 rounded-[18px] border border-dashed border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3.5 py-4">
                 <div className="text-[11px] text-muted-foreground">
                   {visibleChildFolders.length > 0
-                    ? t('documents.emptyCurrentFolderWithChildren', '当前目录没有直属文件，请继续进入下一级目录。')
+                    ? t('documents.emptyCurrentFolderWithChildren', 'There are no direct files in the current folder. Continue into the next level.')
                     : t('documents.empty', '当前条件下没有文档')}
                 </div>
                 {renderChildFolderButtons(true)}
@@ -2124,10 +2205,10 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/82">
-                    {isBrowsingUserUploads ? '返回' : '独立入口'}
+                    {isBrowsingUserUploads ? t('common.back', 'Back') : t('documents.standaloneEntry', 'Standalone entry')}
                   </span>
                   <span className="mt-0.5 block text-[12.5px] font-semibold text-foreground">
-                    {isBrowsingUserUploads ? userUploadBackLabel : '用户上传'}
+                    {isBrowsingUserUploads ? userUploadBackLabel : t('documents.userUploads', 'User uploads')}
                   </span>
                 </span>
                 {!isBrowsingUserUploads && userUploadFolderCount > 0 ? (
@@ -2182,12 +2263,12 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">全部占用</SelectItem>
-                      <SelectItem value="bound">已绑定</SelectItem>
-                      <SelectItem value="read">被读取</SelectItem>
-                      <SelectItem value="draft">草稿协作</SelectItem>
-                      <SelectItem value="write">允许直写</SelectItem>
-                      <SelectItem value="unbound">未绑定</SelectItem>
+                      <SelectItem value="all">{t('documents.bindingFilterAll', 'All usage')}</SelectItem>
+                      <SelectItem value="bound">{t('documents.bindingFilterBound', 'Bound')}</SelectItem>
+                      <SelectItem value="read">{t('documents.bindingFilterRead', 'Read')}</SelectItem>
+                  <SelectItem value="draft">{t('documents.bindingDraft', 'Draft collaboration')}</SelectItem>
+                  <SelectItem value="write">{t('documents.bindingWrite', 'Controlled write')}</SelectItem>
+                      <SelectItem value="unbound">{t('documents.bindingFilterUnbound', 'Unbound')}</SelectItem>
                     </SelectContent>
                   </Select>
                   <Button
@@ -2247,12 +2328,12 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">全部占用</SelectItem>
-                    <SelectItem value="bound">已绑定</SelectItem>
-                    <SelectItem value="read">被读取</SelectItem>
-                    <SelectItem value="draft">草稿协作</SelectItem>
-                    <SelectItem value="write">允许直写</SelectItem>
-                    <SelectItem value="unbound">未绑定</SelectItem>
+                    <SelectItem value="all">{t('documents.bindingFilterAll', 'All usage')}</SelectItem>
+                    <SelectItem value="bound">{t('documents.bindingFilterBound', 'Bound')}</SelectItem>
+                    <SelectItem value="read">{t('documents.bindingFilterRead', 'Read')}</SelectItem>
+                  <SelectItem value="draft">{t('documents.bindingDraft', 'Draft collaboration')}</SelectItem>
+                  <SelectItem value="write">{t('documents.bindingWrite', 'Controlled write')}</SelectItem>
+                    <SelectItem value="unbound">{t('documents.bindingFilterUnbound', 'Unbound')}</SelectItem>
                   </SelectContent>
                 </Select>
                 <Select value={mimeFilter || '__all__'} onValueChange={v => setMimeFilter(v === '__all__' ? '' : v)}>
@@ -2324,18 +2405,22 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           {loadingDocuments ? (
             <div className="mb-3 flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              正在更新当前目录...
+              {t('documents.refreshingCurrentFolder', 'Refreshing current folder...')}
             </div>
           ) : null}
           {isBrowsingUserUploads ? (
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[14px] border border-[hsl(var(--ui-line-soft))] bg-[hsl(var(--ui-surface-panel))] px-3.5 py-2.5">
               <div className="min-w-0">
                 <div className="text-[12px] font-semibold text-foreground">
-                  用户上传资料
+                    {t('documents.userUploads', 'User uploads')}
                 </div>
                 <div className="mt-0.5 text-[10.5px] text-muted-foreground">
-                  上传目录 {userUploadOverview.folderCount} · 文档 {userUploadOverview.docCount} · 成员 {userUploadOverview.uploaderCount}
-                  {userUploadOverview.latestUpdatedAt ? ` · 最近更新 ${formatDate(userUploadOverview.latestUpdatedAt)}` : ''}
+                  {t('documents.userUploadOverview', 'Upload folders {{folders}} · documents {{docs}} · uploaders {{uploaders}}', {
+                    folders: userUploadOverview.folderCount,
+                    docs: userUploadOverview.docCount,
+                    uploaders: userUploadOverview.uploaderCount,
+                  })}
+                  {userUploadOverview.latestUpdatedAt ? ` · ${t('documents.latestUpdatedAt', 'Latest update {{time}}', { time: formatDate(userUploadOverview.latestUpdatedAt) })}` : ''}
                 </div>
               </div>
               <Button
@@ -2352,7 +2437,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           {!isMobile && breadcrumbs.length > 0 && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground mb-2 px-1">
               <button className="hover:text-foreground" onClick={() => setCurrentFolderPath(isBrowsingUserUploads ? USER_UPLOAD_ROOT_PATH : null)}>
-                {isBrowsingUserUploads ? '用户上传资料' : t('documents.allFiles')}
+                  {isBrowsingUserUploads ? t('documents.userUploads', 'User uploads') : t('documents.allFiles')}
               </button>
               {breadcrumbs.map((bc) => (
                 <span key={bc.path} className="flex items-center gap-1">
@@ -2366,7 +2451,10 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
           )}
           {bindingFilter !== 'all' && (
             <div className="mb-2 px-1 text-xs text-muted-foreground">
-              当前页筛选结果：{visibleDocs.length} / {sortedDocs.length}
+              {t('documents.currentFilterResult', 'Filtered on this page: {{visible}} / {{total}}', {
+                visible: visibleDocs.length,
+                total: sortedDocs.length,
+              })}
             </div>
           )}
           {isDragging && (
@@ -2389,11 +2477,11 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               )}>
                 {bindingFilter === 'all'
                   ? (visibleChildFolders.length > 0
-                    ? t('documents.emptyCurrentFolderWithChildren', '当前目录没有直属文件，请继续进入下一级目录。')
+                    ? t('documents.emptyCurrentFolderWithChildren', 'There are no direct files in the current folder. Continue into the next level.')
                     : t('documents.empty'))
                   : bindingUsageLoading
-                    ? '正在按分身占用状态筛选...'
-                    : '当前筛选条件下没有文档'}
+                    ? t('documents.filteringByBindingUsage', 'Filtering by portal usage...')
+                    : t('documents.emptyWithCurrentFilters', 'No documents match the current filters')}
               </div>
               {bindingFilter === 'all' && visibleChildFolders.length > 0 ? (
                 <div className={cn(
@@ -2522,7 +2610,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                 </Button>
                 <div className="min-w-0">
                   <div className="text-[12px] font-semibold text-foreground">
-                    {t('documents.folderNavigator', '文件夹导航')}
+                    {t('documents.folderNavigator', 'Folder navigator')}
                   </div>
                   <div className="mt-0.5 truncate text-[10px] text-muted-foreground/80">
                     {currentFolderPath || '/'}
@@ -2716,13 +2804,13 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
         title={t('documents.deleteFolderConfirm')}
         description={
           deleteFolderTarget
-            ? `删除后会同时移除“${deleteFolderTarget.name}”及其所有子文件夹中的文档。此操作不可撤销。`
+            ? `Deleting this will also remove documents under "${deleteFolderTarget.name}" and all of its subfolders. This action cannot be undone.`
             : undefined
         }
         variant="destructive"
         onConfirm={confirmDeleteFolder}
         loading={deletingFolder}
-        confirmText="删除文件夹及文档"
+        confirmText={t('documents.deleteFolderAndDocuments', 'Delete folder and documents')}
       />
     </div>
   );
@@ -2739,7 +2827,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               title={t('documents.title', '文档工作台')}
               description={t(
                 'documents.mobileConversationDescription',
-                '先围绕当前材料推进工作，列表、筛选和视图切换都退到辅助面板。',
+                'Focus on advancing work around the current material first. Lists, filters, and view switching move into the supporting panel.',
               )}
               metrics={[
                 { label: t('documents.summaryView', '当前视图'), value: t(`documents.viewMode.${viewMode}`) },
@@ -2753,12 +2841,12 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
             <div className="grid grid-cols-2 gap-1.5">
               <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileFolderPanel}>
                 <FolderOpen className="mr-2 h-4 w-4" />
-                {t('documents.openFolderNavigator', '文件夹导航')}
+                {t('documents.openFolderNavigator', 'Folder navigator')}
               </Button>
               {userUploadRoot ? (
                 <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openUserUploadLibrary}>
                   <Upload className="mr-2 h-4 w-4" />
-                  用户上传
+                  {t('documents.userUploads', 'User uploads')}
                 </Button>
               ) : null}
               <Button variant="outline" className="h-9 justify-start rounded-[14px] px-3 text-[11px]" onClick={openMobileLibraryPanel}>
@@ -2807,7 +2895,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               title={focusDocument ? t('documents.currentContext', '当前文档上下文') : t('documents.contextRail', '文档与产物上下文')}
               description={t(
                 'documents.mobileConversationRail',
-                '文档页在对话模式里只承担材料与结果物角色：浏览、预览、版本和 AI 工作台都作为当前任务上下文出现。',
+                'In conversation mode, the documents page only serves as material and artifact context: browsing, preview, versioning, and the AI workbench all appear as part of the current task context.',
               )}
             >
               {focusDocument ? (
@@ -2840,7 +2928,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                     <span className="text-right font-semibold text-foreground">{t(`documents.viewMode.${viewMode}`)}</span>
                   </div>
                   <div className="flex items-start justify-between gap-3">
-                    <span className="text-muted-foreground">{t('documents.currentFolder', '当前目录')}</span>
+                    <span className="text-muted-foreground">{t('documents.currentFolder', 'Current folder')}</span>
                     <span className="text-right font-semibold text-foreground">{currentFolderPath || '/'}</span>
                   </div>
                   <Button
@@ -2849,7 +2937,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
                     className="mt-1 h-8 w-full justify-center rounded-[12px] text-[11px]"
                     onClick={openMobileFolderPanel}
                   >
-                    {t('documents.openFolderNavigator', '文件夹导航')}
+                    {t('documents.openFolderNavigator', 'Folder navigator')}
                   </Button>
                 </div>
               )}
@@ -2860,7 +2948,7 @@ export function DocumentsTab({ teamId, canManage }: DocumentsTabProps) {
               <BottomSheetPanel
                 open={mobileFolderSheetOpen}
                 onOpenChange={setMobileFolderSheetOpen}
-                title={t('documents.folderNavigator', '文件夹导航')}
+                title={t('documents.folderNavigator', 'Folder navigator')}
                 fullHeight
                 onBack={() => setMobileFolderSheetOpen(false)}
                 backLabel={t('common.back', '返回')}

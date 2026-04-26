@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { Recipe, scanRecipe } from '../recipe';
-import { createUserMessage } from '../types/message';
 import { Message } from '../api';
-
-import { substituteParameters } from '../utils/providerUtils';
 import { updateSessionUserRecipeValues } from '../api';
 import { useChatContext } from '../contexts/ChatContext';
 import { ChatType } from '../types/chat';
@@ -184,7 +181,7 @@ export const useRecipeManager = (chat: ChatType, recipe?: Recipe | null) => {
   }, []);
 
   const initialPrompt = useMemo(() => {
-    if (!finalRecipe?.prompt || !recipeAccepted || finalRecipe?.isScheduledExecution) {
+    if (!finalRecipe?.prompt || !recipeAccepted) {
       return '';
     }
     return resolvedRecipe?.prompt ?? finalRecipe.prompt;
@@ -249,23 +246,9 @@ export const useRecipeManager = (chat: ChatType, recipe?: Recipe | null) => {
     isLoading: boolean,
     onAutoExecute?: () => void
   ) => {
-    if (
-      finalRecipe?.isScheduledExecution &&
-      finalRecipe?.prompt &&
-      (!requiresParameters || recipeParameterValues) &&
-      messages.length === 0 &&
-      !isLoading &&
-      readyForAutoUserPrompt &&
-      recipeAccepted
-    ) {
-      const finalPrompt = recipeParameterValues
-        ? substituteParameters(finalRecipe.prompt, recipeParameterValues)
-        : finalRecipe.prompt;
-
-      const userMessage = createUserMessage(finalPrompt);
-      append(userMessage);
-      onAutoExecute?.();
-    }
+    void append;
+    void isLoading;
+    void onAutoExecute;
   };
 
   useEffect(() => {

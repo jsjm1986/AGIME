@@ -60,6 +60,26 @@ pub struct ExecutionContract {
     pub verified_http_actions: Vec<VerifiedHttpAction>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct VerificationQualitySummary {
+    pub total_actions: usize,
+    pub valid_actions: usize,
+    pub structured_actions: usize,
+    pub shell_fallback_actions: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DraftPublishReadiness {
+    pub ready: bool,
+    pub state: DraftStatus,
+    pub label: String,
+    #[serde(default)]
+    pub issues: Vec<String>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    pub verification: VerificationQualitySummary,
+}
+
 pub fn extract_last_assistant_text(messages_json: &str) -> Option<String> {
     let msgs: Vec<Value> = serde_json::from_str(messages_json).ok()?;
     let msg = msgs
@@ -90,10 +110,11 @@ pub fn derive_builder_sync_payload(
 ) -> BuilderSyncPayload {
     let assistant_text = extract_last_assistant_text(messages_json).unwrap_or_default();
     let verified_http_actions = extract_verified_http_actions(messages_json, integrations);
+    let verification = summarize_verification_quality(&verified_http_actions);
     let structured_summary = build_verified_actions_summary(&verified_http_actions);
     let verified_http_actions_json =
         serde_json::to_value(&verified_http_actions).unwrap_or_else(|_| json!([]));
-    let native_execution_ready = !verified_http_actions.is_empty();
+    let native_execution_ready = verification.valid_actions > 0;
     let verified_integration_ids = verified_http_actions
         .iter()
         .filter_map(|item| item.request.integration_id.clone())
@@ -101,10 +122,14 @@ pub fn derive_builder_sync_payload(
 
     let status = if final_status == "failed" {
         DraftStatus::Failed
-    } else if native_execution_ready || !assistant_text.trim().is_empty() {
+    } else if native_execution_ready {
         DraftStatus::Ready
     } else {
-        current_status
+        match current_status {
+            DraftStatus::Failed => DraftStatus::Failed,
+            DraftStatus::Archived => DraftStatus::Archived,
+            _ => DraftStatus::Draft,
+        }
     };
 
     let probe_report = json!({
@@ -160,6 +185,130 @@ fn build_verified_actions_summary(actions: &[VerifiedHttpAction]) -> String {
         ));
     }
     lines.join("\n")
+}
+
+pub fn summarize_verification_quality(
+    actions: &[VerifiedHttpAction],
+) -> VerificationQualitySummary {
+    let mut valid_actions = 0usize;
+    let mut structured_actions = 0usize;
+    let mut shell_fallback_actions = 0usize;
+
+    for action in actions {
+        if !is_publishable_verified_action(action) {
+            continue;
+        }
+        valid_actions += 1;
+        if action.source_tool == "api_tools__http_request" {
+            structured_actions += 1;
+        } else if action.source_tool == "developer__shell" {
+            shell_fallback_actions += 1;
+        }
+    }
+
+    VerificationQualitySummary {
+        total_actions: actions.len(),
+        valid_actions,
+        structured_actions,
+        shell_fallback_actions,
+    }
+}
+
+pub fn assess_draft_publish_readiness(
+    draft: &super::models::AutomationTaskDraftDoc,
+) -> DraftPublishReadiness {
+    let actions = verified_http_actions_from_draft(draft);
+    let verification = summarize_verification_quality(&actions);
+    let mut issues = Vec::new();
+    let mut warnings = Vec::new();
+
+    if draft.integration_ids.is_empty() {
+        issues.push("还没有接入任何 API 资料。".to_string());
+    }
+    if draft.builder_session_id.is_none() {
+        issues.push("还没有可用的 builder 会话。".to_string());
+    }
+    match draft.status {
+        DraftStatus::Probing => {
+            issues.push("Builder 仍在执行，暂时不能发布。".to_string());
+        }
+        DraftStatus::Failed => {
+            issues.push("Builder 最近一次验证失败，需要先修正。".to_string());
+        }
+        DraftStatus::Draft => {
+            issues.push("还没有完成真实 API 验证。".to_string());
+        }
+        DraftStatus::Archived => {
+            issues.push("当前草稿已归档，不能发布。".to_string());
+        }
+        DraftStatus::Ready => {}
+    }
+
+    if verification.valid_actions == 0 {
+        issues.push("缺少可用的真实 HTTP 验证证据。".to_string());
+    }
+    if verification.valid_actions > 0 && verification.structured_actions == 0 {
+        warnings
+            .push("当前只检测到 shell/curl 验证证据，尚未形成结构化 API tool 证据。".to_string());
+    }
+
+    let ready = matches!(draft.status, DraftStatus::Ready) && issues.is_empty();
+    let label = if ready {
+        "ready_to_publish"
+    } else if matches!(draft.status, DraftStatus::Probing) {
+        "builder_running"
+    } else if verification.valid_actions == 0 {
+        "needs_real_api_validation"
+    } else {
+        "needs_builder_work"
+    };
+
+    DraftPublishReadiness {
+        ready,
+        state: draft.status.clone(),
+        label: label.to_string(),
+        issues,
+        warnings,
+        verification,
+    }
+}
+
+pub fn verified_http_actions_from_draft(
+    draft: &super::models::AutomationTaskDraftDoc,
+) -> Vec<VerifiedHttpAction> {
+    draft
+        .candidate_plan
+        .get("verified_http_actions")
+        .cloned()
+        .or_else(|| draft.probe_report.get("verified_http_actions").cloned())
+        .and_then(|value| serde_json::from_value::<Vec<VerifiedHttpAction>>(value).ok())
+        .unwrap_or_default()
+}
+
+fn is_publishable_verified_action(action: &VerifiedHttpAction) -> bool {
+    if !action.verified {
+        return false;
+    }
+    if action.request.method.trim().is_empty() || action.request.url.trim().is_empty() {
+        return false;
+    }
+    if !looks_like_http_url(action.request.url.trim()) {
+        return false;
+    }
+    let has_response_evidence = action
+        .response
+        .as_ref()
+        .map(|response| {
+            response.status_code.is_some()
+                || response.json_body.is_some()
+                || response
+                    .body_text
+                    .as_ref()
+                    .map(|text| !text.trim().is_empty())
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    has_response_evidence
 }
 
 pub fn extract_verified_http_actions(
@@ -690,4 +839,93 @@ fn lookup_auth_value(value: &Value, keys: &[&str]) -> Option<String> {
             .map(|inner| inner.trim().to_string())
             .filter(|inner| !inner.is_empty())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::automation::models::AutomationTaskDraftDoc;
+
+    fn sample_draft(candidate_plan: Value, status: DraftStatus) -> AutomationTaskDraftDoc {
+        AutomationTaskDraftDoc {
+            id: None,
+            draft_id: "draft-1".to_string(),
+            team_id: "team-1".to_string(),
+            project_id: "project-1".to_string(),
+            name: "draft".to_string(),
+            driver_agent_id: "agent-1".to_string(),
+            integration_ids: vec!["integration-1".to_string()],
+            goal: "goal".to_string(),
+            constraints: vec![],
+            success_criteria: vec![],
+            risk_preference: "balanced".to_string(),
+            status,
+            builder_session_id: Some("builder-session-1".to_string()),
+            candidate_plan,
+            probe_report: json!({}),
+            candidate_endpoints: json!([]),
+            latest_probe_prompt: None,
+            linked_module_id: None,
+            created_by: "user-1".to_string(),
+            created_at: bson::DateTime::now(),
+            updated_at: bson::DateTime::now(),
+            archived: false,
+        }
+    }
+
+    fn verified_action(source_tool: &str) -> Value {
+        json!([{
+            "verified": true,
+            "risk_level": "low",
+            "command_kind": if source_tool == "api_tools__http_request" { "api_tools" } else { "curl" },
+            "source_tool": source_tool,
+            "source_call_id": "call-1",
+            "request": {
+                "method": "GET",
+                "url": "http://127.0.0.1:9999/health",
+                "headers": {},
+                "integration_id": "integration-1"
+            },
+            "response": {
+                "status_code": 200,
+                "body_text": "{\"status\":\"healthy\"}"
+            }
+        }])
+    }
+
+    #[test]
+    fn draft_publish_readiness_accepts_structured_api_tool_validation() {
+        let draft = sample_draft(
+            json!({ "verified_http_actions": verified_action("api_tools__http_request") }),
+            DraftStatus::Ready,
+        );
+        let readiness = assess_draft_publish_readiness(&draft);
+        assert!(readiness.ready);
+        assert_eq!(readiness.verification.structured_actions, 1);
+        assert_eq!(readiness.verification.shell_fallback_actions, 0);
+    }
+
+    #[test]
+    fn draft_publish_readiness_accepts_shell_fallback_validation_with_warning() {
+        let draft = sample_draft(
+            json!({ "verified_http_actions": verified_action("developer__shell") }),
+            DraftStatus::Ready,
+        );
+        let readiness = assess_draft_publish_readiness(&draft);
+        assert!(readiness.ready);
+        assert_eq!(readiness.verification.structured_actions, 0);
+        assert_eq!(readiness.verification.shell_fallback_actions, 1);
+        assert_eq!(readiness.warnings.len(), 1);
+    }
+
+    #[test]
+    fn draft_publish_readiness_rejects_ready_status_without_real_http_validation() {
+        let draft = sample_draft(json!({}), DraftStatus::Ready);
+        let readiness = assess_draft_publish_readiness(&draft);
+        assert!(!readiness.ready);
+        assert!(readiness
+            .issues
+            .iter()
+            .any(|item| item.contains("真实 HTTP 验证")));
+    }
 }

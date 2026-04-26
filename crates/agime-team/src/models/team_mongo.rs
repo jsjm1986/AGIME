@@ -101,12 +101,19 @@ pub struct TeamMember {
     pub status: String, // active, invited, blocked
     #[serde(default)]
     pub permissions: MemberPermissions,
-    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    #[serde(
+        default = "default_joined_at",
+        with = "bson::serde_helpers::chrono_datetime_as_bson_datetime"
+    )]
     pub joined_at: DateTime<Utc>,
 }
 
 fn default_member_status() -> String {
     "active".to_string()
+}
+
+fn default_joined_at() -> DateTime<Utc> {
+    Utc::now()
 }
 
 /// Member permissions

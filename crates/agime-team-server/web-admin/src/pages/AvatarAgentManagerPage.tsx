@@ -449,7 +449,7 @@ function EditAvatarDialog({
               rows={3}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder={t('agent.manage.avatarDescriptionPlaceholder', '向用户说明这个分身负责什么、适合处理什么问题。')}
+              placeholder={t('agent.manage.avatarDescriptionPlaceholder', 'Explain what this avatar handles and what kinds of problems it is suitable for.')}
             />
           </div>
 
@@ -461,7 +461,7 @@ function EditAvatarDialog({
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
                 {t(
                   'agent.manage.avatarNarrativeHint',
-                  '这部分会展示在对外分身页面顶部，用来说明这个分身为什么存在、适合处理什么，以及用户应该如何开始。',
+                  'This content appears at the top of the public avatar page and explains why the avatar exists, what it is good at, and how users should begin.',
                 )}
               </p>
             </div>
@@ -476,7 +476,7 @@ function EditAvatarDialog({
                 onChange={(e) => setHeroIntro(e.target.value)}
                 placeholder={t(
                   'agent.manage.avatarNarrativeIntroPlaceholder',
-                  '例如：这是一个面向客户支持的服务分身，专门帮助用户基于产品资料快速定位问题、整理答案并给出下一步建议。',
+                  'For example: this is a service avatar for customer support, specialized in locating issues quickly from product materials, organizing answers, and suggesting next steps.',
                 )}
               />
             </div>
@@ -491,7 +491,7 @@ function EditAvatarDialog({
                 onChange={(e) => setHeroUseCasesText(e.target.value)}
                 placeholder={t(
                   'agent.manage.avatarNarrativeUseCasesPlaceholder',
-                  '回答产品使用问题\n根据资料整理计划\n继续处理指定文档',
+                  'Answer product usage questions\nCreate plans from materials\nContinue working on a specified document',
                 )}
               />
             </div>
@@ -507,7 +507,7 @@ function EditAvatarDialog({
                   onChange={(e) => setHeroWorkingStyle(e.target.value)}
                   placeholder={t(
                     'agent.manage.avatarNarrativeWorkingStylePlaceholder',
-                    '例如：我会先基于当前开放资料处理；超出范围时，会继续交给管理 Agent 判断。',
+                    'For example: I first work from currently available materials; if the request is out of scope, I escalate it to the managing agent.',
                   )}
                 />
               </div>
@@ -521,7 +521,7 @@ function EditAvatarDialog({
                   onChange={(e) => setHeroCtaHint(e.target.value)}
                   placeholder={t(
                     'agent.manage.avatarNarrativeCtaHintPlaceholder',
-                    '例如：直接在对话频道描述问题；如果需要我结合资料处理，先去资料频道选中目标文档。',
+                    'For example: describe the issue directly in the chat channel; if you want me to work with materials, select the target document in the documents channel first.',
                   )}
                 />
               </div>
@@ -646,6 +646,7 @@ function ServiceAvatarRow({
   canManage,
   onEditAvatar,
   onDeleteAvatar,
+  onDeleteServiceAgent,
   onEditServiceAgent,
   onChat,
 }: {
@@ -656,6 +657,7 @@ function ServiceAvatarRow({
   canManage: boolean;
   onEditAvatar: (portal: PortalDetail) => void;
   onDeleteAvatar: (portalLink: DedicatedAvatarPortalLink) => void;
+  onDeleteServiceAgent: (agent: TeamAgent) => void;
   onEditServiceAgent: (agent: TeamAgent) => void;
   onChat: (agent: TeamAgent) => void;
 }) {
@@ -663,6 +665,7 @@ function ServiceAvatarRow({
   const navigate = useNavigate();
   const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
   const [documentPanelOpen, setDocumentPanelOpen] = useState(false);
+  const isOrphanService = portalLink.linkKind === 'orphan_service';
   const serviceAgent = portalLink.serviceAgent;
   const enabledExtensionEntries = serviceAgent ? getEnabledExtensionEntries(serviceAgent) : [];
   const enabledExtensionNames = enabledExtensionEntries.map(item => item.name);
@@ -714,8 +717,8 @@ function ServiceAvatarRow({
       )
     );
     const composeText = sourceDoc && sourceDoc.id !== targetDoc.id
-      ? `请继续修改我附加的 AI 文档《${targetDoc.display_name || targetDoc.name}》。它来源于原始文档《${sourceDoc.display_name || sourceDoc.name}》。请把《${targetDoc.display_name || targetDoc.name}》作为本次主要修改目标，原始文档仅作为参考；开始前先确认你将操作的目标文档。`
-      : `请基于我附加的文档《${targetDoc.display_name || targetDoc.name}》继续处理，并把它作为本次主要修改目标。开始前先确认你将操作的目标文档，如果需要修改就围绕这份文档执行。`;
+      ? `Please continue editing the attached AI document "${targetDoc.display_name || targetDoc.name}". It originates from the original document "${sourceDoc.display_name || sourceDoc.name}". Use "${targetDoc.display_name || targetDoc.name}" as the main target for this session, and treat the original document as reference only. Before starting, confirm which target document you are going to operate on.`
+      : `Please continue from the attached document "${targetDoc.display_name || targetDoc.name}" and treat it as the main target for this session. Before starting, confirm which target document you are going to operate on. If changes are needed, execute them around this document.`;
 
     navigate(`/teams/${teamId}?section=chat&agentId=${serviceAgent.id}`, {
       state: {
@@ -737,15 +740,29 @@ function ServiceAvatarRow({
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-semibold text-foreground">{portalLink.portalName}</span>
-            <Badge variant="secondary" className="text-[11px]">
-              {t(`ecosystem.status.${portalLink.portalStatus}`, portalLink.portalStatus)}
-            </Badge>
-            {portalLink.portalSlug && (
+            {isOrphanService ? (
+              <Badge variant="outline" className="text-[11px] border-[hsl(var(--status-warning-text))/0.25] bg-[hsl(var(--status-warning-bg))/0.72] text-[hsl(var(--status-warning-text))]">
+                {t('agent.manage.orphanServiceBadge', '仅剩服务 Agent')}
+              </Badge>
+            ) : (
+              <Badge variant="secondary" className="text-[11px]">
+                {t(`ecosystem.status.${portalLink.portalStatus}`, portalLink.portalStatus)}
+              </Badge>
+            )}
+            {!isOrphanService && portalLink.portalSlug && (
               <Badge variant="outline" className="text-[11px]">
                 /{portalLink.portalSlug}
               </Badge>
             )}
           </div>
+          {isOrphanService ? (
+            <p className="text-xs leading-5 text-muted-foreground">
+                {t(
+                  'agent.manage.orphanServiceHint',
+                  'The avatar entry has already been deleted. What remains is a dedicated service agent without any bound public entry. You can still chat, edit it, or clean it up directly.'
+                )}
+              </p>
+            ) : null}
           <div className="grid gap-2 text-sm text-muted-foreground md:grid-cols-2">
             <div>
               <span className="font-medium text-foreground">
@@ -770,38 +787,63 @@ function ServiceAvatarRow({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => portalDetail && onEditAvatar(portalDetail)}
-            disabled={!portalDetail}
-          >
-            <Pencil className="mr-1.5 h-3.5 w-3.5" />
-            {t('agent.actions.edit')}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => portalDetail && onDeleteAvatar(portalLink)}
-            disabled={!portalDetail}
-          >
-            <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-            {t('common.delete')}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setDocumentPanelOpen(true)}
-            disabled={!portalDetail}
-          >
-            <FileText className="mr-1.5 h-3.5 w-3.5" />
-            {t('agent.manage.openAgentDocuments', '查看文档')}
-            {portalDetail ? (
-              <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
-                {portalDetail.boundDocumentIds.length}
-              </span>
-            ) : null}
-          </Button>
+          {isOrphanService ? (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => serviceAgent && onEditServiceAgent(serviceAgent)}
+                disabled={!serviceAgent}
+              >
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                {t('agent.manage.editServiceAgent', '编辑底层服务 Agent')}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => serviceAgent && onDeleteServiceAgent(serviceAgent)}
+                disabled={!serviceAgent}
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                {t('agent.manage.deleteServiceAgentOnly', '删除服务 Agent')}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => portalDetail && onEditAvatar(portalDetail)}
+                disabled={!portalDetail}
+              >
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                {t('agent.actions.edit')}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => portalDetail && onDeleteAvatar(portalLink)}
+                disabled={!portalDetail}
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                {t('common.delete')}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setDocumentPanelOpen(true)}
+                disabled={!portalDetail}
+              >
+                <FileText className="mr-1.5 h-3.5 w-3.5" />
+                {t('agent.manage.openAgentDocuments', '查看文档')}
+                {portalDetail ? (
+                  <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+                    {portalDetail.boundDocumentIds.length}
+                  </span>
+                ) : null}
+              </Button>
+            </>
+          )}
           {serviceAgent ? (
             <Button size="sm" onClick={() => onChat(serviceAgent)}>
               <MessageSquareText className="mr-1.5 h-3.5 w-3.5" />
@@ -813,23 +855,33 @@ function ServiceAvatarRow({
 
       <div className="mt-4 rounded-xl border border-border/60 bg-muted/10 p-4">
         <div className="mb-3 text-sm font-medium text-foreground">
-          {t('agent.manage.avatarEffectiveCapabilityTitle', '分身当前生效能力')}
+          {isOrphanService
+            ? t('agent.manage.orphanServiceCapabilityTitle', '当前保留的服务 Agent 能力')
+            : t('agent.manage.avatarEffectiveCapabilityTitle', '分身当前生效能力')}
         </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div className="space-y-1">
             <div className="text-xs text-muted-foreground">
-              {t('agent.manage.avatarDocumentAccessLabel', '文档访问模式')}
+              {isOrphanService
+                ? t('agent.manage.orphanServiceBindingLabel', '入口绑定状态')
+                : t('agent.manage.avatarDocumentAccessLabel', '文档访问模式')}
             </div>
             <div className="text-sm font-medium text-foreground">
-              {formatDocumentAccessMode(portalDetail?.documentAccessMode, (key, fallback) => t(key, fallback))}
+              {isOrphanService
+                ? t('agent.manage.orphanServiceBindingEmpty', '未绑定分身入口')
+                : formatDocumentAccessMode(portalDetail?.documentAccessMode, (key, fallback) => t(key, fallback))}
             </div>
             <div className="text-xs leading-5 text-muted-foreground">
-              {formatDocumentAccessHint(portalDetail?.documentAccessMode, (key, fallback) => t(key, fallback))}
+              {isOrphanService
+                ? t('agent.manage.orphanServiceBindingHint', '这个服务 Agent 仍然保留执行能力，但不再有访客入口、文档边界或公开地址。')
+                : formatDocumentAccessHint(portalDetail?.documentAccessMode, (key, fallback) => t(key, fallback))}
             </div>
           </div>
           <div className="space-y-1">
             <div className="text-xs text-muted-foreground">
-              {t('agent.manage.avatarBoundDocumentsLabel', '绑定文档')}
+              {isOrphanService
+                ? t('agent.manage.avatarBoundDocumentsLabel', '原入口文档')
+                : t('agent.manage.avatarBoundDocumentsLabel', '绑定文档')}
             </div>
             {renderChipList(boundDocuments, t('agent.manage.noBoundDocuments', '未绑定文档'))}
           </div>
@@ -931,7 +983,7 @@ function ServiceAvatarRow({
                   {t('agent.access.maxConcurrent', '最大并发任务数')}
                 </div>
                 <div className="text-sm font-medium text-foreground">
-                  {serviceAgent?.max_concurrent_tasks || 5}
+                  {serviceAgent?.max_concurrent_tasks ?? 5}
                 </div>
               </div>
               <div className="space-y-1">
@@ -951,19 +1003,21 @@ function ServiceAvatarRow({
         )}
       </div>
 
-      <AgentDocumentPanel
-        open={documentPanelOpen}
-        onOpenChange={setDocumentPanelOpen}
-        teamId={teamId}
-        portalName={portalLink.portalName}
-        serviceAgentName={serviceAgent?.name}
-        documentAccessMode={portalDetail?.documentAccessMode}
-        documentIds={portalDetail?.boundDocumentIds || []}
-        documents={boundDocumentEntries}
-        canManage={canManage}
-        onStartChat={handleStartDocumentChat}
-        onOpenDocumentsChannel={() => navigate(`/teams/${teamId}?section=documents`)}
-      />
+      {!isOrphanService ? (
+        <AgentDocumentPanel
+          open={documentPanelOpen}
+          onOpenChange={setDocumentPanelOpen}
+          teamId={teamId}
+          portalName={portalLink.portalName}
+          serviceAgentName={serviceAgent?.name}
+          documentAccessMode={portalDetail?.documentAccessMode}
+          documentIds={portalDetail?.boundDocumentIds || []}
+          documents={boundDocumentEntries}
+          canManage={canManage}
+          onStartChat={handleStartDocumentChat}
+          onOpenDocumentsChannel={() => navigate(`/teams/${teamId}?section=documents`)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -992,6 +1046,14 @@ export default function AvatarAgentManagerPage() {
   const [deletingAvatar, setDeletingAvatar] = useState(false);
   const [deleteAvatarAndService, setDeleteAvatarAndService] = useState(false);
   const [deleteAvatarError, setDeleteAvatarError] = useState('');
+  const avatarPortalLinks = useMemo(
+    () => (group?.portals || []).filter(item => item.linkKind === 'portal'),
+    [group]
+  );
+  const orphanServiceLinks = useMemo(
+    () => (group?.portals || []).filter(item => item.linkKind === 'orphan_service'),
+    [group]
+  );
 
   const canManage = team?.currentUserRole === 'owner' || team?.currentUserRole === 'admin';
 
@@ -1007,8 +1069,8 @@ export default function AvatarAgentManagerPage() {
       const grouping = buildDedicatedAvatarGrouping(agentResult, avatarResult);
       const matchedGroup = grouping.dedicatedGroups.find(item => item.managerId === managerId) || null;
       const portalIds = (matchedGroup?.portals || [])
-        .map(item => item.portalId)
-        .filter(id => !id.startsWith('orphan:'));
+        .filter(item => item.linkKind === 'portal')
+        .map(item => item.portalId);
       const portalDetails = await Promise.all(
         portalIds.map(async (portalId) => {
           try {
@@ -1043,6 +1105,20 @@ export default function AvatarAgentManagerPage() {
       setAvatarSummaries(avatarResult);
       setPortalDetailsById(nextPortalDetailsById);
       setDocumentsById(nextDocumentsById);
+      setSelectedAgent(prev =>
+        prev && agentResult.some(agent => agent.id === prev.id) ? prev : null
+      );
+      setDeleteAgentOpen(prevOpen =>
+        prevOpen && selectedAgent && agentResult.some(agent => agent.id === selectedAgent.id) ? prevOpen : false
+      );
+      setSelectedAvatar(prev =>
+        prev && nextPortalDetailsById.has(prev.id) ? nextPortalDetailsById.get(prev.id) || null : null
+      );
+      setAvatarDeleteTarget(prev =>
+        prev && matchedGroup?.portals.some(item => item.portalId === prev.portalId && item.linkKind === 'portal')
+          ? prev
+          : null
+      );
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : t('common.error'));
@@ -1184,11 +1260,18 @@ export default function AvatarAgentManagerPage() {
                             type={role === 'manager' ? 'avatar_manager' : 'avatar_service'}
                           />
                         ))}
-                        <Badge variant="secondary" className="text-[11px]">
-                          {t('agent.manage.dedicatedGroupAvatarCount', '{{count}} 个分身', {
-                            count: group.portals.length,
-                          })}
-                        </Badge>
+                          <Badge variant="secondary" className="text-[11px]">
+                            {t('agent.manage.dedicatedGroupAvatarCount', '{{count}} 个分身', {
+                            count: avatarPortalLinks.length,
+                            })}
+                          </Badge>
+                        {orphanServiceLinks.length > 0 ? (
+                          <Badge variant="outline" className="text-[11px] border-[hsl(var(--status-warning-text))/0.2] bg-[hsl(var(--status-warning-bg))/0.55] text-[hsl(var(--status-warning-text))]">
+                            {t('agent.manage.orphanServiceCount', '{{count}} 个残留服务 Agent', {
+                              count: orphanServiceLinks.length,
+                            })}
+                          </Badge>
+                        ) : null}
                       </div>
                       <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
                         {managerDescription}
@@ -1230,10 +1313,10 @@ export default function AvatarAgentManagerPage() {
                       <div className="text-xs text-muted-foreground">
                         {t('agent.manage.dedicatedGroupAvatarCountLabel', '当前分身数')}
                       </div>
-                      <div className="mt-2 text-2xl font-semibold text-foreground">
-                        {group.portals.length}
+                        <div className="mt-2 text-2xl font-semibold text-foreground">
+                        {avatarPortalLinks.length}
+                        </div>
                       </div>
-                    </div>
                     <div className="rounded-xl border border-border/70 bg-muted/10 px-4 py-4">
                       <div className="text-xs text-muted-foreground">
                         {t('agent.manage.managerAgentTypeLabel', '管理 Agent 类型')}
@@ -1289,33 +1372,37 @@ export default function AvatarAgentManagerPage() {
                     {t('agent.manage.avatarServiceListTitle', '该管理 Agent 下的分身服务 Agent')}
                   </CardTitle>
                 </CardHeader>
-                <CardContent>
+                  <CardContent>
                   {group.portals.length > 0 ? (
-                    <div className="space-y-3">
-                      {group.portals.map(portalLink => (
-                        <ServiceAvatarRow
-                          key={portalLink.portalId}
-                          teamId={team.id}
-                          portalLink={portalLink}
-                          portalDetail={portalDetailsById.get(portalLink.portalId) || null}
-                          documentsById={documentsById}
-                          canManage={canManage}
-                          onEditAvatar={(portal) => {
-                            setSelectedAvatar(portal);
-                          }}
-                          onDeleteAvatar={(portal) => {
-                            setDeleteAvatarAndService(false);
-                            setDeleteAvatarError('');
-                            setAvatarDeleteTarget(portal);
-                          }}
-                          onEditServiceAgent={(agent) => {
-                            setSelectedAgent(agent);
-                            setEditAgentOpen(true);
-                          }}
-                          onChat={openAgentChat}
-                        />
-                      ))}
-                    </div>
+                      <div className="space-y-3">
+                        {group.portals.map(portalLink => (
+                          <ServiceAvatarRow
+                            key={portalLink.portalId}
+                            teamId={team.id}
+                            portalLink={portalLink}
+                            portalDetail={portalDetailsById.get(portalLink.portalId) || null}
+                            documentsById={documentsById}
+                            canManage={canManage}
+                            onEditAvatar={(portal) => {
+                              setSelectedAvatar(portal);
+                            }}
+                            onDeleteAvatar={(portal) => {
+                              setDeleteAvatarAndService(false);
+                              setDeleteAvatarError('');
+                              setAvatarDeleteTarget(portal);
+                            }}
+                            onDeleteServiceAgent={(agent) => {
+                              setSelectedAgent(agent);
+                              setDeleteAgentOpen(true);
+                            }}
+                            onEditServiceAgent={(agent) => {
+                              setSelectedAgent(agent);
+                              setEditAgentOpen(true);
+                            }}
+                            onChat={openAgentChat}
+                          />
+                        ))}
+                      </div>
                   ) : (
                     <div className="rounded-xl border border-dashed border-border/70 px-4 py-10 text-sm text-muted-foreground">
                       {t('agent.manage.noAvatarUnderManager', '当前管理 Agent 下还没有分身服务 Agent。')}
@@ -1393,7 +1480,7 @@ export default function AvatarAgentManagerPage() {
           title={t('agent.manage.deleteAvatarTitle', '删除分身')}
           description={t(
             'agent.manage.deleteAvatarDescription',
-            '这会删除当前数字分身的对外入口与权限配置。你也可以选择同时清理仅供该分身使用的专用服务 Agent。'
+            'This deletes the public entry and permission configuration of the current digital avatar. You can also choose to clean up the dedicated service agent used only by this avatar.'
           )}
           confirmText={t('common.delete')}
           variant="destructive"
@@ -1459,7 +1546,7 @@ export default function AvatarAgentManagerPage() {
                   <span className="block text-xs text-muted-foreground">
                     {t(
                       'agent.manage.deleteAvatarCleanupServiceHint',
-                      '仅当这个服务 Agent 只被当前分身使用时才会执行删除，避免误删共享执行能力。'
+                      'Deletion only runs when this service agent is used exclusively by the current avatar, to avoid deleting shared execution capability by mistake.'
                     )}
                   </span>
                 </span>
@@ -1469,11 +1556,11 @@ export default function AvatarAgentManagerPage() {
                 {avatarDeleteServiceUsageCount > 1
                   ? t(
                     'agent.manage.deleteAvatarCleanupBlockedShared',
-                    '底层服务 Agent 仍被其他分身复用，当前只能删除分身入口，不能自动清理服务 Agent。'
+                    'The underlying service agent is still reused by other avatars. Right now only the avatar entry can be deleted; the service agent cannot be cleaned up automatically.'
                   )
                   : t(
                     'agent.manage.deleteAvatarCleanupBlockedGeneric',
-                    '底层服务 Agent 不是分身专用 Agent，当前只删除分身入口，不会影响通用 Agent。'
+                    'The underlying service agent is not a dedicated avatar agent. Right now only the avatar entry will be deleted, and the shared agent will not be affected.'
                   )}
               </div>
             ) : null}

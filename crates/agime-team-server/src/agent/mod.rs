@@ -14,8 +14,10 @@ pub mod api_tools;
 pub mod avatar_governance_tools;
 pub mod capability_policy;
 pub mod context_injector;
+pub mod delegation_runtime;
 pub mod developer_tools;
 pub mod document_tools;
+pub mod execution_admission;
 pub mod executor_mongo;
 pub mod extension_installer;
 pub mod extension_manager_client;
@@ -48,10 +50,14 @@ pub mod runtime;
 pub mod runtime_bridge;
 
 // Chat Track (Phase 1)
+pub mod channel_coding_cards;
+pub mod channel_project_workspace;
+pub mod channel_workspace_governance;
 pub mod chat_channel_executor;
 pub mod chat_channel_manager;
 pub mod chat_channel_orchestrator;
 pub mod chat_channels;
+pub mod chat_delivery_tools;
 pub mod chat_executor;
 pub mod chat_manager;
 pub mod chat_memory;
@@ -82,6 +88,8 @@ pub use task_manager::{create_task_manager, TaskManager};
 // Chat Track exports
 #[allow(unused_imports)]
 pub use chat_manager::ChatManager;
+#[allow(unused_imports)]
+pub use chat_routes::chat_public_router;
 #[allow(unused_imports)]
 pub use chat_routes::chat_router;
 #[allow(unused_imports)]

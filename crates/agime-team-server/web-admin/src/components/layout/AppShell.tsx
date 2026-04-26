@@ -28,7 +28,7 @@ export function AppShell({ children, className = '' }: AppShellProps) {
     Boolean(teamCtx) && isTeamWorkspaceRoute && teamCtx?.activeSection === 'collaboration';
 
   return (
-    <div className={`h-screen flex bg-[hsl(var(--background))] ${className}`}>
+    <div className="h-screen flex bg-[hsl(var(--background))]">
       {isMobile ? (
         <>
           {mobileMenuOpen && (
@@ -43,7 +43,7 @@ export function AppShell({ children, className = '' }: AppShellProps) {
       ) : (
         <Sidebar />
       )}
-      <main className={`relative min-w-0 flex-1 ${isCollaborationWorkspace ? 'min-h-0 overflow-hidden' : 'overflow-auto'}`}>
+      <main className={`relative min-w-0 flex-1 ${className} ${isCollaborationWorkspace ? 'min-h-0 overflow-hidden' : 'overflow-auto'}`.trim()}>
         {(isMobile || showModeSwitch) && (
           <div className="sticky top-0 z-30 border-b border-border/80 bg-[hsl(var(--background))/0.94] px-3 py-2.5 backdrop-blur-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">

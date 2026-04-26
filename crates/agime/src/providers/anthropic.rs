@@ -24,6 +24,7 @@ use crate::conversation::message::Message;
 use crate::model::ModelConfig;
 use crate::providers::retry::ProviderRetry;
 use crate::providers::utils::RequestLog;
+use crate::runtime_profile::{apply_effective_execution, resolve_for_provider_with_model};
 use rmcp::model::{Tool, ToolChoiceMode};
 
 pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-sonnet-4-5";
@@ -124,12 +125,14 @@ impl AnthropicProvider {
 
     fn get_conditional_headers(&self) -> Vec<(String, String)> {
         // Use capabilities registry for model-specific headers
-        crate::capabilities::resolve_with_thinking_override(
-            &self.model.model_name,
-            self.model.thinking_enabled,
-            self.model.thinking_budget,
-        )
-        .headers
+        crate::capabilities::resolve_with_model_config(&self.model).headers
+    }
+
+    fn get_conditional_headers_for_model(
+        &self,
+        model_config: &ModelConfig,
+    ) -> Vec<(String, String)> {
+        crate::capabilities::resolve_with_model_config(model_config).headers
     }
 
     async fn post(&self, payload: &Value) -> Result<ApiResponse, ProviderError> {
@@ -180,8 +183,10 @@ impl AnthropicProvider {
         tools: &[Tool],
         tool_choice_mode: Option<ToolChoiceMode>,
     ) -> Result<(Message, ProviderUsage), ProviderError> {
+        let runtime_profile = resolve_for_provider_with_model(self, model_config).await;
+        let effective_model_config = apply_effective_execution(model_config, &runtime_profile);
         let payload = create_request_with_tool_choice(
-            model_config,
+            &effective_model_config,
             system,
             messages,
             tools,
@@ -200,7 +205,11 @@ impl AnthropicProvider {
                 usage.input_tokens, usage.output_tokens, usage.total_tokens);
 
         let response_model = get_model(&json_response);
-        let mut log = RequestLog::start(&self.model, &payload)?;
+        let mut log = RequestLog::start_with_runtime_profile(
+            &effective_model_config,
+            &payload,
+            Some(&runtime_profile),
+        )?;
         log.write(&json_response, Some(&usage))?;
         let provider_usage = ProviderUsage::new(response_model, usage);
         tracing::debug!(
@@ -279,6 +288,10 @@ impl Provider for AnthropicProvider {
         .await
     }
 
+    async fn supports_cache_control(&self) -> bool {
+        !self.model.prompt_caching_mode.is_disabled()
+    }
+
     async fn fetch_supported_models(&self) -> Result<Option<Vec<String>>, ProviderError> {
         let response = self.api_client.api_get("v1/models").await?;
 
@@ -309,7 +322,9 @@ impl Provider for AnthropicProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<MessageStream, ProviderError> {
-        let mut payload = create_request(&self.model, system, messages, tools)?;
+        let runtime_profile = resolve_for_provider_with_model(self, &self.model).await;
+        let effective_model_config = apply_effective_execution(&self.model, &runtime_profile);
+        let mut payload = create_request(&effective_model_config, system, messages, tools)?;
         payload
             .as_object_mut()
             .unwrap()
@@ -322,9 +337,13 @@ impl Provider for AnthropicProvider {
         );
 
         let mut request = self.api_client.request("v1/messages");
-        let mut log = RequestLog::start(&self.model, &payload)?;
+        let mut log = RequestLog::start_with_runtime_profile(
+            &effective_model_config,
+            &payload,
+            Some(&runtime_profile),
+        )?;
 
-        for (key, value) in self.get_conditional_headers() {
+        for (key, value) in self.get_conditional_headers_for_model(&effective_model_config) {
             request = request.header(&key, &value)?;
         }
 

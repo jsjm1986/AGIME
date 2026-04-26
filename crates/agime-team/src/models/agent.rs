@@ -52,7 +52,17 @@ pub enum ApiFormat {
     #[default]
     OpenAI,
     Anthropic,
+    LiteLLM,
     Local,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeOptimizationMode {
+    #[default]
+    Auto,
+    Off,
+    Prefer,
 }
 
 impl std::fmt::Display for ApiFormat {
@@ -60,6 +70,7 @@ impl std::fmt::Display for ApiFormat {
         match self {
             Self::OpenAI => write!(f, "openai"),
             Self::Anthropic => write!(f, "anthropic"),
+            Self::LiteLLM => write!(f, "litellm"),
             Self::Local => write!(f, "local"),
         }
     }
@@ -71,6 +82,7 @@ impl std::str::FromStr for ApiFormat {
         match s.to_lowercase().as_str() {
             "openai" => Ok(Self::OpenAI),
             "anthropic" => Ok(Self::Anthropic),
+            "litellm" => Ok(Self::LiteLLM),
             "local" => Ok(Self::Local),
             _ => Err(format!("Invalid api format: {}", s)),
         }
@@ -458,6 +470,9 @@ pub struct TeamAgent {
     /// Max concurrent tasks for this agent
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_tasks: u32,
+    /// Currently occupied top-level execution slots.
+    #[serde(default)]
+    pub active_execution_slots: u32,
     /// LLM temperature (0.0 - 1.0). None uses provider default.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub temperature: Option<f32>,
@@ -471,6 +486,24 @@ pub struct TeamAgent {
     /// Unsupported models automatically fall back to normal mode.
     #[serde(default = "default_thinking_enabled")]
     pub thinking_enabled: bool,
+    /// Optional thinking budget override for supported models.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thinking_budget: Option<u32>,
+    /// Optional reasoning effort override (for reasoning models such as o-series).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reasoning_effort: Option<String>,
+    /// Optional reserved output budget for context runtime.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_reserve_tokens: Option<usize>,
+    /// Optional auto-compact threshold override for context runtime.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub auto_compact_threshold: Option<f64>,
+    /// Prompt caching preference for providers that support it.
+    #[serde(default)]
+    pub prompt_caching_mode: RuntimeOptimizationMode,
+    /// Cache-edit preference for providers that support it.
+    #[serde(default)]
+    pub cache_edit_mode: RuntimeOptimizationMode,
     /// Skills assigned from team shared skills
     #[serde(default)]
     pub assigned_skills: Vec<AgentSkillConfig>,
@@ -541,10 +574,17 @@ impl TeamAgent {
             last_error: None,
             allowed_groups: vec![],
             max_concurrent_tasks: 1,
+            active_execution_slots: 0,
             temperature: None,
             max_tokens: None,
             context_limit: None,
             thinking_enabled: true,
+            thinking_budget: None,
+            reasoning_effort: None,
+            output_reserve_tokens: None,
+            auto_compact_threshold: None,
+            prompt_caching_mode: RuntimeOptimizationMode::Auto,
+            cache_edit_mode: RuntimeOptimizationMode::Auto,
             assigned_skills: vec![],
             skill_binding_mode: SkillBindingMode::Hybrid,
             delegation_policy: DelegationPolicy::default(),
@@ -629,6 +669,18 @@ pub struct CreateAgentRequest {
     #[serde(default)]
     pub thinking_enabled: Option<bool>,
     #[serde(default)]
+    pub thinking_budget: Option<u32>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub output_reserve_tokens: Option<usize>,
+    #[serde(default)]
+    pub auto_compact_threshold: Option<f64>,
+    #[serde(default)]
+    pub prompt_caching_mode: Option<RuntimeOptimizationMode>,
+    #[serde(default)]
+    pub cache_edit_mode: Option<RuntimeOptimizationMode>,
+    #[serde(default)]
     pub assigned_skills: Option<Vec<AgentSkillConfig>>,
     #[serde(default)]
     pub skill_binding_mode: Option<SkillBindingMode>,
@@ -683,6 +735,18 @@ pub struct UpdateAgentRequest {
     pub context_limit: Option<usize>,
     #[serde(default)]
     pub thinking_enabled: Option<bool>,
+    #[serde(default)]
+    pub thinking_budget: Option<u32>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub output_reserve_tokens: Option<usize>,
+    #[serde(default)]
+    pub auto_compact_threshold: Option<f64>,
+    #[serde(default)]
+    pub prompt_caching_mode: Option<RuntimeOptimizationMode>,
+    #[serde(default)]
+    pub cache_edit_mode: Option<RuntimeOptimizationMode>,
     #[serde(default)]
     pub assigned_skills: Option<Vec<AgentSkillConfig>>,
     #[serde(default)]

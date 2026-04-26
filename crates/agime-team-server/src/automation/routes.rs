@@ -15,7 +15,7 @@ use agime_team::MongoDb;
 use crate::{agent::service_mongo::AgentService, auth::middleware::UserContext};
 
 use super::{
-    contract::derive_builder_sync_payload,
+    contract::{assess_draft_publish_readiness, derive_builder_sync_payload},
     models::{
         CreateIntegrationRequest, CreateProjectRequest, CreateScheduleRequest,
         CreateTaskDraftRequest, SaveModuleRequest, StartRunRequest, TestIntegrationRequest,
@@ -99,6 +99,8 @@ pub fn router(
         .route("/app-drafts/{draft_id}/publish", post(save_module))
         .route("/projects/{project_id}/modules", get(list_modules))
         .route("/projects/{project_id}/apps", get(list_modules))
+        .route("/modules/{module_id}", delete(delete_module))
+        .route("/apps/{module_id}", delete(delete_module))
         .route("/apps/{module_id}", get(get_app_runtime))
         .route("/apps/{module_id}/runtime", get(get_app_runtime))
         .route("/modules/{module_id}/runs", post(start_module_run))
@@ -173,10 +175,67 @@ async fn delete_project(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let team_id = query.team_id;
     ensure_team_member(&agent_service, &user, &team_id).await?;
+    let draft_session_ids: Vec<String> = service
+        .list_task_drafts(&team_id, &project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .filter_map(|draft| {
+            draft
+                .get("builder_session_id")
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+        })
+        .collect();
+    let modules = service
+        .list_modules(&team_id, &project_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut session_ids: Vec<String> = draft_session_ids;
+    let mut module_ids: Vec<String> = Vec::new();
+    for module in modules {
+        if let Some(module_id) = module
+            .get("module_id")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string)
+        {
+            module_ids.push(module_id);
+        }
+        if let Some(runtime_session_id) = module
+            .get("runtime_session_id")
+            .and_then(|value| value.as_str())
+        {
+            session_ids.push(runtime_session_id.to_string());
+        }
+        if let Some(builder_session_id) = module
+            .get("latest_builder_session_id")
+            .and_then(|value| value.as_str())
+        {
+            session_ids.push(builder_session_id.to_string());
+        }
+    }
+    for module_id in module_ids {
+        for run in service
+            .list_runs_for_module(&team_id, &module_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            if let Some(session_id) = run.session_id {
+                session_ids.push(session_id);
+            }
+        }
+    }
+    session_ids.sort();
+    session_ids.dedup();
     let deleted = service
         .delete_project(&team_id, &project_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if deleted {
+        for session_id in session_ids {
+            let _ = agent_service.delete_session(&session_id).await;
+        }
+    }
     Ok(Json(json!({ "deleted": deleted })))
 }
 
@@ -507,30 +566,70 @@ async fn save_module(
     Path(draft_id): Path<String>,
     Query(query): Query<TeamScopedQuery>,
     Json(req): Json<SaveModuleRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let team_id = query.team_id;
-    ensure_team_member(&agent_service, &user, &team_id).await?;
+    ensure_team_member(&agent_service, &user, &team_id)
+        .await
+        .map_err(|status| (status, Json(json!({ "error": "无权发布当前项目应用。" }))))?;
     let draft = service
         .get_task_draft(&team_id, &draft_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    if draft.status != super::models::DraftStatus::Ready {
-        return Err(StatusCode::CONFLICT);
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "读取 Agentify 草稿失败。" })),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "找不到要发布的 Agentify 草稿。" })),
+        ))?;
+    let readiness = assess_draft_publish_readiness(&draft);
+    if !readiness.ready {
+        let message = if readiness.issues.is_empty() {
+            "发布前校验未通过。".to_string()
+        } else {
+            format!("发布前校验未通过：{}", readiness.issues.join("；"))
+        };
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": message,
+                "publish_readiness": readiness,
+            })),
+        ));
     }
     let module = service
         .create_module_from_draft(&team_id, &draft, req, &user.user_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "创建已发布 Agent 失败。" })),
+            )
+        })?;
     let runtime_session_id = runner
         .ensure_runtime_session_for_module(&team_id, &module, &user.user_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "初始化已发布 Agent 的运行时会话失败。" })),
+            )
+        })?;
     let updated_module = service
         .update_module_runtime_session(&team_id, &module.module_id, &runtime_session_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "写入已发布 Agent 运行时信息失败。" })),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "已发布 Agent 创建后未能重新载入。" })),
+        ))?;
     let app_value = module_to_compact_value(&updated_module);
     Ok(Json(
         json!({ "module": app_value.clone(), "app": app_value }),
@@ -629,6 +728,53 @@ async fn start_module_run(
     Ok(Json(
         json!({ "run": run_to_value(&run), "app_id": module.module_id }),
     ))
+}
+
+async fn delete_module(
+    State((service, _, agent_service)): State<AutomationState>,
+    Extension(user): Extension<UserContext>,
+    Path(module_id): Path<String>,
+    Query(query): Query<TeamScopedQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let team_id = query.team_id;
+    ensure_team_member(&agent_service, &user, &team_id).await?;
+    let module = service
+        .get_module(&team_id, &module_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let mut session_ids = Vec::new();
+    if let Some(runtime_session_id) = module.runtime_session_id.clone() {
+        session_ids.push(runtime_session_id);
+    }
+    if let Some(builder_session_id) = module.latest_builder_session_id.clone() {
+        session_ids.push(builder_session_id);
+    }
+    for run in service
+        .list_runs_for_module(&team_id, &module_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        if let Some(session_id) = run.session_id {
+            session_ids.push(session_id);
+        }
+    }
+    session_ids.sort();
+    session_ids.dedup();
+
+    let deleted = service
+        .delete_module(&team_id, &module_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if deleted {
+        for session_id in session_ids {
+            let _ = agent_service.delete_session(&session_id).await;
+        }
+    }
+
+    Ok(Json(json!({ "deleted": deleted })))
 }
 
 async fn list_runs(

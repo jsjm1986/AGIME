@@ -6,9 +6,10 @@ import type { PaginatedResponse } from './types';
 const API_BASE = '/api/team/agent';
 
 // Types
-export type ApiFormat = 'openai' | 'anthropic' | 'local';
+export type ApiFormat = 'openai' | 'anthropic' | 'litellm' | 'local';
 export type SkillBindingMode = 'assigned_only' | 'hybrid' | 'on_demand_only';
 export type ApprovalMode = 'leader_owned' | 'headless_fallback';
+export type RuntimeOptimizationMode = 'auto' | 'off' | 'prefer';
 
 export interface DelegationPolicy {
   allowPlan: boolean;
@@ -31,6 +32,12 @@ export interface AttachedTeamExtensionRef {
   display_name?: string;
   transport?: string;
 }
+
+type AttachedTeamExtensionRefWire = Partial<AttachedTeamExtensionRef> & {
+  extensionId?: string;
+  runtimeName?: string;
+  displayName?: string;
+};
 
 // Built-in extension types
 export type BuiltinExtension =
@@ -161,6 +168,113 @@ export function normalizeDelegationPolicy(raw?: DelegationPolicyWire | null): De
   };
 }
 
+function normalizeAttachedTeamExtensionRef(
+  raw?: AttachedTeamExtensionRefWire | null,
+): AttachedTeamExtensionRef {
+  return {
+    extension_id: raw?.extension_id ?? raw?.extensionId ?? '',
+    enabled: raw?.enabled ?? true,
+    runtime_name: raw?.runtime_name ?? raw?.runtimeName,
+    display_name: raw?.display_name ?? raw?.displayName,
+    transport: raw?.transport,
+  };
+}
+
+type TeamAgentWire = Partial<TeamAgent> & {
+  teamId?: string;
+  systemPrompt?: string;
+  apiUrl?: string;
+  apiFormat?: ApiFormat;
+  enabledExtensions?: AgentExtensionConfig[];
+  customExtensions?: CustomExtensionConfig[];
+  agentDomain?: string;
+  agentRole?: string;
+  ownerManagerAgentId?: string;
+  templateSourceAgentId?: string;
+  lastError?: string;
+  allowedGroups?: string[];
+  maxConcurrentTasks?: number;
+  activeExecutionSlots?: number;
+  maxTokens?: number;
+  contextLimit?: number;
+  thinkingEnabled?: boolean;
+  thinkingBudget?: number;
+  reasoningEffort?: string;
+  outputReserveTokens?: number;
+  autoCompactThreshold?: number;
+  promptCachingMode?: RuntimeOptimizationMode;
+  cacheEditMode?: RuntimeOptimizationMode;
+  assignedSkills?: AgentSkillConfig[];
+  skillBindingMode?: SkillBindingMode;
+  delegationPolicy?: DelegationPolicyWire;
+  attachedTeamExtensions?: AttachedTeamExtensionRefWire[];
+  autoApproveChat?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+function normalizeAgent(raw: TeamAgentWire): TeamAgent {
+  return {
+    id: raw.id || '',
+    team_id: raw.team_id ?? raw.teamId ?? '',
+    name: raw.name || '',
+    description: raw.description,
+    avatar: raw.avatar,
+    system_prompt: raw.system_prompt ?? raw.systemPrompt,
+    api_url: raw.api_url ?? raw.apiUrl,
+    model: raw.model,
+    api_format: raw.api_format ?? raw.apiFormat ?? 'openai',
+    enabled_extensions: raw.enabled_extensions ?? raw.enabledExtensions ?? [],
+    custom_extensions: raw.custom_extensions ?? raw.customExtensions ?? [],
+    agent_domain: raw.agent_domain ?? raw.agentDomain,
+    agent_role: raw.agent_role ?? raw.agentRole,
+    owner_manager_agent_id: raw.owner_manager_agent_id ?? raw.ownerManagerAgentId,
+    template_source_agent_id: raw.template_source_agent_id ?? raw.templateSourceAgentId,
+    status: raw.status ?? 'idle',
+    last_error: raw.last_error ?? raw.lastError,
+    allowed_groups: raw.allowed_groups ?? raw.allowedGroups ?? [],
+    max_concurrent_tasks: raw.max_concurrent_tasks ?? raw.maxConcurrentTasks ?? 5,
+    active_execution_slots: raw.active_execution_slots ?? raw.activeExecutionSlots ?? 0,
+    temperature: raw.temperature,
+    max_tokens: raw.max_tokens ?? raw.maxTokens,
+    context_limit: raw.context_limit ?? raw.contextLimit,
+    thinking_enabled: raw.thinking_enabled ?? raw.thinkingEnabled ?? false,
+    thinking_budget: raw.thinking_budget ?? raw.thinkingBudget,
+    reasoning_effort: raw.reasoning_effort ?? raw.reasoningEffort,
+    output_reserve_tokens: raw.output_reserve_tokens ?? raw.outputReserveTokens,
+    auto_compact_threshold: raw.auto_compact_threshold ?? raw.autoCompactThreshold,
+    prompt_caching_mode:
+      raw.prompt_caching_mode ?? raw.promptCachingMode ?? 'auto',
+    cache_edit_mode: raw.cache_edit_mode ?? raw.cacheEditMode ?? 'auto',
+    assigned_skills: raw.assigned_skills ?? raw.assignedSkills ?? [],
+    skill_binding_mode: raw.skill_binding_mode ?? raw.skillBindingMode ?? 'assigned_only',
+    delegation_policy: normalizeDelegationPolicy(
+      raw.delegation_policy ?? raw.delegationPolicy,
+    ),
+    attached_team_extensions: (
+      raw.attached_team_extensions ??
+      raw.attachedTeamExtensions ??
+      []
+    ).map(normalizeAttachedTeamExtensionRef),
+    auto_approve_chat: raw.auto_approve_chat ?? raw.autoApproveChat ?? false,
+    created_at: raw.created_at ?? raw.createdAt ?? '',
+    updated_at: raw.updated_at ?? raw.updatedAt ?? '',
+  };
+}
+
+async function fetchAgent(url: string, init?: RequestInit) {
+  const raw = await fetchApi<TeamAgentWire>(url, init);
+  return normalizeAgent(raw);
+}
+
+async function fetchAgentPage(url: string) {
+  const raw = await fetchApi<PaginatedResponse<TeamAgentWire>>(url);
+  return {
+    ...raw,
+    items: (raw.items || []).map(normalizeAgent),
+  } as PaginatedResponse<TeamAgent>;
+}
+
 // Built-in skills managed by the Skills MCP extension
 export const BUILTIN_SKILLS: {
   id: string;
@@ -191,10 +305,17 @@ export interface TeamAgent {
   last_error?: string;
   allowed_groups: string[];
   max_concurrent_tasks: number;
+  active_execution_slots: number;
   temperature?: number;
   max_tokens?: number;
   context_limit?: number;
   thinking_enabled: boolean;
+  thinking_budget?: number;
+  reasoning_effort?: string;
+  output_reserve_tokens?: number;
+  auto_compact_threshold?: number;
+  prompt_caching_mode: RuntimeOptimizationMode;
+  cache_edit_mode: RuntimeOptimizationMode;
   assigned_skills: AgentSkillConfig[];
   skill_binding_mode: SkillBindingMode;
   delegation_policy: DelegationPolicy;
@@ -202,6 +323,71 @@ export interface TeamAgent {
   auto_approve_chat: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface RuntimeProfilePreview {
+  model: string;
+  userIntent?: {
+    modelName: string;
+    apiFormat?: string | null;
+    apiUrl?: string | null;
+    contextLimit?: number | null;
+    maxTokens?: number | null;
+    thinkingEnabled?: boolean | null;
+    thinkingBudget?: number | null;
+    reasoningEffort?: string | null;
+    outputReserveTokens?: number | null;
+    autoCompactThreshold?: number | null;
+    promptCachingMode?: RuntimeOptimizationMode;
+    cacheEditMode?: RuntimeOptimizationMode;
+  };
+  hintedCapabilities?: {
+    matchedPattern?: string | null;
+    provider?: string | null;
+    contextLength?: number | null;
+    maxCompletionTokens?: number | null;
+    supportsTemperature?: boolean;
+    supportsThinking?: boolean;
+    supportsReasoning?: boolean;
+    supportsTools?: boolean;
+    useMaxCompletionTokens?: boolean;
+  };
+  runtimeCapabilities?: {
+    contextLength?: number | null;
+    maxCompletionTokens?: number | null;
+    supportsTemperature?: boolean;
+    supportsThinking?: boolean;
+    supportsReasoning?: boolean;
+    supportsPromptCaching?: boolean;
+    supportsCacheEdit?: boolean;
+    useMaxCompletionTokens?: boolean;
+  };
+  effectiveExecution?: {
+    contextLimit?: number | null;
+    maxCompletionTokens?: number | null;
+    useMaxCompletionTokens?: boolean;
+    outputReserveTokens?: number | null;
+    autoCompactThreshold?: number | null;
+    thinkingEnabled?: boolean;
+    thinkingBudget?: number | null;
+    reasoningEffort?: string | null;
+    promptCachingMode?: RuntimeOptimizationMode;
+    cacheEditMode?: RuntimeOptimizationMode;
+  };
+  downgrades?: Array<{
+    field: string;
+    from?: string | null;
+    to?: string | null;
+    reason: string;
+    source: string;
+  }>;
+  warnings?: string[];
+  sourceBreakdown?: {
+    apiFormat?: string | null;
+    apiUrl?: string | null;
+    providerMode?: string;
+    matchedPattern?: string | null;
+  };
 }
 
 export interface AgentTask {
@@ -212,7 +398,7 @@ export interface AgentTask {
   approver_id?: string;
   task_type: 'chat' | 'recipe' | 'skill';
   content: unknown;
-  status: 'pending' | 'approved' | 'rejected' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'pending' | 'approved' | 'queued' | 'rejected' | 'running' | 'completed' | 'failed' | 'cancelled';
   priority: number;
   submitted_at: string;
   approved_at?: string;
@@ -252,6 +438,12 @@ export interface CreateAgentRequest {
   max_tokens?: number;
   context_limit?: number;
   thinking_enabled?: boolean;
+  thinking_budget?: number;
+  reasoning_effort?: string;
+  output_reserve_tokens?: number;
+  auto_compact_threshold?: number;
+  prompt_caching_mode?: RuntimeOptimizationMode;
+  cache_edit_mode?: RuntimeOptimizationMode;
   assigned_skills?: AgentSkillConfig[];
   skill_binding_mode?: SkillBindingMode;
   delegation_policy?: DelegationPolicy;
@@ -280,6 +472,12 @@ export interface UpdateAgentRequest {
   max_tokens?: number;
   context_limit?: number;
   thinking_enabled?: boolean;
+  thinking_budget?: number;
+  reasoning_effort?: string;
+  output_reserve_tokens?: number;
+  auto_compact_threshold?: number;
+  prompt_caching_mode?: RuntimeOptimizationMode;
+  cache_edit_mode?: RuntimeOptimizationMode;
   assigned_skills?: AgentSkillConfig[];
   skill_binding_mode?: SkillBindingMode;
   delegation_policy?: DelegationPolicy;
@@ -307,27 +505,59 @@ export interface SubmitTaskRequest {
 export const agentApi = {
   // List agents for a team
   listAgents: (teamId: string, page = 1, limit = 20) =>
-    fetchApi<PaginatedResponse<TeamAgent>>(
+    fetchAgentPage(
       `${API_BASE}/agents?team_id=${teamId}&page=${page}&limit=${limit}`
     ),
 
   // Create agent
   createAgent: (req: CreateAgentRequest) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents`, {
+    fetchAgent(`${API_BASE}/agents`, {
       method: 'POST',
       body: JSON.stringify(req),
     }),
 
   // Get agent
   getAgent: (id: string) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents/${id}`),
+    fetchAgent(`${API_BASE}/agents/${id}`),
 
   // Update agent
   updateAgent: (id: string, req: UpdateAgentRequest) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents/${id}`, {
+    fetchAgent(`${API_BASE}/agents/${id}`, {
       method: 'PUT',
       body: JSON.stringify(req),
     }),
+
+  runtimeProfilePreview: (
+    model: string,
+    apiFormat?: ApiFormat,
+    options?: {
+      apiUrl?: string;
+      contextLimit?: number;
+      maxTokens?: number;
+      thinkingEnabled?: boolean;
+      thinkingBudget?: number;
+      reasoningEffort?: string;
+      outputReserveTokens?: number;
+      autoCompactThreshold?: number;
+      promptCachingMode?: RuntimeOptimizationMode;
+      cacheEditMode?: RuntimeOptimizationMode;
+    }
+  ) => {
+    const params = new URLSearchParams();
+    params.set('model', model);
+    if (apiFormat) params.set('api_format', apiFormat);
+    if (options?.apiUrl) params.set('api_url', options.apiUrl);
+    if (options?.contextLimit != null) params.set('context_limit', String(options.contextLimit));
+    if (options?.maxTokens != null) params.set('max_tokens', String(options.maxTokens));
+    if (options?.thinkingEnabled != null) params.set('thinking_enabled', String(options.thinkingEnabled));
+    if (options?.thinkingBudget != null) params.set('thinking_budget', String(options.thinkingBudget));
+    if (options?.reasoningEffort) params.set('reasoning_effort', options.reasoningEffort);
+    if (options?.outputReserveTokens != null) params.set('output_reserve_tokens', String(options.outputReserveTokens));
+    if (options?.autoCompactThreshold != null) params.set('auto_compact_threshold', String(options.autoCompactThreshold));
+    if (options?.promptCachingMode) params.set('prompt_caching_mode', options.promptCachingMode);
+    if (options?.cacheEditMode) params.set('cache_edit_mode', options.cacheEditMode);
+    return fetchApi<RuntimeProfilePreview>(`${API_BASE}/runtime-profile-preview?${params.toString()}`);
+  },
 
   // Delete agent
   deleteAgent: (id: string) =>
@@ -336,7 +566,7 @@ export const agentApi = {
   // Clone agent from an existing template
   // Legacy endpoint kept for backward compatibility with older servers.
   cloneAgent: (id: string, req: ProvisionFromTemplateRequest) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/clone`, {
+    fetchAgent(`${API_BASE}/agents/${id}/clone`, {
       method: 'POST',
       body: JSON.stringify(req),
     }),
@@ -345,13 +575,13 @@ export const agentApi = {
   // Falls back to legacy /clone for backward compatibility.
   provisionFromTemplate: async (id: string, req: ProvisionFromTemplateRequest) => {
     try {
-      return await fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/provision-from-template`, {
+      return await fetchAgent(`${API_BASE}/agents/${id}/provision-from-template`, {
         method: 'POST',
         body: JSON.stringify(req),
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
-        return fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/clone`, {
+        return fetchAgent(`${API_BASE}/agents/${id}/clone`, {
           method: 'POST',
           body: JSON.stringify(req),
         });
@@ -364,7 +594,7 @@ export const agentApi = {
   updateAccess: (id: string, req: {
     allowed_groups: string[];
   }) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/access`, {
+    fetchAgent(`${API_BASE}/agents/${id}/access`, {
       method: 'PUT',
       body: JSON.stringify(req),
     }),
@@ -374,7 +604,7 @@ export const agentApi = {
     enabled_extensions?: AgentExtensionConfig[];
     custom_extensions?: CustomExtensionConfig[];
   }) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/extensions`, {
+    fetchAgent(`${API_BASE}/agents/${id}/extensions`, {
       method: 'PUT',
       body: JSON.stringify(req),
     }),
@@ -390,21 +620,21 @@ export const agentApi = {
   updateSkills: (id: string, req: {
     assigned_skills?: AgentSkillConfig[];
   }) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents/${id}/skills`, {
+    fetchAgent(`${API_BASE}/agents/${id}/skills`, {
       method: 'PUT',
       body: JSON.stringify(req),
     }),
 
   // Add a team shared extension to an agent
   addTeamExtension: (agentId: string, extensionId: string, teamId: string) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents/${agentId}/extensions/add-team`, {
+    fetchAgent(`${API_BASE}/agents/${agentId}/extensions/add-team`, {
       method: 'POST',
       body: JSON.stringify({ extension_id: extensionId, team_id: teamId }),
     }),
 
   // Add a custom MCP extension directly to an agent
   addCustomExtension: (agentId: string, teamId: string, extension: CustomExtensionConfig) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents/${agentId}/extensions/custom`, {
+    fetchAgent(`${API_BASE}/agents/${agentId}/extensions/custom`, {
       method: 'POST',
       body: JSON.stringify({ team_id: teamId, extension }),
     }),
@@ -416,7 +646,7 @@ export const agentApi = {
     teamId: string,
     enabled: boolean,
   ) =>
-    fetchApi<TeamAgent>(
+    fetchAgent(
       `${API_BASE}/agents/${agentId}/extensions/custom/${encodeURIComponent(extensionName)}?team_id=${encodeURIComponent(teamId)}`,
       {
         method: 'PATCH',
@@ -426,7 +656,7 @@ export const agentApi = {
 
   // Remove a custom MCP extension from an agent
   removeCustomExtension: (agentId: string, extensionName: string, teamId: string) =>
-    fetchApi<TeamAgent>(
+    fetchAgent(
       `${API_BASE}/agents/${agentId}/extensions/custom/${encodeURIComponent(extensionName)}?team_id=${encodeURIComponent(teamId)}`,
       {
         method: 'DELETE',
@@ -435,14 +665,14 @@ export const agentApi = {
 
   // Add a team shared skill to an agent
   addTeamSkill: (agentId: string, skillId: string, teamId: string) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents/${agentId}/skills/add-team`, {
+    fetchAgent(`${API_BASE}/agents/${agentId}/skills/add-team`, {
       method: 'POST',
       body: JSON.stringify({ skill_id: skillId, team_id: teamId }),
     }),
 
   // Remove a skill from an agent
   removeSkill: (agentId: string, skillId: string) =>
-    fetchApi<TeamAgent>(`${API_BASE}/agents/${agentId}/skills/${skillId}`, {
+    fetchAgent(`${API_BASE}/agents/${agentId}/skills/${skillId}`, {
       method: 'DELETE',
     }),
 

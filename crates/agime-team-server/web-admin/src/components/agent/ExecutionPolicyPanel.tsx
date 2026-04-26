@@ -70,13 +70,13 @@ export function ExecutionPolicyPanel({ policy, onChange }: Props) {
       <Card>
         <CardHeader className="py-3">
           <CardTitle className="text-sm">
-            {t('agent.execution.title', '执行策略')}
+            {t('agent.execution.title', 'Execution policy')}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-2 rounded-md border border-border/70 p-3">
             <Label htmlFor="approval-mode">
-              {t('agent.execution.approvalMode', '审批模式')}
+              {t('agent.execution.approvalMode', 'Approval mode')}
             </Label>
             <select
               id="approval-mode"
@@ -91,13 +91,13 @@ export function ExecutionPolicyPanel({ policy, onChange }: Props) {
               <option value="leader_owned">
                 {t(
                   'agent.execution.approvalModeLeaderOwned',
-                  'Leader Owned（有 leader 时由协调链路决策）'
+                  'Leader owned (decide through the coordinator path when a leader exists)'
                 )}
               </option>
               <option value="headless_fallback">
                 {t(
                   'agent.execution.approvalModeHeadless',
-                  'Headless Fallback（直接按 policy fallback）'
+                  'Headless fallback (fallback directly by policy)'
                 )}
               </option>
             </select>
@@ -105,68 +105,68 @@ export function ExecutionPolicyPanel({ policy, onChange }: Props) {
               {policy.approvalMode === 'leader_owned'
                 ? t(
                     'agent.execution.approvalModeLeaderOwnedHint',
-                    'worker 的权限请求优先进入 leader/coordinator 处理链；只有没有 leader 时才允许 fallback。'
+                    'Worker permission requests first go through the leader/coordinator path; fallback is only allowed when no leader exists.'
                   )
                 : t(
                     'agent.execution.approvalModeHeadlessHint',
-                    '适合无人值守场景，worker 权限请求可直接回退到 policy 自动判定。'
+                    'Best for unattended scenarios where worker permission requests can fall back directly to policy evaluation.'
                   )}
             </div>
           </div>
           {renderToggle(
             'allowPlan',
-            t('agent.execution.allowPlan', '允许 Plan 模式'),
+            t('agent.execution.allowPlan', 'Allow plan mode'),
             t(
               'agent.execution.allowPlanHint',
-              '允许 Agent 在复杂任务前先进入规划步骤，再决定执行路径。'
+              'Allow the agent to enter a planning step before deciding the execution path for complex tasks.'
             )
           )}
           {renderToggle(
             'allowSubagent',
-            t('agent.execution.allowSubagent', '允许 Subagent'),
+            t('agent.execution.allowSubagent', 'Allow subagents'),
             t(
               'agent.execution.allowSubagentHint',
-              '允许 Agent 把明确的子任务委托给有边界的辅助 worker。'
+              'Allow the agent to delegate well-bounded subtasks to helper workers.'
             )
           )}
           {renderToggle(
             'allowSwarm',
-            t('agent.execution.allowSwarm', '允许 Swarm'),
+            t('agent.execution.allowSwarm', 'Allow swarm'),
             t(
               'agent.execution.allowSwarmHint',
-              '允许 Agent 使用多 worker 并行协作。关闭后将只允许单 worker 或本地执行。'
+              'Allow the agent to use multiple workers in parallel. When disabled, only single-worker or local execution is allowed.'
             )
           )}
           {renderToggle(
             'allowWorkerMessaging',
-            t('agent.execution.allowWorkerMessaging', '允许 Worker 互发消息'),
+            t('agent.execution.allowWorkerMessaging', 'Allow worker messaging'),
             t(
               'agent.execution.allowWorkerMessagingHint',
-              '允许 swarm worker 在同一 run 内直接向其他 worker 或 leader 发送有边界的协作消息。'
+              'Allow swarm workers to send bounded collaboration messages directly to other workers or the leader within the same run.'
             )
           )}
           {renderToggle(
             'allowAutoSwarm',
-            t('agent.execution.allowAutoSwarm', '允许自动升级到 Swarm'),
+            t('agent.execution.allowAutoSwarm', 'Allow automatic swarm upgrade'),
             t(
               'agent.execution.allowAutoSwarmHint',
-              '允许 planner/runtime 在任务复杂时自动把单 worker 升级成多 worker。'
+              'Allow the planner/runtime to upgrade a single worker into multiple workers when a task becomes complex.'
             )
           )}
           {renderToggle(
             'allowValidationWorker',
-            t('agent.execution.allowValidation', '允许 Validation Worker'),
+            t('agent.execution.allowValidation', 'Allow validation workers'),
             t(
               'agent.execution.allowValidationHint',
-              '允许 runtime 在收尾前拉起验证 worker 做结构化验收。'
+              'Allow the runtime to start a validation worker before completion for structured acceptance checks.'
             )
           )}
           {renderToggle(
             'requireFinalReport',
-            t('agent.execution.requireFinalReport', '要求最终报告'),
+            t('agent.execution.requireFinalReport', 'Require final report'),
             t(
               'agent.execution.requireFinalReportHint',
-              '开启后执行类 surface 必须完成结构化 final report 才能 completed。'
+              'When enabled, execution surfaces must produce a structured final report before they can complete.'
             )
           )}
         </CardContent>
@@ -175,13 +175,13 @@ export function ExecutionPolicyPanel({ policy, onChange }: Props) {
       <Card>
         <CardHeader className="py-3">
           <CardTitle className="text-sm">
-            {t('agent.execution.budgets', '执行预算')}
+            {t('agent.execution.budgets', 'Execution budgets')}
           </CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-3">
           <div className="space-y-2">
             <Label htmlFor="max-subagent-depth">
-              {t('agent.execution.maxSubagentDepth', '最大委托深度')}
+              {t('agent.execution.maxSubagentDepth', 'Maximum delegation depth')}
             </Label>
             <Input
               id="max-subagent-depth"
@@ -193,26 +193,26 @@ export function ExecutionPolicyPanel({ policy, onChange }: Props) {
           </div>
           <div className="space-y-2">
             <Label htmlFor="parallelism-budget">
-              {t('agent.execution.parallelismBudget', '并行预算')}
+              {t('agent.execution.parallelismBudget', 'Parallelism budget')}
             </Label>
             <Input
               id="parallelism-budget"
               type="number"
               min="1"
-              placeholder={t('agent.execution.unlimited', '不限')}
+              placeholder={t('agent.execution.unlimited', 'Unlimited')}
               value={policy.parallelismBudget ?? ''}
               onChange={(e) => setNumber('parallelismBudget', e.target.value)}
             />
           </div>
           <div className="space-y-2">
             <Label htmlFor="swarm-budget">
-              {t('agent.execution.swarmBudget', 'Swarm 预算')}
+              {t('agent.execution.swarmBudget', 'Swarm budget')}
             </Label>
             <Input
               id="swarm-budget"
               type="number"
               min="1"
-              placeholder={t('agent.execution.unlimited', '不限')}
+              placeholder={t('agent.execution.unlimited', 'Unlimited')}
               value={policy.swarmBudget ?? ''}
               onChange={(e) => setNumber('swarmBudget', e.target.value)}
             />

@@ -31,12 +31,60 @@ interface Message {
   thinking?: string;
   toolCalls?: ToolCallInfo[];
   turn?: { current: number; max: number };
-  compaction?: { strategy: string; before: number; after: number };
+  compaction?: { strategy: string; before: number; after: number; phase?: string; reason?: string };
   sessionId?: string;
   timestamp: Date;
   taskId?: string;
   status?: string;
   isStreaming?: boolean;
+}
+
+const MIN_VISIBLE_COMPACTION_FREED_TOKENS = 256;
+
+function normalizeCompactionToken(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+}
+
+function compactionFreedTokens(detail: {
+  before_tokens?: unknown;
+  after_tokens?: unknown;
+  before?: unknown;
+  after?: unknown;
+}): number {
+  const before = Number(detail.before_tokens ?? detail.before ?? 0);
+  const after = Number(detail.after_tokens ?? detail.after ?? 0);
+  if (!Number.isFinite(before) || !Number.isFinite(after)) {
+    return 0;
+  }
+  return Math.max(0, before - after);
+}
+
+function shouldDisplayCompactionEvent(detail: {
+  before_tokens?: unknown;
+  after_tokens?: unknown;
+  before?: unknown;
+  after?: unknown;
+  phase?: unknown;
+  reason?: unknown;
+}): boolean {
+  const freed = compactionFreedTokens(detail);
+  const phase = normalizeCompactionToken(detail.phase);
+  const reason = normalizeCompactionToken(detail.reason);
+  const structural =
+    phase === 'session_memory_compaction' ||
+    phase === 'committed_collapse' ||
+    phase === 'staged_collapse' ||
+    reason === 'session_memory_compaction' ||
+    reason === 'committed_collapse' ||
+    reason === 'staged_collapse';
+  if (structural) return true;
+  if (phase === 'projection_refresh' || reason === 'projection_refresh') {
+    return freed >= MIN_VISIBLE_COMPACTION_FREED_TOKENS;
+  }
+  return freed >= MIN_VISIBLE_COMPACTION_FREED_TOKENS;
 }
 
 interface Props {
@@ -198,9 +246,21 @@ export function ChatDialog({ agent, teamId, open, onOpenChange }: Props) {
     eventSource.addEventListener('compaction', (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (!shouldDisplayCompactionEvent(data)) {
+          return;
+        }
         setMessages(prev => prev.map(msg => {
           if (msg.taskId === taskId) {
-            return { ...msg, compaction: { strategy: data.strategy, before: data.before_tokens, after: data.after_tokens } };
+            return {
+              ...msg,
+              compaction: {
+                strategy: data.strategy,
+                before: data.before_tokens,
+                after: data.after_tokens,
+                phase: data.phase,
+                reason: data.reason,
+              },
+            };
           }
           return msg;
         }));
@@ -304,15 +364,21 @@ export function ChatDialog({ agent, teamId, open, onOpenChange }: Props) {
         role: 'assistant',
         content: task.status === 'approved'
           ? t('agent.chat.thinking', 'Thinking...')
+          : task.status === 'queued'
+            ? t('agent.chat.queued', 'Queued, will start when the agent has capacity...')
           : t('agent.chat.waiting', 'Waiting for approval...'),
         timestamp: new Date(),
         taskId: task.id,
-        status: task.status === 'approved' ? 'running' : 'pending',
-        isStreaming: task.status === 'approved',
+        status: task.status === 'approved'
+          ? 'running'
+          : task.status === 'queued'
+            ? 'queued'
+            : 'pending',
+        isStreaming: task.status === 'approved' || task.status === 'queued',
       };
       setMessages(prev => [...prev, assistantMessage]);
 
-      if (task.status === 'approved') {
+      if (task.status === 'approved' || task.status === 'queued') {
         // Auto-approved by backend, start streaming directly
         startStreaming(task.id);
       } else {

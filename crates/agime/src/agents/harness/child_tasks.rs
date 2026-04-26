@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::delegation::DelegationMode;
-use super::task_runtime::TaskKind;
 
 #[derive(Debug, Clone, Default)]
 pub struct ChildTaskRequest {
@@ -91,13 +90,40 @@ impl ValidationReport {
         self.target_artifacts = target_artifacts;
         self
     }
+
+    pub fn artifact_not_materialized(target_artifact: &str) -> Self {
+        Self {
+            status: ValidationStatus::Failed,
+            reason: Some(format!(
+                "target artifact `{}` was declared but no materialized file exists in the leader workspace",
+                target_artifact
+            )),
+            reason_code: Some("artifact_not_materialized".to_string()),
+            validator_task_id: None,
+            target_artifacts: vec![target_artifact.to_string()],
+            evidence_summary: Some(
+                "Target artifact was declared by the child run but was not materialized into the leader workspace."
+                    .to_string(),
+            ),
+            content_accessed: false,
+            analysis_complete: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChildTaskResultClassification {
     pub accepted_targets: Vec<String>,
+    pub produced_targets: Vec<String>,
     pub produced_delta: bool,
     pub validation_outcome: Option<ValidationReport>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildExecutionExpectation {
+    ReadOnlyInspection,
+    MaterializingChange,
+    Validation,
 }
 
 pub fn build_swarm_worker_instructions(
@@ -143,6 +169,16 @@ pub fn build_validation_worker_instructions(
             "Primary worker summary to cross-check:\n{}",
             base_summary.trim()
         ));
+    }
+    let has_document_target = target_artifact.trim().starts_with("document:")
+        || result_contract
+            .iter()
+            .any(|item| item.trim().starts_with("document:"));
+    if has_document_target {
+        lines.push(
+            "For `document:` targets, validate by using available read-only document tools such as `document_tools__read_document` or document inventory before PASS/FAIL. Do not report missing document access unless a document tool call actually fails or no document tools are available in the tool list."
+                .to_string(),
+        );
     }
     lines.push(
         "Inspect the artifact independently. Begin your final response with either `PASS:` or `FAIL:`. Prefer read-only verification and only suggest fixes when necessary."
@@ -278,32 +314,57 @@ pub fn summary_indicates_material_progress(summary: &str) -> bool {
 }
 
 pub fn classify_child_task_result(
-    kind: TaskKind,
+    expectation: ChildExecutionExpectation,
     target_artifacts: &[String],
     effective_write_scope: &[String],
     summary: &str,
 ) -> ChildTaskResultClassification {
-    if kind == TaskKind::ValidationWorker {
+    if expectation == ChildExecutionExpectation::Validation {
         return ChildTaskResultClassification {
             accepted_targets: Vec::new(),
+            produced_targets: Vec::new(),
             produced_delta: false,
             validation_outcome: Some(parse_validation_outcome(summary)),
         };
     }
 
     let produced_delta = summary_indicates_material_progress(summary);
-    let accepted_targets = if produced_delta {
-        if target_artifacts.is_empty() {
-            effective_write_scope.to_vec()
-        } else {
-            target_artifacts.to_vec()
+    let terminal_non_failure =
+        !summary.trim().is_empty() && !summary.trim_start().starts_with("FAIL:");
+    let accepted_targets = match expectation {
+        ChildExecutionExpectation::ReadOnlyInspection => {
+            if terminal_non_failure {
+                if target_artifacts.is_empty() {
+                    effective_write_scope.to_vec()
+                } else {
+                    target_artifacts.to_vec()
+                }
+            } else {
+                Vec::new()
+            }
         }
+        ChildExecutionExpectation::MaterializingChange => {
+            if produced_delta {
+                if target_artifacts.is_empty() {
+                    effective_write_scope.to_vec()
+                } else {
+                    target_artifacts.to_vec()
+                }
+            } else {
+                Vec::new()
+            }
+        }
+        ChildExecutionExpectation::Validation => Vec::new(),
+    };
+    let produced_targets = if produced_delta {
+        accepted_targets.clone()
     } else {
         Vec::new()
     };
 
     ChildTaskResultClassification {
         accepted_targets,
+        produced_targets,
         produced_delta,
         validation_outcome: None,
     }
@@ -355,12 +416,26 @@ mod tests {
     #[test]
     fn classify_child_task_result_does_not_accept_targets_without_material_delta() {
         let result = classify_child_task_result(
-            TaskKind::SwarmWorker,
+            ChildExecutionExpectation::MaterializingChange,
             &["docs/out.md".to_string()],
             &["docs".to_string()],
             "analysis only, no changes",
         );
         assert!(result.accepted_targets.is_empty());
+        assert!(result.produced_targets.is_empty());
+        assert!(!result.produced_delta);
+    }
+
+    #[test]
+    fn classify_child_task_result_accepts_read_only_inspection_without_delta() {
+        let result = classify_child_task_result(
+            ChildExecutionExpectation::ReadOnlyInspection,
+            &["README.md".to_string()],
+            &[],
+            "Scope: inspect README.md\nResult: README.md does not exist.",
+        );
+        assert_eq!(result.accepted_targets, vec!["README.md".to_string()]);
+        assert!(result.produced_targets.is_empty());
         assert!(!result.produced_delta);
     }
 }

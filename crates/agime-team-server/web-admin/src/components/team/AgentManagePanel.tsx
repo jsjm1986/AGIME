@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Skeleton } from '../ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
-import { StatusBadge, AGENT_STATUS_MAP } from '../ui/status-badge';
+import { StatusBadge } from '../ui/status-badge';
 import { AgentTypeBadge, resolveAgentVisualType } from '../agent/AgentTypeBadge';
+import { AgentAvatar } from '../agent/AvatarPicker';
 import { CreateAgentDialog } from '../agent/CreateAgentDialog';
 import { EditAgentDialog } from '../agent/EditAgentDialog';
 import { DeleteAgentDialog } from '../agent/DeleteAgentDialog';
@@ -35,6 +37,104 @@ interface AgentManagePanelProps {
   teamId: string;
   onOpenChat?: (agent: TeamAgent) => void;
   onOpenDigitalAvatar?: () => void;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getDedicatedAgentDisplayName(agent: TeamAgent | null | undefined, fallback = 'N/A'): string {
+  if (!agent?.name) return fallback;
+
+  const visualType = resolveAgentVisualType(agent);
+  const suffixes = [
+    '管理Agent',
+    '管理 Agent',
+    '分身管理Agent',
+    '分身管理 Agent',
+    '服务Agent',
+    '服务 Agent',
+    '分身服务Agent',
+    '分身服务 Agent',
+    'Manager',
+    'Service',
+  ];
+
+  let normalized = agent.name.trim();
+  for (const suffix of suffixes) {
+    normalized = normalized.replace(
+      new RegExp(`(?:\\s*[-－—]\\s*${escapeRegExp(suffix)})+$`, 'giu'),
+      '',
+    ).trim();
+  }
+
+  if (visualType === 'avatar_manager') {
+    normalized = normalized
+      .replace(/(?:管理\s*Agent)(?:\s*[-－—]?\s*管理\s*Agent)+$/giu, '管理Agent')
+      .replace(/(?:分身管理\s*Agent)(?:\s*[-－—]?\s*分身管理\s*Agent)+$/giu, '分身管理Agent')
+      .replace(/(?:manager)(?:\s*[-－—]?\s*manager)+$/giu, 'Manager')
+      .trim();
+  }
+
+  if (visualType === 'avatar_service') {
+    normalized = normalized
+      .replace(/(?:服务\s*Agent)(?:\s*[-－—]?\s*服务\s*Agent)+$/giu, '服务Agent')
+      .replace(/(?:分身服务\s*Agent)(?:\s*[-－—]?\s*分身服务\s*Agent)+$/giu, '分身服务Agent')
+      .replace(/(?:service)(?:\s*[-－—]?\s*service)+$/giu, 'Service')
+      .trim();
+  }
+
+  return normalized || agent.name || fallback;
+}
+
+function formatMetricValue(value: number | string | null | undefined, fallback = '—'): string {
+  if (value === null || value === undefined) return fallback;
+  const text = String(value).trim();
+  return text.length > 0 ? text : fallback;
+}
+
+function shortenApiEndpoint(value?: string | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    return `${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+  } catch {
+    return value;
+  }
+}
+
+function getAgentStatusAccent(status: string): string {
+  switch (status) {
+    case 'running':
+      return 'bg-[hsl(var(--status-success-text))]';
+    case 'paused':
+      return 'bg-[hsl(var(--status-warning-text))]';
+    case 'error':
+      return 'bg-[hsl(var(--status-error-text))]';
+    default:
+      return 'bg-[hsl(var(--ui-line-strong))]';
+  }
+}
+
+function getCapacityBadge(agent: TeamAgent, t: TFunction) {
+  const max = Math.max(1, agent.max_concurrent_tasks ?? 1);
+  const active = Math.max(0, agent.active_execution_slots ?? 0);
+  if (active <= 0) {
+    return {
+      status: 'neutral' as const,
+      label: t('agent.capacity.idle', '空闲'),
+    };
+  }
+  if (active >= max) {
+    return {
+      status: 'warning' as const,
+      label: t('agent.capacity.full', '满载 {{active}}/{{max}}', { active, max }),
+    };
+  }
+  return {
+    status: 'info' as const,
+    label: t('agent.capacity.running', '运行中 {{active}}/{{max}}', { active, max }),
+  };
 }
 
 export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: AgentManagePanelProps) {
@@ -106,16 +206,24 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
     });
   };
 
+  const getAttachedTeamExtensionNames = (agent: TeamAgent) =>
+    (agent.attached_team_extensions || [])
+      .filter((entry) => entry.enabled)
+      .map((entry) => entry.display_name || entry.runtime_name || entry.extension_id);
+
   const getEnabledSkillNames = (agent: TeamAgent) =>
     (agent.assigned_skills || [])
       .filter(skill => skill.enabled)
       .map(skill => skill.name);
 
-  const getStatusBadge = (status: string) => (
-    <StatusBadge status={AGENT_STATUS_MAP[status] || 'neutral'}>
-      {t(`agent.status.${status}`)}
-    </StatusBadge>
-  );
+  const getCapacityStatusBadge = (agent: TeamAgent) => {
+    const capacity = getCapacityBadge(agent, t);
+    return (
+      <StatusBadge status={capacity.status}>
+        {capacity.label}
+      </StatusBadge>
+    );
+  };
 
   const getDefaultAgentResponsibilities = (agent: TeamAgent) => {
     const items: Array<{ key: string; title: string; description: string }> = [];
@@ -158,181 +266,263 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
 
   const renderAgentCard = (agent: TeamAgent, roles: Array<'manager' | 'service'> = []) => {
     const enabledExtensionNames = getEnabledExtensionNames(agent);
+    const attachedTeamExtensionNames = getAttachedTeamExtensionNames(agent);
     const enabledSkillNames = getEnabledSkillNames(agent);
     const enabledCustomExtensions = agent.custom_extensions?.filter(e => e.enabled) || [];
     const isDefaultGeneralAgent = roles.length === 0 && agent.id === defaultGeneralAgentId;
     const responsibilities = roles.length === 0 ? getDefaultAgentResponsibilities(agent) : [];
+    const extensionChips = [
+      ...enabledExtensionNames.map((name) => ({ key: `builtin-${name}`, label: name, variant: 'secondary' as const })),
+      ...attachedTeamExtensionNames.map((name) => ({ key: `team-${name}`, label: name, variant: 'outline' as const })),
+      ...enabledCustomExtensions.map((ext) => ({ key: `custom-${ext.name}`, label: ext.name, variant: 'outline' as const })),
+    ];
+    const skillChips = enabledSkillNames.map((name) => ({
+      key: `skill-${name}`,
+      label: name,
+      className:
+        'border-[hsl(var(--status-warning-text))/0.18] bg-[hsl(var(--status-warning-bg))/0.92] text-status-warning-text',
+    }));
+    const visualType = roles.length > 0 ? (roles[0] === 'manager' ? 'avatar_manager' : 'avatar_service') : resolveAgentVisualType(agent);
+    const primaryMeta = [
+      { key: 'apiFormat', label: t('agent.create.apiFormat'), value: formatMetricValue(agent.api_format) },
+      {
+        key: 'allowedGroups',
+        label: t('agent.access.allowedGroups'),
+        value: agent.allowed_groups?.length ? `${agent.allowed_groups.length}` : t('agent.access.title'),
+      },
+      ...(agent.api_url
+        ? [{ key: 'apiUrl', label: t('agent.create.apiUrl'), value: shortenApiEndpoint(agent.api_url) ?? '—' }]
+        : []),
+    ];
 
     return (
-      <Card key={agent.id}>
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span>{agent.name}</span>
-              {roles.length > 0 ? roles.map(role => (
-                <AgentTypeBadge
-                  key={role}
-                  type={role === 'manager' ? 'avatar_manager' : 'avatar_service'}
-                />
-              )) : (
-                <AgentTypeBadge type={resolveAgentVisualType(agent)} />
-              )}
-              {isDefaultGeneralAgent && (
-                <button
-                  type="button"
-                  className="inline-flex items-center rounded-full border border-primary/30 bg-primary/8 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors hover:border-primary/50 hover:bg-primary/12"
+      <Card
+        key={agent.id}
+        className="relative overflow-hidden border-[hsl(var(--ui-line-soft))/0.82] bg-[linear-gradient(180deg,hsl(var(--ui-surface-panel-strong))_0%,hsl(var(--ui-surface-panel))_100%)] shadow-[0_22px_40px_-34px_hsl(var(--ui-shadow)/0.42)] transition-all duration-200 hover:border-[hsl(var(--ui-line-strong))/0.82] hover:shadow-[0_24px_46px_-34px_hsl(var(--ui-shadow)/0.5)]"
+      >
+        <div className={`absolute inset-x-0 top-0 h-[2px] ${getAgentStatusAccent(agent.status)}`} />
+        <CardHeader className="space-y-0 p-0">
+          <div className="border-b border-[hsl(var(--ui-line-soft))/0.68] px-5 py-4">
+            <CardTitle className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="min-w-0 space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 shrink-0">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-[14px] border border-[hsl(var(--ui-line-soft))/0.82] bg-[hsl(var(--ui-surface-panel-muted))/0.78]">
+                      <AgentAvatar avatar={agent.avatar} name={agent.name} className="h-11 w-11" iconSize="w-4.5 h-4.5" />
+                    </div>
+                  </div>
+                  <div className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate text-[18px] font-semibold tracking-[-0.015em] text-foreground">
+                        {agent.name}
+                      </span>
+                      <AgentTypeBadge type={visualType} />
+                      {isDefaultGeneralAgent && (
+                        <button
+                          type="button"
+                          className="inline-flex items-center rounded-full border border-primary/24 bg-primary/8 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors hover:border-primary/42 hover:bg-primary/12"
+                          onClick={() => {
+                            setDefaultAgentDetailTarget(agent);
+                            setDefaultAgentDetailOpen(true);
+                          }}
+                        >
+                          {t('agent.manage.defaultGeneralAgent', '默认工作流 Agent')}
+                        </button>
+                      )}
+                      {getCapacityStatusBadge(agent)}
+                    </div>
+
+                    {agent.description ? (
+                      <p className="max-w-3xl text-[13px] leading-6 text-[hsl(var(--ui-text-secondary))] line-clamp-2">
+                        {agent.description}
+                      </p>
+                    ) : (
+                      <p className="text-[12px] italic text-[hsl(var(--ui-text-tertiary))]">
+                        {t('agent.noDescription')}
+                      </p>
+                    )}
+
+                    {responsibilities.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {responsibilities.map((item) => (
+                          <button
+                            key={item.key}
+                            type="button"
+                            onClick={() => {
+                              setDefaultAgentDetailTarget(agent);
+                              setDefaultAgentDetailOpen(true);
+                            }}
+                            className="inline-flex items-center rounded-full border border-[hsl(var(--status-info-text))/0.18] bg-[hsl(var(--status-info-bg))/0.88] px-2.5 py-1 text-[11px] font-medium text-[hsl(var(--status-info-text))] transition-colors hover:border-[hsl(var(--status-info-text))/0.3]"
+                          >
+                            {item.title}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+                <div className="flex shrink-0 items-center gap-2 self-start">
+                  {onOpenChat && (
+                  <button
+                    type="button"
+                    className="agent-manage-chat-button inline-flex min-w-[88px] items-center justify-center rounded-[10px] px-3 py-2 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] focus-visible:ring-offset-2"
+                    onClick={() => onOpenChat(agent)}
+                  >
+                    {t('agent.chat.button')}
+                  </button>
+                  )}
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() => {
-                    setDefaultAgentDetailTarget(agent);
-                    setDefaultAgentDetailOpen(true);
+                    setSelectedAgent(agent);
+                    setEditAgentOpen(true);
                   }}
                 >
-                  {t('agent.manage.defaultGeneralAgent', '默认工作流 Agent')}
-                </button>
-              )}
-              {getStatusBadge(agent.status)}
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setSelectedAgent(agent);
-                  setEditAgentOpen(true);
-                }}
-              >
-                {t('agent.actions.edit')}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setSelectedAgent(agent);
-                  setDeleteAgentOpen(true);
-                }}
-              >
-                {t('common.delete')}
-              </Button>
-              {onOpenChat && (
-                <Button size="sm" onClick={() => onOpenChat(agent)}>
-                  {t('agent.chat.button')}
+                  {t('agent.actions.edit')}
                 </Button>
-              )}
-            </div>
-          </CardTitle>
-          {agent.description && (
-            <p className="text-sm text-muted-foreground">{agent.description}</p>
-          )}
-          {responsibilities.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              {t('agent.manage.defaultAgentSummary', '当前承担 {{count}} 项系统默认职责。点击默认 Agent 标签可查看。', {
-                count: responsibilities.length,
-              })}
-            </p>
-          )}
-          {agent.status === 'error' && agent.last_error && (
-            <p className="mt-1 text-sm text-destructive">{agent.last_error}</p>
-          )}
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-5">
-              <div>
-                <span className="text-muted-foreground">{t('agent.create.apiFormat')}:</span>
-                <span className="ml-2">{agent.api_format || '-'}</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-muted-foreground hover:text-destructive"
+                  onClick={() => {
+                    setSelectedAgent(agent);
+                    setDeleteAgentOpen(true);
+                  }}
+                >
+                  {t('common.delete')}
+                </Button>
               </div>
-              <div>
-                <span className="text-muted-foreground">{t('agent.model')}:</span>
-                <span className="ml-2">{agent.model || '-'}</span>
+            </CardTitle>
+          </div>
+
+          <div className="space-y-4 px-5 py-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.88] px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.14em] text-[hsl(var(--ui-text-tertiary))]">
+                  {t('agent.model')}
+                </div>
+                <div className="mt-1 break-all text-[15px] font-medium text-foreground">
+                  {formatMetricValue(agent.model)}
+                </div>
               </div>
-              <div>
-                <span className="text-muted-foreground">{t('agent.access.allowedGroups')}:</span>
-                <span className="ml-2">
-                  {agent.allowed_groups?.length ? agent.allowed_groups.length : t('agent.access.title')}
-                </span>
+              <div className="rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.88] px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.14em] text-[hsl(var(--ui-text-tertiary))]">
+                  {t('agent.create.contextLimit')}
+                </div>
+                <div className="mt-1 text-[15px] font-medium text-foreground">
+                  {formatMetricValue(agent.context_limit)}
+                </div>
               </div>
-              <div>
-                <span className="text-muted-foreground">{t('agent.access.maxConcurrent')}:</span>
-                <span className="ml-2">{agent.max_concurrent_tasks || 5}</span>
+              <div className="rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.88] px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.14em] text-[hsl(var(--ui-text-tertiary))]">
+                  {t('agent.access.maxConcurrent')}
+                </div>
+                <div className="mt-1 text-[15px] font-medium text-foreground">
+                  {formatMetricValue(agent.max_concurrent_tasks ?? 5)}
+                </div>
               </div>
-              <div>
-                <span className="text-muted-foreground">{t('agent.create.thinkingEnabled', 'Think')}:</span>
-                <span className="ml-2">
+              <div className="rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.88] px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.14em] text-[hsl(var(--ui-text-tertiary))]">
+                  {t('agent.create.thinkingEnabled', 'Think')}
+                </div>
+                <div className="mt-1 text-[15px] font-medium text-foreground">
                   {agent.thinking_enabled ? t('common.enabled', 'On') : t('common.disabled', 'Off')}
-                </span>
+                </div>
               </div>
             </div>
 
-            {(agent.temperature != null || agent.max_tokens != null || agent.context_limit != null) && (
-              <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-3">
-                {agent.temperature != null && (
-                  <div>
-                    <span className="text-muted-foreground">{t('agent.create.temperature')}:</span>
-                    <span className="ml-2">{agent.temperature}</span>
-                  </div>
-                )}
-                {agent.max_tokens != null && (
-                  <div>
-                    <span className="text-muted-foreground">{t('agent.create.maxTokens')}:</span>
-                    <span className="ml-2">{agent.max_tokens}</span>
-                  </div>
-                )}
-                {agent.context_limit != null && (
-                  <div>
-                    <span className="text-muted-foreground">{t('agent.create.contextLimit')}:</span>
-                    <span className="ml-2">{agent.context_limit}</span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {agent.api_url && (
-              <div className="text-sm">
-                <span className="text-muted-foreground">{t('agent.create.apiUrl')}:</span>
-                <span className="ml-2">{agent.api_url}</span>
-              </div>
-            )}
-
-            <div className="border-t pt-4">
-              <span className="text-sm text-muted-foreground">{t('agent.extensions.enabled')}:</span>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {enabledExtensionNames.map((name) => (
-                  <Badge key={name} variant="secondary" className="text-xs">{name}</Badge>
-                ))}
-                {enabledCustomExtensions.map((ext) => (
-                  <Badge key={ext.name} variant="outline" className="text-xs">{ext.name}</Badge>
-                ))}
-                {enabledExtensionNames.length === 0 && enabledCustomExtensions.length === 0 && (
-                  <span className="text-xs text-muted-foreground">{t('agent.extensions.none')}</span>
-                )}
-              </div>
-            </div>
-
-            <div className="border-t pt-4">
-              <span className="text-sm text-muted-foreground">{t('agent.skills.assignedSkills')}:</span>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {enabledSkillNames.slice(0, 10).map((name) => (
-                  <Badge key={name} variant="outline" className="text-xs">
-                    {name}
-                  </Badge>
-                ))}
-                {enabledSkillNames.length > 10 && (
-                  <Badge variant="outline" className="text-xs">
-                    +{enabledSkillNames.length - 10}
-                  </Badge>
-                )}
-                {enabledSkillNames.length === 0 && (
-                  <span className="text-xs text-muted-foreground">{t('agent.skills.noSkillsAssigned')}</span>
-                )}
-              </div>
+            <div className="flex flex-wrap gap-2.5">
+              {primaryMeta.map((item) => (
+                <div
+                  key={item.key}
+                  className="inline-flex min-w-[168px] flex-1 items-center gap-2 rounded-[14px] border border-[hsl(var(--ui-line-soft))/0.62] bg-[hsl(var(--ui-surface-panel-muted))/0.42] px-3 py-2 text-[12px]"
+                >
+                  <span className="shrink-0 text-[hsl(var(--ui-text-tertiary))]">{item.label}</span>
+                  <span className="truncate text-[hsl(var(--ui-text-secondary))]">{item.value}</span>
+                </div>
+              ))}
             </div>
           </div>
-        </CardContent>
+
+          <div className="space-y-3 border-t border-[hsl(var(--ui-line-soft))/0.68] bg-[hsl(var(--ui-surface-panel-muted))/0.22] px-5 py-4">
+            <section className="rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.62] bg-[hsl(var(--ui-surface-panel-strong))/0.86] px-4 py-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-[hsl(var(--semantic-extension))]" />
+                  <div className="text-[12px] font-medium text-[hsl(var(--ui-text-secondary))]">
+                    {t('agent.extensions.enabled')}
+                  </div>
+                </div>
+                <div className="text-[11px] text-[hsl(var(--ui-text-tertiary))]">
+                  {extensionChips.length > 0
+                    ? `${extensionChips.length} ${t('agent.extensions.enabled')}`
+                    : t('agent.extensions.none')}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {extensionChips.length > 0 ? extensionChips.map((item) => (
+                  <Badge
+                    key={item.key}
+                    variant={item.variant}
+                    className="border-[hsl(var(--semantic-extension))/0.16] bg-[hsl(var(--semantic-extension))/0.08] text-[hsl(var(--semantic-extension))]"
+                  >
+                    {item.label}
+                  </Badge>
+                )) : (
+                  <span className="text-[12px] text-[hsl(var(--ui-text-tertiary))]">{t('agent.extensions.none')}</span>
+                )}
+              </div>
+            </section>
+
+            <section className="rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.62] bg-[hsl(var(--ui-surface-panel-strong))/0.86] px-4 py-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-[hsl(var(--status-warning-text))]" />
+                  <div className="text-[12px] font-medium text-[hsl(var(--ui-text-secondary))]">
+                    {t('agent.skills.assignedSkills')}
+                  </div>
+                </div>
+                <div className="text-[11px] text-[hsl(var(--ui-text-tertiary))]">
+                  {enabledSkillNames.length > 0
+                    ? `${enabledSkillNames.length} ${t('agent.skills.assignedSkills')}`
+                    : t('agent.skills.noSkillsAssigned')}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {skillChips.length > 0 ? skillChips.map((item) => (
+                  <Badge
+                    key={item.key}
+                    variant="outline"
+                    className={item.className}
+                  >
+                    {item.label}
+                  </Badge>
+                )) : (
+                  <span className="text-[12px] text-[hsl(var(--ui-text-tertiary))]">{t('agent.skills.noSkillsAssigned')}</span>
+                )}
+              </div>
+            </section>
+          </div>
+
+          {agent.status === 'error' && agent.last_error && (
+            <div className="border-t border-[hsl(var(--ui-line-soft))/0.68] px-5 py-4">
+              <div className="rounded-[18px] border border-[hsl(var(--status-error-text))/0.16] bg-[hsl(var(--status-error-bg))/0.88] px-4 py-3 text-[12px] text-status-error-text">
+                {agent.last_error}
+              </div>
+            </div>
+          )}
+        </CardHeader>
       </Card>
     );
   };
 
   const renderDedicatedGroup = (group: DedicatedAvatarGroup) => {
-    const managerLabel = group.managerAgent?.name || t('agent.manage.ungroupedManagerTitle', '未归类分组');
+    const managerLabel = group.managerAgent
+      ? getDedicatedAgentDisplayName(group.managerAgent, group.managerAgent.name)
+      : t('agent.manage.ungroupedManagerTitle', '未归类分组');
     const managerSummary = group.managerAgent?.description?.trim()
       || t('agent.manage.avatarSectionHint', '仅用于数字分身治理与执行，配置调整不影响常规 Agent。');
     const previewNames = group.portals
@@ -384,7 +574,9 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
 
   const dedicatedManagerOptions = dedicatedGroups.map(group => ({
     value: group.managerId,
-    label: group.managerAgent?.name || t('agent.manage.ungroupedManagerTitle', '未归类分组'),
+    label: group.managerAgent
+      ? getDedicatedAgentDisplayName(group.managerAgent, group.managerAgent.name)
+      : t('agent.manage.ungroupedManagerTitle', '未归类分组'),
   }));
 
   const filteredDedicatedGroups = dedicatedGroups.filter(group =>
@@ -463,7 +655,7 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
               </p>
             </div>
             {agents.length > 0 ? (
-              <div className="space-y-4">
+              <div className="grid gap-4 xl:grid-cols-2">
                 {agents.map(agent => renderAgentCard(agent))}
               </div>
             ) : (
@@ -506,9 +698,9 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
                   </Select>
                 </div>
               </div>
-              <div className="space-y-4">
-                {filteredDedicatedGroups.map(renderDedicatedGroup)}
-              </div>
+                  <div className="space-y-4">
+                    {filteredDedicatedGroups.map(renderDedicatedGroup)}
+                  </div>
               {openUngroupedDetail && (
                 <div className="text-xs text-muted-foreground">
                   {t('agent.manage.ungroupedManagerHint', '未归类分组代表当前存在分身服务 Agent，但尚未正确回挂到管理 Agent。')}
@@ -524,7 +716,7 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
                       {t('agent.manage.ecosystemDedicatedHint', '这些 Agent 只服务生态协作 Portal，不应混入常规 Agent 和团队日常对话入口。')}
                     </p>
                   </div>
-                  <div className="space-y-4">
+                  <div className="grid gap-4 xl:grid-cols-2">
                     {ecosystemDedicatedAgents.map(agent => renderAgentCard(agent))}
                   </div>
                 </div>

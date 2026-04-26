@@ -187,6 +187,7 @@ async fn task_runtime_emits_permission_events() {
             Some("worker-1".to_string()),
             "write_file",
             "AllowOnce",
+            Some("config".to_string()),
         )
         .await
         .expect("resolve");
@@ -204,8 +205,10 @@ async fn task_runtime_emits_permission_events() {
                 task_id,
                 tool_name,
                 decision,
+                source,
                 ..
             } if task_id == "task-4" && tool_name == "write_file" && decision == "AllowOnce" => {
+                assert_eq!(source.as_deref(), Some("config"));
                 saw_resolution = true;
             }
             _ => {}

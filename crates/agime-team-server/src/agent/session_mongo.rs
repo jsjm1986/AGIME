@@ -2,13 +2,17 @@
 //!
 //! Sessions persist multi-turn conversation state, enabling:
 //! - Conversation history across multiple task submissions
-//! - Token counting and context compaction tracking
+//! - Token counting and context runtime state persistence
 //! - Session lifecycle management (active/archived)
 
 use agime::agents::types::RetryConfig;
+use agime::context_runtime::ContextRuntimeState;
 use agime_team::models::DelegationPolicyOverride;
 use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
+
+use super::chat_channels::ChatWorkspaceFileBlock;
+use super::delegation_runtime::DelegationRuntimeResponse;
 
 /// MongoDB document for agent conversation sessions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,8 +33,8 @@ pub struct AgentSessionDoc {
     pub total_tokens: Option<i32>,
     pub input_tokens: Option<i32>,
     pub output_tokens: Option<i32>,
-    #[serde(default)]
-    pub compaction_count: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_runtime_state: Option<ContextRuntimeState>,
     /// Extensions disabled by user during this session (persisted across messages)
     #[serde(default)]
     pub disabled_extensions: Vec<String>,
@@ -69,6 +73,11 @@ pub struct AgentSessionDoc {
     /// Runtime session id for the most recent direct-host execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_runtime_session_id: Option<String>,
+    /// Durable delegation runtime projection captured at the end of the
+    /// most recent execution. This allows the UI to render subagent/swarm
+    /// state without depending on transient harness storage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_delegation_runtime: Option<DelegationRuntimeResponse>,
 
     // === Phase 2: Document attachment ===
     /// Document IDs attached to this session as context
@@ -84,6 +93,10 @@ pub struct AgentSessionDoc {
     pub workspace_kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_manifest_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_repo_ref: Option<String>,
 
     /// Extra instructions injected into system prompt (e.g. portal project path)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -169,6 +182,10 @@ pub struct AgentSessionDoc {
     /// If true, hide this session from normal chat list.
     #[serde(default)]
     pub hidden_from_chat_list: bool,
+
+    /// Files the agent asked runtime to attach to the next persisted assistant message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_message_workspace_files: Vec<ChatWorkspaceFileBlock>,
 }
 
 fn default_session_source() -> String {

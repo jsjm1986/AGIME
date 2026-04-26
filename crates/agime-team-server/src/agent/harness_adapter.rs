@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use agime::agents::harness::{
-    ChildTaskRequest, DelegationMode, DelegationRuntimeState, HarnessContext, HarnessMode,
-    ProviderTurnMode, SwarmBudget, SwarmPlan, TaskKind, TaskRuntime, TaskSpec,
+    ChildTaskRequest, CompletionSurfacePolicy, DelegationMode, DelegationRuntimeState,
+    HarnessContext, HarnessMode, ProviderTurnMode, SwarmBudget, SwarmPlan, TaskKind, TaskRuntime,
+    TaskSpec,
 };
 use agime_team::models::AgentTask;
 use agime_team::MongoDb;
@@ -71,6 +72,18 @@ impl ServerHarnessAdapter {
             | HarnessTurnMode::Blocked
             | HarnessTurnMode::Complete
             | HarnessTurnMode::Conversation => ProviderTurnMode::Streaming,
+        }
+    }
+
+    pub fn completion_surface_policy_for(mode: HarnessTurnMode) -> CompletionSurfacePolicy {
+        match mode {
+            HarnessTurnMode::Plan | HarnessTurnMode::Conversation => {
+                CompletionSurfacePolicy::Conversation
+            }
+            HarnessTurnMode::Execute
+            | HarnessTurnMode::Repair
+            | HarnessTurnMode::Blocked
+            | HarnessTurnMode::Complete => CompletionSurfacePolicy::Execute,
         }
     }
 
@@ -163,7 +176,8 @@ impl ServerHarnessAdapter {
             result_contract.clone(),
         );
         let harness_mode = Self::map_turn_mode(mode.clone());
-        let provider_turn_mode = Self::provider_turn_mode_for(mode);
+        let provider_turn_mode = Self::provider_turn_mode_for(mode.clone());
+        let completion_surface_policy = Self::completion_surface_policy_for(mode);
         let context = HarnessContext::new(
             session_id,
             working_dir,
@@ -173,10 +187,12 @@ impl ServerHarnessAdapter {
             harness_mode,
             agime::agents::CoordinatorExecutionMode::SingleWorker,
             provider_turn_mode,
+            completion_surface_policy,
             delegation,
             write_scope,
             target_artifacts,
             result_contract,
+            false,
             Vec::new(),
             Vec::new(),
             None,
@@ -369,7 +385,7 @@ impl ServerHarnessAdapter {
             (None, None) => {
                 return Err(
                     "Error: subagent call requires `instructions` or `subrecipe`".to_string(),
-                )
+                );
             }
         };
 

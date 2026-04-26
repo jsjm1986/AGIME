@@ -4,12 +4,42 @@
 
 pub const PORTAL_CODING_PROFILE_ID: &str = "portal_coding_v1";
 pub const PORTAL_MANAGER_PROFILE_ID: &str = "portal_manager_v1";
+pub const CHANNEL_CODING_PROFILE_ID: &str = "channel_coding_v1";
+pub const CHAT_DELEGATION_PROFILE_ID: &str = "chat_delegation_v1";
 
 pub struct PortalCodingProfileInput<'a> {
     pub portal_slug: &'a str,
     pub project_path: &'a str,
     pub portal_policy_overlay: Option<&'a str>,
     pub project_context: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelCodingIntent {
+    DirectBuild,
+    Planning,
+}
+
+pub struct ChannelCodingProfileInput<'a> {
+    pub channel_name: &'a str,
+    pub workspace_display_name: Option<&'a str>,
+    pub workspace_path: Option<&'a str>,
+    pub repo_path: Option<&'a str>,
+    pub main_checkout_path: Option<&'a str>,
+    pub thread_summary: Option<&'a str>,
+    pub current_request: &'a str,
+    pub intent: ChannelCodingIntent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatDelegationIntent {
+    Subagent,
+    Swarm,
+}
+
+pub struct ChatDelegationProfileInput<'a> {
+    pub current_request: &'a str,
+    pub intent: ChatDelegationIntent,
 }
 
 fn push_section(buf: &mut String, title: &str, body: &str) {
@@ -145,4 +175,177 @@ pub fn build_portal_manager_overlay() -> String {
     overlay.push('\n');
 
     overlay
+}
+
+pub fn build_channel_coding_overlay(input: ChannelCodingProfileInput<'_>) -> String {
+    let mut overlay = String::new();
+
+    overlay.push_str("【Prompt Profile Overlay】\n");
+    overlay.push_str("id: ");
+    overlay.push_str(CHANNEL_CODING_PROFILE_ID);
+    overlay.push_str(" | mode: additive\n");
+    overlay.push_str("说明：以下策略仅为附加层，不覆盖原有系统提示词；若冲突，优先遵循安全与权限边界并明确报告。\n\n");
+
+    push_section(
+        &mut overlay,
+        "【Role Profile】",
+        &format!(
+            "编程项目频道线程 | 频道: {}\n职责：围绕当前工作区、仓库和线程现场，默认直接推进代码工作，而不是把线程主行为变成任务规划。",
+            input.channel_name
+        ),
+    );
+    overlay.push('\n');
+
+    let mut workspace_lines = Vec::new();
+    if let Some(value) = input
+        .workspace_display_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        workspace_lines.push(format!("项目工作区：{}", value));
+    }
+    if let Some(value) = input
+        .workspace_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        workspace_lines.push(format!("workspace_path: {}", value));
+    }
+    if let Some(value) = input
+        .repo_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        workspace_lines.push(format!("repo_path: {}", value));
+    }
+    if let Some(value) = input
+        .main_checkout_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        workspace_lines.push(format!("main_checkout_path: {}", value));
+    }
+    if let Some(value) = input
+        .thread_summary
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        workspace_lines.push(format!("当前线程围绕：{}", value));
+    }
+    if !workspace_lines.is_empty() {
+        push_section(
+            &mut overlay,
+            "【Workspace Context】",
+            &workspace_lines.join("\n"),
+        );
+        overlay.push('\n');
+    }
+
+    push_section(
+        &mut overlay,
+        "【Coding Thread Contract】",
+        "1. 当前线程默认是代码推进线程。优先查看当前工作区、仓库结构和相关文件，再直接推进实现、修改、验证。\n\
+2. 如果用户请求已经足够明确，不要先泛化成“先看项目结构、技术栈、放哪里合适”这一类开场白；只有缺少关键上下文时，才提最小必要问题。\n\
+3. task/todo 在这里永远只是辅助追踪层，不是线程主行为；不得把 task list、任务分解或流程管理当作本轮主要产出。\n\
+4. 即使当前轮被附加了 task/todo 类提示，也应先围绕工作区和代码推进，再在确有必要时补充辅助追踪。\n\
+5. 不要把编程线程退化成通用项目管理助手；能直接做代码工作的情况下，就优先做代码工作。",
+    );
+    overlay.push('\n');
+
+    let intent_block = match input.intent {
+        ChannelCodingIntent::DirectBuild => {
+            "当前请求属于直接开工类意图。默认先看相关代码/文件，再直接实现、修改或验证；不要先做任务拆解，不要先输出泛规划。"
+        }
+        ChannelCodingIntent::Planning => {
+            "当前请求明确要求先做方案/规划/拆解。此时可以先分析和规划，但计划必须紧贴当前工作区与代码结构；不要漂浮讨论，也不要把 task/todo 当成最终产物。规划完成后，应给出能直接进入实现的下一步。"
+        }
+    };
+    push_section(&mut overlay, "【Current Turn Policy】", intent_block);
+    overlay.push('\n');
+
+    push_section(
+        &mut overlay,
+        "【Current User Request】",
+        input.current_request.trim(),
+    );
+    overlay.push('\n');
+
+    overlay
+}
+
+pub fn build_chat_delegation_overlay(input: ChatDelegationProfileInput<'_>) -> String {
+    let mut overlay = String::new();
+
+    overlay.push_str("【Prompt Profile Overlay】\n");
+    overlay.push_str("id: ");
+    overlay.push_str(CHAT_DELEGATION_PROFILE_ID);
+    overlay.push_str(" | mode: additive\n");
+    overlay.push_str("说明：以下策略仅为附加层，不覆盖原有系统提示词；若冲突，优先遵循安全与权限边界并明确报告。\n\n");
+
+    push_section(
+        &mut overlay,
+        "【Current Turn Delegation Contract】",
+        match input.intent {
+            ChatDelegationIntent::Subagent => {
+                "用户当前轮明确要求使用 subagent。你必须把“调用一个 subagent”作为本轮第一个实质性执行动作，不要直接自己给结论，不要把 task/todo 当成替代品，也不要忽略这个要求。若 delegation 能力不可用，必须明确说明原因。"
+            }
+            ChatDelegationIntent::Swarm => {
+                "用户当前轮明确要求使用 swarm。你必须把“调用 swarm 并分配至少两个具体且非空的 worker 目标”作为本轮第一个实质性执行动作，不要直接自己给结论，不要把 task/todo 当成替代品，也不要退化成单 worker。若用户描述不够细，你也应先从请求里提炼出至少两个可执行 worker 目标，再调用 swarm。若 swarm 能力不可用，必须明确说明原因。"
+            }
+        },
+    );
+    overlay.push('\n');
+
+    push_section(
+        &mut overlay,
+        "【Current User Request】",
+        input.current_request.trim(),
+    );
+    overlay.push('\n');
+
+    overlay
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_channel_coding_overlay, ChannelCodingIntent, ChannelCodingProfileInput,
+        CHANNEL_CODING_PROFILE_ID,
+    };
+
+    #[test]
+    fn channel_coding_overlay_highlights_direct_build_priority() {
+        let overlay = build_channel_coding_overlay(ChannelCodingProfileInput {
+            channel_name: "编程项目",
+            workspace_display_name: Some("编程项目"),
+            workspace_path: Some("/workspace/project"),
+            repo_path: Some("/workspace/project/repo"),
+            main_checkout_path: Some("/workspace/project/repo/main"),
+            thread_summary: Some("做一个贪吃蛇"),
+            current_request: "做一个贪吃蛇",
+            intent: ChannelCodingIntent::DirectBuild,
+        });
+
+        assert!(overlay.contains(CHANNEL_CODING_PROFILE_ID));
+        assert!(overlay.contains("默认直接推进代码工作"));
+        assert!(overlay.contains("task/todo 在这里永远只是辅助追踪层"));
+        assert!(overlay.contains("当前请求属于直接开工类意图"));
+    }
+
+    #[test]
+    fn channel_coding_overlay_allows_explicit_planning_requests() {
+        let overlay = build_channel_coding_overlay(ChannelCodingProfileInput {
+            channel_name: "编程项目",
+            workspace_display_name: None,
+            workspace_path: None,
+            repo_path: None,
+            main_checkout_path: None,
+            thread_summary: Some("先做方案"),
+            current_request: "先做方案，再决定怎么改",
+            intent: ChannelCodingIntent::Planning,
+        });
+
+        assert!(overlay.contains("当前请求明确要求先做方案/规划/拆解"));
+        assert!(overlay.contains("规划完成后，应给出能直接进入实现的下一步"));
+    }
 }

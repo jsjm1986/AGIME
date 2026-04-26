@@ -1,6 +1,8 @@
 //! Agent service layer for business logic (MongoDB version)
 
 use super::capability_policy::resolve_document_policy;
+use super::chat_channels::ChatWorkspaceFileBlock;
+use super::delegation_runtime::DelegationRuntimeResponse;
 use super::harness_core::{
     RunCheckpoint, RunCheckpointKind, RunJournal, RunLease, RunMemory, RunState, RunStatus,
     SubagentRun, TaskGraph, TurnOutcome,
@@ -13,13 +15,14 @@ use super::session_mongo::{
 use super::task_manager::StreamEvent;
 use super::workspace_service::WorkspaceBinding;
 use agime::agents::types::RetryConfig;
+use agime::context_runtime::ContextRuntimeState;
 use agime_team::models::mongo::Document as TeamDocument;
 use agime_team::models::{
     AgentExtensionConfig, AgentSkillConfig, AgentStatus, AgentTask, ApiFormat,
     AttachedTeamExtensionRef, BuiltinExtension, CreateAgentRequest, CustomExtensionConfig,
-    DelegationPolicy, ListAgentsQuery, ListTasksQuery, PaginatedResponse, SkillBindingMode,
-    SubmitTaskRequest, TaskResult, TaskResultType, TaskStatus, TaskType, TeamAgent,
-    UpdateAgentRequest,
+    DelegationPolicy, ListAgentsQuery, ListTasksQuery, PaginatedResponse, RuntimeOptimizationMode,
+    SkillBindingMode, SubmitTaskRequest, TaskResult, TaskResultType, TaskStatus, TaskType,
+    TeamAgent, UpdateAgentRequest,
 };
 use agime_team::MongoDb;
 use chrono::{DateTime, Utc};
@@ -87,6 +90,12 @@ pub enum ServiceError {
     Internal(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionSlotAcquireOutcome {
+    Acquired,
+    Saturated,
+}
+
 /// Validate agent name
 fn validate_name(name: &str) -> Result<(), ValidationError> {
     let trimmed = name.trim();
@@ -127,6 +136,10 @@ fn validate_priority(priority: i32) -> Result<(), ValidationError> {
         return Err(ValidationError::Priority);
     }
     Ok(())
+}
+
+fn normalize_max_concurrent_tasks(value: Option<u32>) -> u32 {
+    value.unwrap_or(1).max(1)
 }
 
 /// Serialize custom extension configs for MongoDB persistence.
@@ -319,6 +332,8 @@ pub struct TeamAgentDoc {
     pub allowed_groups: Vec<String>,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent_tasks: u32,
+    #[serde(default)]
+    pub active_execution_slots: u32,
     /// LLM temperature (0.0 - 1.0)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub temperature: Option<f32>,
@@ -331,6 +346,24 @@ pub struct TeamAgentDoc {
     /// Whether think/reasoning mode should be enabled for this agent.
     #[serde(default = "default_thinking_enabled")]
     pub thinking_enabled: bool,
+    /// Optional thinking budget override for supported models.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thinking_budget: Option<u32>,
+    /// Optional reasoning effort override for reasoning-capable models.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reasoning_effort: Option<String>,
+    /// Optional reserved output budget for context runtime.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_reserve_tokens: Option<usize>,
+    /// Optional auto-compact threshold override for context runtime.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub auto_compact_threshold: Option<f64>,
+    /// Prompt caching preference for providers that support it.
+    #[serde(default)]
+    pub prompt_caching_mode: RuntimeOptimizationMode,
+    /// Cache-edit preference for providers that support it.
+    #[serde(default)]
+    pub cache_edit_mode: RuntimeOptimizationMode,
     /// Skills assigned from team shared skills
     #[serde(default)]
     pub assigned_skills: Vec<AgentSkillConfig>,
@@ -835,10 +868,17 @@ impl From<TeamAgentDoc> for TeamAgent {
             last_error: doc.last_error,
             allowed_groups: doc.allowed_groups,
             max_concurrent_tasks: doc.max_concurrent_tasks,
+            active_execution_slots: doc.active_execution_slots,
             temperature: doc.temperature,
             max_tokens: doc.max_tokens,
             context_limit: doc.context_limit,
             thinking_enabled: doc.thinking_enabled,
+            thinking_budget: doc.thinking_budget,
+            reasoning_effort: doc.reasoning_effort,
+            output_reserve_tokens: doc.output_reserve_tokens,
+            auto_compact_threshold: doc.auto_compact_threshold,
+            prompt_caching_mode: doc.prompt_caching_mode,
+            cache_edit_mode: doc.cache_edit_mode,
             assigned_skills: doc.assigned_skills,
             skill_binding_mode: doc.skill_binding_mode,
             delegation_policy: doc.delegation_policy,
@@ -1065,6 +1105,9 @@ impl AgentService {
             | "portal_manager"
             | "system"
             | "chat"
+            | "automation_builder"
+            | "automation_runtime"
+            | "scheduled_task"
             | "channel_runtime"
             | "channel_conversation" => v,
             _ => {
@@ -2204,8 +2247,12 @@ impl AgentService {
             AvatarBindingIssueKind::MissingExplicitServiceBinding => {
                 "portal 缺少显式 service_agent_id 绑定".to_string()
             }
-            AvatarBindingIssueKind::MissingManagerBinding => "无法解析有效 manager agent".to_string(),
-            AvatarBindingIssueKind::MissingServiceBinding => "无法解析有效 service agent".to_string(),
+            AvatarBindingIssueKind::MissingManagerBinding => {
+                "无法解析有效 manager agent".to_string()
+            }
+            AvatarBindingIssueKind::MissingServiceBinding => {
+                "无法解析有效 service agent".to_string()
+            }
             AvatarBindingIssueKind::ManagerAgentNotFound => format!(
                 "manager agent '{}' 在团队中不存在",
                 effective_manager_agent_id.unwrap_or(explicit_coding_agent_id.unwrap_or(""))
@@ -3135,11 +3182,18 @@ impl AgentService {
             owner_manager_agent_id: req.owner_manager_agent_id,
             template_source_agent_id: req.template_source_agent_id,
             allowed_groups: req.allowed_groups.unwrap_or_default(),
-            max_concurrent_tasks: req.max_concurrent_tasks.unwrap_or(1),
+            max_concurrent_tasks: normalize_max_concurrent_tasks(req.max_concurrent_tasks),
+            active_execution_slots: 0,
             temperature: req.temperature,
             max_tokens: req.max_tokens,
             context_limit: req.context_limit,
             thinking_enabled: req.thinking_enabled.unwrap_or(true),
+            thinking_budget: req.thinking_budget,
+            reasoning_effort: req.reasoning_effort,
+            output_reserve_tokens: req.output_reserve_tokens,
+            auto_compact_threshold: req.auto_compact_threshold,
+            prompt_caching_mode: req.prompt_caching_mode.unwrap_or_default(),
+            cache_edit_mode: req.cache_edit_mode.unwrap_or_default(),
             assigned_skills: req.assigned_skills.unwrap_or_default(),
             skill_binding_mode: req.skill_binding_mode.unwrap_or_default(),
             delegation_policy: req.delegation_policy.unwrap_or_default(),
@@ -4505,7 +4559,10 @@ impl AgentService {
             set_doc.insert("allowed_groups", bson_val);
         }
         if let Some(max_concurrent) = req.max_concurrent_tasks {
-            set_doc.insert("max_concurrent_tasks", max_concurrent as i32);
+            set_doc.insert(
+                "max_concurrent_tasks",
+                normalize_max_concurrent_tasks(Some(max_concurrent)) as i32,
+            );
         }
         if let Some(temperature) = req.temperature {
             set_doc.insert("temperature", temperature as f64);
@@ -4518,6 +4575,32 @@ impl AgentService {
         }
         if let Some(thinking_enabled) = req.thinking_enabled {
             set_doc.insert("thinking_enabled", thinking_enabled);
+        }
+        if let Some(thinking_budget) = req.thinking_budget {
+            set_doc.insert("thinking_budget", thinking_budget as i64);
+        }
+        if let Some(ref reasoning_effort) = req.reasoning_effort {
+            set_doc.insert("reasoning_effort", reasoning_effort.clone());
+        }
+        if let Some(output_reserve_tokens) = req.output_reserve_tokens {
+            set_doc.insert("output_reserve_tokens", output_reserve_tokens as i64);
+        }
+        if let Some(auto_compact_threshold) = req.auto_compact_threshold {
+            set_doc.insert("auto_compact_threshold", auto_compact_threshold);
+        }
+        if let Some(prompt_caching_mode) = req.prompt_caching_mode {
+            set_doc.insert(
+                "prompt_caching_mode",
+                mongodb::bson::to_bson(&prompt_caching_mode)
+                    .unwrap_or(bson::Bson::String("auto".to_string())),
+            );
+        }
+        if let Some(cache_edit_mode) = req.cache_edit_mode {
+            set_doc.insert(
+                "cache_edit_mode",
+                mongodb::bson::to_bson(&cache_edit_mode)
+                    .unwrap_or(bson::Bson::String("auto".to_string())),
+            );
         }
         if let Some(ref assigned_skills) = req.assigned_skills {
             let skills_bson =
@@ -4664,10 +4747,58 @@ impl AgentService {
             )
             .await?;
 
-        if result.modified_count == 0 {
+        if result.matched_count == 0 {
             return Ok(None);
         }
         self.get_task(task_id).await
+    }
+
+    pub async fn mark_task_queued(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<AgentTask>, mongodb::error::Error> {
+        let result = self
+            .tasks()
+            .update_one(
+                doc! {
+                    "task_id": task_id,
+                    "status": { "$in": ["approved", "queued"] }
+                },
+                doc! { "$set": { "status": "queued" } },
+                None,
+            )
+            .await?;
+        if result.matched_count == 0 {
+            return Ok(None);
+        }
+        self.get_task(task_id).await
+    }
+
+    pub async fn claim_next_queued_task_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<Option<AgentTask>, mongodb::error::Error> {
+        use mongodb::options::{FindOneAndUpdateOptions, ReturnDocument};
+
+        let options = FindOneAndUpdateOptions::builder()
+            .sort(doc! {
+                "priority": -1,
+                "submitted_at": 1,
+                "_id": 1,
+            })
+            .return_document(ReturnDocument::After)
+            .build();
+        self.tasks()
+            .find_one_and_update(
+                doc! {
+                    "agent_id": agent_id,
+                    "status": "queued",
+                },
+                doc! { "$set": { "status": "approved" } },
+                options,
+            )
+            .await
+            .map(|doc| doc.map(AgentTask::from))
     }
 
     pub async fn reject_task(
@@ -4705,7 +4836,7 @@ impl AgentService {
             .update_one(
                 doc! {
                     "task_id": task_id,
-                    "status": { "$in": ["pending", "approved", "running"] }
+                    "status": { "$in": ["pending", "approved", "queued", "running"] }
                 },
                 doc! { "$set": {
                     "status": "cancelled",
@@ -4734,7 +4865,7 @@ impl AgentService {
             .update_one(
                 doc! {
                     "task_id": task_id,
-                    "status": { "$in": ["running", "approved"] }
+                    "status": { "$in": ["running", "approved", "queued"] }
                 },
                 doc! { "$set": {
                     "status": "failed",
@@ -4749,6 +4880,62 @@ impl AgentService {
             return Ok(None);
         }
         self.get_task(task_id).await
+    }
+
+    pub async fn try_acquire_execution_slot(
+        &self,
+        agent_id: &str,
+    ) -> Result<ExecutionSlotAcquireOutcome, mongodb::error::Error> {
+        let result = self
+            .agents()
+            .update_one(
+                doc! {
+                    "agent_id": agent_id,
+                    "$expr": {
+                        "$lt": [
+                            { "$ifNull": ["$active_execution_slots", 0] },
+                            {
+                                "$cond": [
+                                    { "$gt": ["$max_concurrent_tasks", 0] },
+                                    "$max_concurrent_tasks",
+                                    1
+                                ]
+                            }
+                        ]
+                    }
+                },
+                doc! {
+                    "$inc": { "active_execution_slots": 1i32 },
+                    "$set": { "updated_at": bson::DateTime::now() }
+                },
+                None,
+            )
+            .await?;
+        if result.modified_count > 0 {
+            Ok(ExecutionSlotAcquireOutcome::Acquired)
+        } else {
+            Ok(ExecutionSlotAcquireOutcome::Saturated)
+        }
+    }
+
+    pub async fn release_execution_slot(
+        &self,
+        agent_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.agents()
+            .update_one(
+                doc! {
+                    "agent_id": agent_id,
+                    "active_execution_slots": { "$gt": 0 }
+                },
+                doc! {
+                    "$inc": { "active_execution_slots": -1i32 },
+                    "$set": { "updated_at": bson::DateTime::now() }
+                },
+                None,
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn get_task_results(
@@ -4947,6 +5134,12 @@ impl AgentService {
                 max_tokens: None,
                 context_limit: None,
                 thinking_enabled: None,
+                thinking_budget: None,
+                reasoning_effort: None,
+                output_reserve_tokens: None,
+                auto_compact_threshold: None,
+                prompt_caching_mode: None,
+                cache_edit_mode: None,
                 assigned_skills: None,
                 skill_binding_mode: None,
                 delegation_policy: None,
@@ -5072,6 +5265,12 @@ impl AgentService {
                         max_tokens: None,
                         context_limit: None,
                         thinking_enabled: None,
+                        thinking_budget: None,
+                        reasoning_effort: None,
+                        output_reserve_tokens: None,
+                        auto_compact_threshold: None,
+                        prompt_caching_mode: None,
+                        cache_edit_mode: None,
                         assigned_skills: None,
                         skill_binding_mode: None,
                         delegation_policy: None,
@@ -5140,6 +5339,12 @@ impl AgentService {
                         max_tokens: None,
                         context_limit: None,
                         thinking_enabled: None,
+                        thinking_budget: None,
+                        reasoning_effort: None,
+                        output_reserve_tokens: None,
+                        auto_compact_threshold: None,
+                        prompt_caching_mode: None,
+                        cache_edit_mode: None,
                         assigned_skills: None,
                         skill_binding_mode: None,
                         delegation_policy: None,
@@ -5211,6 +5416,12 @@ impl AgentService {
                 max_tokens: None,
                 context_limit: None,
                 thinking_enabled: None,
+                thinking_budget: None,
+                reasoning_effort: None,
+                output_reserve_tokens: None,
+                auto_compact_threshold: None,
+                prompt_caching_mode: None,
+                cache_edit_mode: None,
                 assigned_skills: None,
                 skill_binding_mode: None,
                 delegation_policy: None,
@@ -5270,6 +5481,12 @@ impl AgentService {
                 max_tokens: None,
                 context_limit: None,
                 thinking_enabled: None,
+                thinking_budget: None,
+                reasoning_effort: None,
+                output_reserve_tokens: None,
+                auto_compact_threshold: None,
+                prompt_caching_mode: None,
+                cache_edit_mode: None,
                 assigned_skills: None,
                 skill_binding_mode: None,
                 delegation_policy: None,
@@ -5326,6 +5543,12 @@ impl AgentService {
                 max_tokens: None,
                 context_limit: None,
                 thinking_enabled: None,
+                thinking_budget: None,
+                reasoning_effort: None,
+                output_reserve_tokens: None,
+                auto_compact_threshold: None,
+                prompt_caching_mode: None,
+                cache_edit_mode: None,
                 assigned_skills: None,
                 skill_binding_mode: None,
                 delegation_policy: None,
@@ -5500,6 +5723,7 @@ impl AgentService {
         let hidden_from_chat_list = req.hidden_from_chat_list.unwrap_or_else(|| {
             req.portal_restricted
                 || session_source == "system"
+                || session_source == "scheduled_task"
                 || session_source == "portal_coding"
                 || session_source == "portal_manager"
         });
@@ -5524,7 +5748,7 @@ impl AgentService {
             total_tokens: None,
             input_tokens: None,
             output_tokens: None,
-            compaction_count: 0,
+            context_runtime_state: None,
             disabled_extensions: Vec::new(),
             enabled_extensions: Vec::new(),
             created_at: now,
@@ -5539,11 +5763,14 @@ impl AgentService {
             last_execution_error: None,
             last_execution_finished_at: None,
             last_runtime_session_id: None,
+            last_delegation_runtime: None,
             attached_document_ids: req.attached_document_ids,
             workspace_path: None,
             workspace_id: None,
             workspace_kind: None,
             workspace_manifest_path: None,
+            thread_branch: None,
+            thread_repo_ref: None,
             extra_instructions: req.extra_instructions,
             allowed_extensions: req.allowed_extensions,
             allowed_skill_ids: effective_allowed_skill_ids,
@@ -5565,6 +5792,7 @@ impl AgentService {
             source_channel_name: req.source_channel_name,
             source_thread_root_id: req.source_thread_root_id,
             hidden_from_chat_list,
+            pending_message_workspace_files: Vec::new(),
         };
 
         self.sessions().insert_one(&doc, None).await?;
@@ -5601,6 +5829,25 @@ impl AgentService {
                     "source_channel_id": channel_id,
                     "source_thread_root_id": thread_root_id,
                     "agent_id": agent_id,
+                    "hidden_from_chat_list": true,
+                },
+                mongodb::options::FindOneOptions::builder()
+                    .sort(doc! { "updated_at": -1 })
+                    .build(),
+            )
+            .await
+    }
+
+    pub async fn find_latest_channel_session(
+        &self,
+        channel_id: &str,
+        thread_root_id: &str,
+    ) -> Result<Option<AgentSessionDoc>, mongodb::error::Error> {
+        self.sessions()
+            .find_one(
+                doc! {
+                    "source_channel_id": channel_id,
+                    "source_thread_root_id": thread_root_id,
                     "hidden_from_chat_list": true,
                 },
                 mongodb::options::FindOneOptions::builder()
@@ -5677,6 +5924,70 @@ impl AgentService {
                         "workspace_id": &binding.workspace_id,
                         "workspace_kind": binding.workspace_kind.as_str(),
                         "workspace_manifest_path": manifest_path,
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_session_thread_repo_context(
+        &self,
+        session_id: &str,
+        thread_branch: &str,
+        thread_repo_ref: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! {
+                    "$set": {
+                        "thread_branch": thread_branch,
+                        "thread_repo_ref": thread_repo_ref,
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn clear_session_workspace_binding(
+        &self,
+        session_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! {
+                    "$set": {
+                        "workspace_path": bson::Bson::Null,
+                        "workspace_id": bson::Bson::Null,
+                        "workspace_kind": bson::Bson::Null,
+                        "workspace_manifest_path": bson::Bson::Null,
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn clear_session_thread_repo_context(
+        &self,
+        session_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! {
+                    "$set": {
+                        "thread_branch": bson::Bson::Null,
+                        "thread_repo_ref": bson::Bson::Null,
                         "updated_at": bson::DateTime::now(),
                     }
                 },
@@ -5978,6 +6289,7 @@ impl AgentService {
         total_tokens: Option<i32>,
         input_tokens: Option<i32>,
         output_tokens: Option<i32>,
+        context_runtime_state: Option<&ContextRuntimeState>,
     ) -> Result<(), mongodb::error::Error> {
         let now = bson::DateTime::now();
         let mut set = doc! {
@@ -5994,6 +6306,11 @@ impl AgentService {
         if let Some(t) = output_tokens {
             set.insert("output_tokens", t);
         }
+        if let Some(state) = context_runtime_state {
+            if let Ok(serialized_state) = mongodb::bson::to_bson(state) {
+                set.insert("context_runtime_state", serialized_state);
+            }
+        }
 
         self.sessions()
             .update_one(
@@ -6005,21 +6322,22 @@ impl AgentService {
         Ok(())
     }
 
-    /// Increment compaction count.
-    pub async fn increment_compaction_count(
+    pub async fn set_session_context_runtime_state(
         &self,
         session_id: &str,
+        context_runtime_state: &ContextRuntimeState,
     ) -> Result<(), mongodb::error::Error> {
-        let now = bson::DateTime::now();
+        let mut set = doc! {
+            "updated_at": bson::DateTime::now(),
+        };
+        if let Ok(serialized_state) = mongodb::bson::to_bson(context_runtime_state) {
+            set.insert("context_runtime_state", serialized_state);
+        }
+
         self.sessions()
             .update_one(
                 doc! { "session_id": session_id },
-                doc! {
-                    "$inc": { "compaction_count": 1 },
-                    "$set": {
-                        "updated_at": now,
-                    }
-                },
+                doc! { "$set": set },
                 None,
             )
             .await?;
@@ -6361,6 +6679,12 @@ impl AgentService {
             .sessions()
             .delete_one(doc! { "session_id": session_id }, None)
             .await?;
+        if result.deleted_count > 0 {
+            let _ = self
+                .chat_events()
+                .delete_many(doc! { "session_id": session_id }, None)
+                .await?;
+        }
         Ok(result.deleted_count > 0)
     }
 
@@ -6376,6 +6700,12 @@ impl AgentService {
                 None,
             )
             .await?;
+        if result.deleted_count > 0 {
+            let _ = self
+                .chat_events()
+                .delete_many(doc! { "session_id": session_id }, None)
+                .await?;
+        }
         Ok(result.deleted_count > 0)
     }
 
@@ -6481,6 +6811,7 @@ impl AgentService {
                     "last_execution_status": "running",
                     "last_execution_error": bson::Bson::Null,
                     "last_execution_finished_at": bson::Bson::Null,
+                    "last_delegation_runtime": bson::Bson::Null,
                     "updated_at": now,
                 }},
                 None,
@@ -6506,6 +6837,7 @@ impl AgentService {
                     "last_execution_status": "running",
                     "last_execution_error": bson::Bson::Null,
                     "last_execution_finished_at": bson::Bson::Null,
+                    "last_delegation_runtime": bson::Bson::Null,
                     "updated_at": now,
                 }},
                 None,
@@ -6553,6 +6885,7 @@ impl AgentService {
         last_preview: &str,
         title: Option<&str>,
         tokens: Option<i32>,
+        context_runtime_state: Option<&ContextRuntimeState>,
     ) -> Result<(), mongodb::error::Error> {
         let now = bson::DateTime::now();
         // H2 fix: use chars() for safe Unicode slicing
@@ -6576,6 +6909,11 @@ impl AgentService {
         }
         if let Some(t) = tokens {
             set.insert("total_tokens", t);
+        }
+        if let Some(state) = context_runtime_state {
+            if let Ok(serialized_state) = mongodb::bson::to_bson(state) {
+                set.insert("context_runtime_state", serialized_state);
+            }
         }
 
         self.sessions()
@@ -6609,10 +6947,59 @@ impl AgentService {
                 .map(|value| bson::Bson::String(value.to_string()))
                 .unwrap_or(bson::Bson::Null),
         );
+        let filter = if status.eq_ignore_ascii_case("cancelled") {
+            doc! { "session_id": session_id }
+        } else {
+            doc! {
+                "session_id": session_id,
+                "last_execution_status": { "$ne": "cancelled" },
+            }
+        };
+        self.sessions()
+            .update_one(filter, doc! { "$set": set }, None)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_session_execution_state(
+        &self,
+        session_id: &str,
+        status: &str,
+        is_processing: bool,
+    ) -> Result<(), mongodb::error::Error> {
+        let now = bson::DateTime::now();
+        let update = doc! {
+            "$set": {
+                "is_processing": is_processing,
+                "last_execution_status": status,
+                "last_execution_error": bson::Bson::Null,
+                "last_execution_finished_at": bson::Bson::Null,
+                "updated_at": now,
+            }
+        };
+        self.sessions()
+            .update_one(doc! { "session_id": session_id }, update, None)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_session_delegation_runtime(
+        &self,
+        session_id: &str,
+        delegation_runtime: Option<&DelegationRuntimeResponse>,
+    ) -> Result<(), mongodb::error::Error> {
+        let now = bson::DateTime::now();
+        let value = delegation_runtime
+            .map(mongodb::bson::to_bson)
+            .transpose()?
+            .unwrap_or(bson::Bson::Null);
         self.sessions()
             .update_one(
                 doc! { "session_id": session_id },
-                doc! { "$set": set },
+                doc! { "$set": {
+                    "last_delegation_runtime": value,
+                    "updated_at": now,
+                }},
                 None,
             )
             .await?;
@@ -6667,6 +7054,86 @@ impl AgentService {
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn queue_pending_message_workspace_file(
+        &self,
+        session_id: &str,
+        block: &ChatWorkspaceFileBlock,
+    ) -> Result<(), mongodb::error::Error> {
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! {
+                    "$push": {
+                        "pending_message_workspace_files": mongodb::bson::to_bson(block)
+                            .unwrap_or(Bson::Null)
+                    },
+                    "$set": {
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn list_pending_message_workspace_files(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ChatWorkspaceFileBlock>, mongodb::error::Error> {
+        Ok(self
+            .get_session(session_id)
+            .await?
+            .map(|session| session.pending_message_workspace_files)
+            .unwrap_or_default())
+    }
+
+    pub async fn clear_pending_message_workspace_files(
+        &self,
+        session_id: &str,
+    ) -> Result<(), mongodb::error::Error> {
+        self.sessions()
+            .update_one(
+                doc! { "session_id": session_id },
+                doc! {
+                    "$set": {
+                        "pending_message_workspace_files": Vec::<Bson>::new(),
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn consume_pending_message_workspace_files(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<ChatWorkspaceFileBlock>, mongodb::error::Error> {
+        use mongodb::options::{FindOneAndUpdateOptions, ReturnDocument};
+
+        let previous = self
+            .sessions()
+            .find_one_and_update(
+                doc! { "session_id": session_id },
+                doc! {
+                    "$set": {
+                        "pending_message_workspace_files": Vec::<Bson>::new(),
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
+                FindOneAndUpdateOptions::builder()
+                    .return_document(ReturnDocument::Before)
+                    .build(),
+            )
+            .await?;
+
+        Ok(previous
+            .map(|session| session.pending_message_workspace_files)
+            .unwrap_or_default())
     }
 
     async fn append_session_notice_internal(
@@ -6726,6 +7193,7 @@ impl AgentService {
                 &preview,
                 session.title.as_deref(),
                 session.total_tokens,
+                session.context_runtime_state.as_ref(),
             )
             .await
         } else {
@@ -6890,4 +7358,47 @@ impl AgentService {
     }
 
     // ═══════════════════════════════════════════════════════
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentService;
+
+    #[test]
+    fn normalize_session_source_keeps_portal_sources_stable() {
+        assert_eq!(
+            AgentService::normalize_session_source(Some("portal".to_string()), true),
+            "portal"
+        );
+        assert_eq!(
+            AgentService::normalize_session_source(Some("portal-coding".to_string()), true),
+            "portal_coding"
+        );
+        assert_eq!(
+            AgentService::normalize_session_source(Some("portal_manager".to_string()), true),
+            "portal_manager"
+        );
+        assert_eq!(
+            AgentService::normalize_session_source(Some("automation_builder".to_string()), false),
+            "automation_builder"
+        );
+        assert_eq!(
+            AgentService::normalize_session_source(Some("automation_runtime".to_string()), false),
+            "automation_runtime"
+        );
+    }
+
+    #[test]
+    fn normalize_session_source_falls_back_by_boundary() {
+        assert_eq!(
+            AgentService::normalize_session_source(Some("unknown".to_string()), true),
+            "portal"
+        );
+        assert_eq!(
+            AgentService::normalize_session_source(Some("unknown".to_string()), false),
+            "chat"
+        );
+        assert_eq!(AgentService::normalize_session_source(None, true), "portal");
+        assert_eq!(AgentService::normalize_session_source(None, false), "chat");
+    }
 }

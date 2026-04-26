@@ -67,6 +67,7 @@ pub struct SwarmExecutionResult {
     pub run_id: String,
     pub worker_summaries: Vec<String>,
     pub validation_summaries: Vec<String>,
+    pub accepted_targets: Vec<String>,
     pub produced_targets: Vec<String>,
     pub downgraded: bool,
     pub downgrade_message: Option<String>,

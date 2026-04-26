@@ -706,10 +706,23 @@ where
             if line.is_none() || line.is_some_and(|l| l.is_empty()) {
                 continue
             }
-
-            let chunk: StreamingChunk = serde_json::from_str(line
-                .ok_or_else(|| anyhow!("unexpected stream format"))?)
+            let line = line.ok_or_else(|| anyhow!("unexpected stream format"))?;
+            let raw_value: Value = serde_json::from_str(line)
                 .map_err(|e| anyhow!("Failed to parse streaming chunk: {}: {:?}", e, &line))?;
+            if let Some(error_message) = raw_value
+                .get("error")
+                .and_then(|value| value.get("message"))
+                .and_then(Value::as_str)
+            {
+                Err(anyhow!("Streaming error chunk: {}", error_message))?;
+            }
+            if raw_value.get("choices").is_none() {
+                // Some OpenAI-compatible gateways emit non-choice metadata chunks.
+                // Ignore them unless they are explicit error objects handled above.
+                continue;
+            }
+            let chunk: StreamingChunk = serde_json::from_value(raw_value)
+                .map_err(|e| anyhow!("Failed to decode streaming chunk: {}: {:?}", e, &line))?;
 
             let usage = chunk.usage.as_ref().and_then(|u| {
                 chunk.model.as_ref().map(|model| {
@@ -745,8 +758,20 @@ where
                             }
                             let response_str = response_chunk?;
                             if let Some(line) = strip_data_prefix(&response_str) {
-                                let tool_chunk: StreamingChunk = serde_json::from_str(line)
+                                let raw_value: Value = serde_json::from_str(line)
                                     .map_err(|e| anyhow!("Failed to parse streaming chunk: {}: {:?}", e, &line))?;
+                                if let Some(error_message) = raw_value
+                                    .get("error")
+                                    .and_then(|value| value.get("message"))
+                                    .and_then(Value::as_str)
+                                {
+                                    Err(anyhow!("Streaming error chunk: {}", error_message))?;
+                                }
+                                if raw_value.get("choices").is_none() {
+                                    continue;
+                                }
+                                let tool_chunk: StreamingChunk = serde_json::from_value(raw_value)
+                                    .map_err(|e| anyhow!("Failed to decode streaming chunk: {}: {:?}", e, &line))?;
 
                                 if !tool_chunk.choices.is_empty() {
                                     if let Some(delta_tool_calls) = &tool_chunk.choices[0].delta.tool_calls {
@@ -882,6 +907,26 @@ fn tool_choice_mode_to_openai_value(mode: Option<ToolChoiceMode>) -> Option<Valu
     }
 }
 
+fn clamp_openai_compatible_completion_limit(payload: &mut Value, caps: &ResolvedCapabilities) {
+    let Some(limit) = caps
+        .max_completion_tokens
+        .and_then(|v| u64::try_from(v).ok())
+    else {
+        return;
+    };
+    let Some(obj) = payload.as_object_mut() else {
+        return;
+    };
+
+    for key in ["max_output_tokens", "max_completion_tokens", "max_tokens"] {
+        if let Some(current) = obj.get(key).and_then(|v| v.as_u64()) {
+            if current > limit {
+                obj.insert(key.to_string(), json!(limit));
+            }
+        }
+    }
+}
+
 pub fn create_request_with_tool_choice(
     model_config: &ModelConfig,
     system: &str,
@@ -891,19 +936,7 @@ pub fn create_request_with_tool_choice(
     tool_choice_mode: Option<ToolChoiceMode>,
 ) -> anyhow::Result<Value, Error> {
     // Resolve model capabilities from registry
-    let caps = crate::capabilities::resolve_with_thinking_override(
-        &model_config.model_name,
-        model_config.thinking_enabled,
-        model_config.thinking_budget,
-    );
-
-    // Check if tools are supported
-    if !caps.tools_supported {
-        return Err(anyhow!(
-            "{} model is not currently supported since goose uses tool calling and this model does not support it. Please use a different model.",
-            model_config.model_name
-        ));
-    }
+    let caps = crate::capabilities::resolve_with_model_config(model_config);
 
     // Extract reasoning effort for reasoning models
     let (model_name, reasoning_effort) = if caps.reasoning_supported {
@@ -991,6 +1024,10 @@ pub fn create_request_with_tool_choice(
             .insert(key.to_string(), json!(tokens));
     }
     ThinkingHandler::apply_request_params(&mut payload, &caps)?;
+    // Capability-derived thinking adjustments can increase output tokens beyond what
+    // an OpenAI-compatible transport will accept for a given model. Clamp at the
+    // final request boundary so transport constraints win over raw model config.
+    clamp_openai_compatible_completion_limit(&mut payload, &caps);
     Ok(payload)
 }
 
@@ -1766,6 +1803,11 @@ mod tests {
             max_tokens: Some(1024),
             thinking_enabled: None,
             thinking_budget: None,
+            reasoning_effort: None,
+            output_reserve_tokens: None,
+            auto_compact_threshold: None,
+            prompt_caching_mode: crate::model::PromptCachingMode::Auto,
+            cache_edit_mode: crate::model::CacheEditMode::Auto,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,
@@ -1800,6 +1842,11 @@ mod tests {
             max_tokens: Some(1024),
             thinking_enabled: None,
             thinking_budget: None,
+            reasoning_effort: None,
+            output_reserve_tokens: None,
+            auto_compact_threshold: None,
+            prompt_caching_mode: crate::model::PromptCachingMode::Auto,
+            cache_edit_mode: crate::model::CacheEditMode::Auto,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,
@@ -1837,6 +1884,11 @@ mod tests {
             max_tokens: Some(1024),
             thinking_enabled: None,
             thinking_budget: None,
+            reasoning_effort: None,
+            output_reserve_tokens: None,
+            auto_compact_threshold: None,
+            prompt_caching_mode: crate::model::PromptCachingMode::Auto,
+            cache_edit_mode: crate::model::CacheEditMode::Auto,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,
@@ -1871,6 +1923,11 @@ mod tests {
             max_tokens: Some(1024),
             thinking_enabled: None,
             thinking_budget: None,
+            reasoning_effort: None,
+            output_reserve_tokens: None,
+            auto_compact_threshold: None,
+            prompt_caching_mode: crate::model::PromptCachingMode::Auto,
+            cache_edit_mode: crate::model::CacheEditMode::Auto,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,
@@ -1897,6 +1954,33 @@ mod tests {
         )?;
 
         assert_eq!(request["tool_choice"], "required");
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_request_clamps_claude_openai_transport_tokens_after_thinking(
+    ) -> anyhow::Result<()> {
+        let model_config = ModelConfig {
+            model_name: "claude-opus-4-6".to_string(),
+            context_limit: Some(200000),
+            temperature: None,
+            max_tokens: Some(128000),
+            thinking_enabled: Some(true),
+            thinking_budget: Some(16000),
+            reasoning_effort: None,
+            output_reserve_tokens: None,
+            auto_compact_threshold: None,
+            prompt_caching_mode: crate::model::PromptCachingMode::Auto,
+            cache_edit_mode: crate::model::CacheEditMode::Auto,
+            toolshim: false,
+            toolshim_model: None,
+            fast_model: None,
+        };
+
+        let request = create_request(&model_config, "system", &[], &[], &ImageFormat::OpenAi)?;
+        assert_eq!(request["max_tokens"], json!(8192));
+        assert_eq!(request["thinking"]["type"], json!("enabled"));
+        assert_eq!(request["thinking"]["budget_tokens"], json!(16000));
         Ok(())
     }
 

@@ -79,6 +79,7 @@ export function ChatPanel({
   const [recentSessionSummary, setRecentSessionSummary] = useState<ChatSession | null>(null);
   const [recentSessionLoading, setRecentSessionLoading] = useState(false);
   const [agentSheetOpen, setAgentSheetOpen] = useState(false);
+  const [draftConversationNonce, setDraftConversationNonce] = useState(0);
   const lastLaunchRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -113,6 +114,7 @@ export function ChatPanel({
       setFilterAgentId(isVisibleChatAgent(visibleAgents, initialAgent.id) ? initialAgent.id : undefined);
       setSelectedSessionId(null);
       setSelectedSessionMeta(null);
+      setDraftConversationNonce((current) => current + 1);
     }
   }, [initialAgent, visibleAgents]);
 
@@ -127,6 +129,7 @@ export function ChatPanel({
     setActiveLaunchContext(launchContext);
     setSelectedSessionId(null);
     setSelectedSessionMeta(null);
+    setDraftConversationNonce((current) => current + 1);
     if (initialAgent) {
       setSelectedAgent(initialAgent);
       setFilterAgentId(isVisibleChatAgent(visibleAgents, initialAgent.id) ? initialAgent.id : undefined);
@@ -205,6 +208,7 @@ export function ChatPanel({
     setSelectedSessionMeta(null);
     setSelectedAgent(resolveDefaultAgent());
     setActiveLaunchContext(null);
+    setDraftConversationNonce((current) => current + 1);
     if (isMobile) {
       setMobileView('conversation');
     }
@@ -246,6 +250,7 @@ export function ChatPanel({
     setSelectedSessionMeta(null);
     setSelectedSessionId(null);
     setActiveLaunchContext(null);
+    setDraftConversationNonce((current) => current + 1);
   }, []);
 
   const handleSessionCreated = useCallback((sessionId: string) => {
@@ -277,7 +282,9 @@ export function ChatPanel({
   const activeSessionAgentName = selectedAgent?.name || selectedSessionMeta?.agent_name || t('chat.title', '聊天');
   const mobileHomeAgent = selectedAgent || resolveDefaultAgent();
   const mobileRecentSession = recentSessionSummary;
-  const conversationInstanceKey = activeSessionAgentId || 'chat-conversation';
+  const conversationInstanceKey = selectedSessionId
+    ? `session:${selectedSessionId}`
+    : `draft:${activeSessionAgentId || 'chat-conversation'}:${draftConversationNonce}`;
 
   const handleListAgentSelect = useCallback((agent: TeamAgent) => {
     setFilterAgentId(agent.id);

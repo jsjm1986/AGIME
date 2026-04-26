@@ -270,12 +270,29 @@ async fn process_document_analysis(
         }
         None => None,
     };
-    tracing::info!("[doc-analysis] llm_overrides={}, config: api_url={:?} api_key={:?} model={:?} api_format={:?}",
-        if llm_overrides.is_some() { "present" } else { "none" },
-        config.api_url.as_deref().map(|s| if s.is_empty() { "<empty>" } else { "<set>" }),
-        config.api_key.as_deref().map(|s| if s.is_empty() { "<empty>" } else { "<set>" }),
-        config.model.as_deref().map(|s| if s.is_empty() { "<empty>" } else { s }),
-        config.api_format.as_deref().map(|s| if s.is_empty() { "<empty>" } else { s }),
+    tracing::info!(
+        "[doc-analysis] llm_overrides={}, config: api_url={:?} api_key={:?} model={:?} api_format={:?}",
+        if llm_overrides.is_some() {
+            "present"
+        } else {
+            "none"
+        },
+        config
+            .api_url
+            .as_deref()
+            .map(|s| if s.is_empty() { "<empty>" } else { "<set>" }),
+        config
+            .api_key
+            .as_deref()
+            .map(|s| if s.is_empty() { "<empty>" } else { "<set>" }),
+        config
+            .model
+            .as_deref()
+            .map(|s| if s.is_empty() { "<empty>" } else { s }),
+        config
+            .api_format
+            .as_deref()
+            .map(|s| if s.is_empty() { "<empty>" } else { s }),
     );
 
     tracing::info!(
@@ -343,6 +360,8 @@ async fn process_document_analysis(
                             context_id: request.session_id.clone(),
                             agent_id: request.agent_id,
                             session_id: request.session_id,
+                            channel_id: None,
+                            run_scope_id: None,
                             user_message: request.user_message,
                             cancel_token: cancel_token_bridge,
                             workspace_path: Some(request.workspace_path),
@@ -361,10 +380,14 @@ async fn process_document_analysis(
                     messages_json: updated_session.messages_json.clone(),
                     message_count: updated_session.message_count,
                     total_tokens: updated_session.total_tokens,
+                    context_runtime_state: updated_session.context_runtime_state.clone(),
                     last_assistant_text: runtime::extract_last_assistant_text(
                         &updated_session.messages_json,
                     ),
                     completion_report: None,
+                    persisted_child_evidence: Vec::new(),
+                    persisted_child_transcript_resume: Vec::new(),
+                    transition_trace: None,
                     events_emitted: 0,
                     signal_summary: None,
                     completion_outcome: None,
@@ -541,32 +564,56 @@ fn build_analysis_prompt(ctx: &DocumentAnalysisContext) -> String {
     let en = ctx.lang.as_deref() == Some("en");
 
     let type_steps = match (cat, en) {
-        ("pdf", false) => "1. 先用文档工具建立对文档区对象的访问（推荐 export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具读取导出文件的实际 PDF 内容（如 pdftotext 或 Python pdfplumber）\n3. 按页面/章节结构分析内容",
-        ("pdf", true) => "1. First establish document-area access with a document tool (prefer export_document or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to read the exported PDF content (e.g. pdftotext or Python pdfplumber)\n3. Analyze content by page/chapter structure",
-        ("archive", false) => "1. 先用文档工具建立对文档区对象的访问（推荐 export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具解压并读取导出文件内容\n3. 逐个分析解压后的文件",
-        ("archive", true) => "1. First establish document-area access with a document tool (prefer export_document or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to extract and inspect the exported archive\n3. Analyze each extracted file",
-        ("presentation", false) => "1. 先用文档工具建立对文档区对象的访问（推荐 export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具提取演示文稿内容（如 python-pptx）\n3. 逐页提取文字、标题和结构",
-        ("presentation", true) => "1. First establish document-area access with a document tool (prefer export_document or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to extract slide content (e.g. python-pptx)\n3. Extract text and structure page by page",
-        ("spreadsheet", false) => "1. 先用文档工具建立对文档区对象的访问并拿到 workspace 路径（可用 read_document、export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具读取导出文件中的实际表格内容\n3. 描述数据结构、字段含义并总结关键数据",
-        ("spreadsheet", true) => "1. First establish document-area access and obtain a workspace path with a document tool (use read_document, export_document, or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to inspect the exported spreadsheet content\n3. Describe the data structure, field meanings, and key statistics",
-        ("word", false) => "1. 先用文档工具建立对文档区对象的访问（推荐 export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具提取文档文本（如 python-docx）\n3. 按章节结构分析内容",
-        ("word", true) => "1. First establish document-area access with a document tool (prefer export_document or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to extract text (e.g. python-docx)\n3. Analyze content by section structure",
-        (_, false) => "1. 先用文档工具建立对文档区对象的访问并拿到 workspace 路径（可用 read_document、export_document 或 import_document_to_workspace）\n2. 再使用 developer shell、MCP 或其他本地工具读取导出文件中的实际内容\n3. 分析文本结构和关键信息",
-        (_, true) => "1. First establish document-area access and obtain a workspace path with a document tool (use read_document, export_document, or import_document_to_workspace)\n2. Then use developer shell, MCP, or another local tool to inspect the exported content\n3. Analyze the text structure and key information",
+        ("pdf", false) => {
+            "推荐范式：先建立文档访问（优先 export_document 或 import_document_to_workspace），再用 developer shell、MCP 或其他本地工具读取 PDF 正文（如 pdftotext 或 Python pdfplumber），最后按页面/章节结构分析。"
+        }
+        ("pdf", true) => {
+            "Suggested pattern: establish document access first (prefer export_document or import_document_to_workspace), then use developer shell, MCP, or another local tool to read the PDF content (for example pdftotext or Python pdfplumber), and finally analyze it by page/chapter structure."
+        }
+        ("archive", false) => {
+            "推荐范式：先建立文档访问（优先 export_document 或 import_document_to_workspace），再用 developer shell、MCP 或其他本地工具解压并读取导出内容，最后逐个分析解压后的文件。"
+        }
+        ("archive", true) => {
+            "Suggested pattern: establish document access first (prefer export_document or import_document_to_workspace), then use developer shell, MCP, or another local tool to extract and inspect the archive, and finally analyze each extracted file."
+        }
+        ("presentation", false) => {
+            "推荐范式：先建立文档访问（优先 export_document 或 import_document_to_workspace），再用 developer shell、MCP 或其他本地工具提取演示文稿内容（如 python-pptx），最后逐页整理文字、标题和结构。"
+        }
+        ("presentation", true) => {
+            "Suggested pattern: establish document access first (prefer export_document or import_document_to_workspace), then use developer shell, MCP, or another local tool to extract slide content (for example python-pptx), and finally analyze the text and structure page by page."
+        }
+        ("spreadsheet", false) => {
+            "推荐范式：先建立文档访问并拿到 workspace 路径（可用 read_document、export_document 或 import_document_to_workspace），再用 developer shell、MCP 或其他本地工具读取表格内容，最后总结数据结构、字段含义和关键统计。"
+        }
+        ("spreadsheet", true) => {
+            "Suggested pattern: establish document access and obtain a workspace path (use read_document, export_document, or import_document_to_workspace), then use developer shell, MCP, or another local tool to inspect the spreadsheet content, and finally summarize the data structure, field meanings, and key statistics."
+        }
+        ("word", false) => {
+            "推荐范式：先建立文档访问（优先 export_document 或 import_document_to_workspace），再用 developer shell、MCP 或其他本地工具提取文档文本（如 python-docx），最后按章节结构分析。"
+        }
+        ("word", true) => {
+            "Suggested pattern: establish document access first (prefer export_document or import_document_to_workspace), then use developer shell, MCP, or another local tool to extract text (for example python-docx), and finally analyze the content by section."
+        }
+        (_, false) => {
+            "推荐范式：先建立文档访问并拿到 workspace 路径（可用 read_document、export_document 或 import_document_to_workspace），再用 developer shell、MCP 或其他本地工具读取实际内容，最后分析文本结构和关键信息。"
+        }
+        (_, true) => {
+            "Suggested pattern: establish document access and obtain a workspace path (use read_document, export_document, or import_document_to_workspace), then use developer shell, MCP, or another local tool to inspect the content, and finally analyze the text structure and key information."
+        }
     };
 
     if en {
         format!(
             "Analyze the document \"{name}\" (MIME: {mime}, Doc ID: {doc_id}).\n\n\
-             You MUST first use one of these document tools to establish access to the formal document area: `read_document`, `export_document`, or `import_document_to_workspace`.\n\
-             These tools establish access to the formal document area and should give you a workspace file path. They are not the final content-reading step by themselves.\n\
-             Continue by using developer shell, MCP, or another local tool to inspect the exported workspace file itself.\n\
-             If you do not successfully establish document-area access first, the run will be rejected as incomplete.\n\n\
+             This is an agent-driven document-analysis run. You may choose any effective local reading/extraction path, but before the final answer you must first establish access to the formal document area with one of these document tools: `read_document`, `export_document`, or `import_document_to_workspace`.\n\
+             These tools should give you a workspace file path. They are the access/export step, not the final content-reading step.\n\
+             After access is established, continue by using developer shell, MCP, or another local tool to inspect the exported workspace file itself. Repeating the same document-access tool after access is already established is not useful; continue from the existing workspace path instead.\n\
+             If document-area access is never established, the run will be rejected as incomplete.\n\n\
              When you submit the final structured completion, set `content_accessed=true` only if you actually obtained document content or extracted readable content from the exported workspace file in this run.\n\
              Set `analysis_complete=true` only if the final analysis sections are fully written from the document content already gathered in this run.\n\
              If either condition is not met, you must return a blocked result with an accurate `reason_code`.\n\n\
              Never reply with future-intent text such as \"I need to read the document first\" or \"let me do that now\". Complete the read/analyze/final_output chain in this run.\n\n\
-             ## Steps\n{steps}\n\n\
+             ## Suggested Reading Pattern\n{steps}\n\n\
              ## Output Format (strict)\n\n\
              **Document Overview**\n\
              2-3 sentences: document type, topic, core purpose.\n\n\
@@ -587,15 +634,15 @@ fn build_analysis_prompt(ctx: &DocumentAnalysisContext) -> String {
     } else {
         format!(
             "请分析文档「{name}」(MIME: {mime}, 文档ID: {doc_id})。\n\n\
-             在产出最终答案之前，你必须先成功调用以下任一文档工具来建立对正式文档区对象的访问：`read_document`、`export_document` 或 `import_document_to_workspace`。\n\
-             这一步是文档区访问前置条件，并且应当拿到 workspace 文件路径；它本身不等于最终的内容读取。\n\
-             后续还应继续使用 developer shell、MCP 或其他本地工具读取导出到 workspace 的实际文件内容。\n\
-             如果没有先成功建立文档区访问，本轮会被判定为未完成。\n\n\
+             这是一轮由 agent 自主完成的文档分析。你可以选择合适的本地读取/提取方式，但在给出最终答案之前，必须先成功调用以下任一文档工具来建立对正式文档区对象的访问：`read_document`、`export_document` 或 `import_document_to_workspace`。\n\
+             这一步应当拿到 workspace 文件路径；它属于 access/export 阶段，不等于最终正文读取。\n\
+             一旦访问已经建立，后续应继续使用 developer shell、MCP 或其他本地工具读取导出到 workspace 的实际文件内容；不要反复重复同一个文档访问工具。\n\
+             如果始终没有成功建立文档区访问，本轮会被判定为未完成。\n\n\
              在提交最终 structured completion 时，只有在本轮里确实拿到了文档正文或从导出文件中提取到了可读内容，才能设置 `content_accessed=true`。\n\
              只有在基于这些正文内容完成了最终分析各部分输出时，才能设置 `analysis_complete=true`。\n\
              只要任一条件不满足，就必须返回 blocked，并给出准确的 `reason_code`。\n\n\
              不要回复“我需要先读取文档”或“让我先做这个”之类的未来时描述。必须在本轮内完成读取、分析并给出最终结果。\n\n\
-             ## 操作步骤\n{steps}\n\n\
+             ## 建议范式\n{steps}\n\n\
              ## 输出格式（严格遵守）\n\n\
              **文档概述**\n\
              用2-3句话说明文档的类型、主题和核心目的。\n\n\

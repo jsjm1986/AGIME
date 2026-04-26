@@ -52,7 +52,7 @@ fn worker_write_scope(
         &swarm_plan.write_scope
     };
     if base_scope.is_empty() {
-        return vec![target.to_string()];
+        return Vec::new();
     }
     if base_scope
         .iter()

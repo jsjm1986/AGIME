@@ -198,8 +198,6 @@ if (process.platform !== 'darwin') {
             const openDir = recentDirs.length > 0 ? recentDirs[0] : null;
 
             const deeplinkData = parseRecipeDeeplink(protocolUrl);
-            const scheduledJobId = parsedUrl.searchParams.get('scheduledJob');
-
             createChat(
               app,
               undefined,
@@ -208,7 +206,6 @@ if (process.platform !== 'darwin') {
               undefined,
               undefined,
               deeplinkData?.config,
-              scheduledJobId || undefined,
               undefined,
               deeplinkData?.parameters
             );
@@ -297,8 +294,6 @@ async function processProtocolUrl(parsedUrl: URL, window: BrowserWindow) {
     window.webContents.send('open-shared-session', pendingDeepLink);
   } else if (parsedUrl.hostname === 'bot' || parsedUrl.hostname === 'recipe') {
     const deeplinkData = parseRecipeDeeplink(pendingDeepLink ?? parsedUrl.toString());
-    const scheduledJobId = parsedUrl.searchParams.get('scheduledJob');
-
     // Create a new window and ignore the passed-in window
     createChat(
       app,
@@ -308,7 +303,6 @@ async function processProtocolUrl(parsedUrl: URL, window: BrowserWindow) {
       undefined,
       undefined,
       deeplinkData?.config,
-      scheduledJobId || undefined,
       undefined,
       deeplinkData?.parameters
     );
@@ -332,8 +326,6 @@ app.on('open-url', async (_event, url) => {
       if (deeplinkData) {
         windowDeeplinkURL = url;
       }
-      const scheduledJobId = parsedUrl.searchParams.get('scheduledJob');
-
       // Create a new window directly
       await createChat(
         app,
@@ -343,7 +335,6 @@ app.on('open-url', async (_event, url) => {
         undefined,
         undefined,
         deeplinkData?.config,
-        scheduledJobId || undefined,
         undefined,
         deeplinkData?.parameters
       );
@@ -524,7 +515,6 @@ const createChat = async (
   resumeSessionId?: string,
   viewType?: string,
   recipeDeeplink?: string, // Raw deeplink decoded on server
-  scheduledJobId?: string, // Scheduled job ID if applicable
   recipeId?: string,
   recipeParameters?: Record<string, string> // Recipe parameter values from deeplink URL
 ) => {
@@ -581,7 +571,6 @@ const createChat = async (
           recipeId: recipeId,
           recipeDeeplink: recipeDeeplink,
           recipeParameters: recipeParameters,
-          scheduledJobId: scheduledJobId,
         }),
       ],
       partition: 'persist:agime',
@@ -742,7 +731,6 @@ const createChat = async (
     pair: '/pair',
     settings: '/settings',
     sessions: '/sessions',
-    schedules: '/schedules',
     recipes: '/recipes',
     permission: '/permission',
     ConfigureProviders: '/configure-providers',

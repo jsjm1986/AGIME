@@ -42,22 +42,30 @@ pub struct RegistryUpdatesQuery {
 pub struct RegistryPreviewRequest {
     #[serde(rename = "teamId")]
     pub team_id: String,
+    #[serde(default)]
     pub source: String,
     #[serde(rename = "skillId")]
+    #[serde(default)]
     pub skill_id: String,
     #[serde(rename = "sourceRef")]
     pub source_ref: Option<String>,
+    #[serde(rename = "installSpec")]
+    pub install_spec: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RegistryImportRequest {
     #[serde(rename = "teamId")]
     pub team_id: String,
+    #[serde(default)]
     pub source: String,
     #[serde(rename = "skillId")]
+    #[serde(default)]
     pub skill_id: String,
     #[serde(rename = "sourceRef")]
     pub source_ref: Option<String>,
+    #[serde(rename = "installSpec")]
+    pub install_spec: Option<String>,
     pub visibility: Option<String>,
 }
 
@@ -235,10 +243,14 @@ async fn preview_registry_skill(
 ) -> Result<Json<serde_json::Value>, Response> {
     require_team_member(&state, &req.team_id, &user.0).await?;
     let provider = registry_provider(&state, &req.team_id, &user.0)?;
-    let result = provider
-        .preview_registry_skill(&req.source, &req.skill_id, req.source_ref.as_deref())
-        .await
-        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err.to_string()))?;
+    let result = if let Some(install_spec) = req.install_spec.as_deref() {
+        provider.preview_registry_install_spec(install_spec).await
+    } else {
+        provider
+            .preview_registry_skill(&req.source, &req.skill_id, req.source_ref.as_deref())
+            .await
+    }
+    .map_err(|err| json_error(StatusCode::BAD_REQUEST, err.to_string()))?;
     Ok(Json(result))
 }
 
@@ -263,15 +275,21 @@ async fn import_registry_skill(
 ) -> Result<Json<serde_json::Value>, Response> {
     require_team_member(&state, &req.team_id, &user.0).await?;
     let provider = registry_provider(&state, &req.team_id, &user.0)?;
-    let result = provider
-        .import_registry_skill(
-            &req.source,
-            &req.skill_id,
-            req.source_ref.as_deref(),
-            req.visibility.as_deref(),
-        )
-        .await
-        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err.to_string()))?;
+    let result = if let Some(install_spec) = req.install_spec.as_deref() {
+        provider
+            .import_registry_install_spec(install_spec, req.visibility.as_deref())
+            .await
+    } else {
+        provider
+            .import_registry_skill(
+                &req.source,
+                &req.skill_id,
+                req.source_ref.as_deref(),
+                req.visibility.as_deref(),
+            )
+            .await
+    }
+    .map_err(|err| json_error(StatusCode::BAD_REQUEST, err.to_string()))?;
     Ok(Json(result))
 }
 

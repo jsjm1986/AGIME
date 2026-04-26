@@ -11,16 +11,21 @@ use agime_team::models::mongo::{Skill, SkillFile};
 use agime_team::services::mongo::SkillService;
 use agime_team::services::package_service::PackageService;
 use anyhow::{anyhow, Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use futures::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId};
 use reqwest::Client;
+use reqwest::Url;
 use rmcp::model::*;
 use rmcp::ServiceError;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 const SKILLS_SH_SEARCH_URL: &str = "https://skills.sh/api/search";
@@ -30,6 +35,12 @@ const SKILLS_SH_HOT_URL: &str = "https://skills.sh/hot";
 const DEFAULT_SEARCH_LIMIT: u64 = 10;
 const MAX_SEARCH_LIMIT: u64 = 50;
 const MAX_PREVIEW_SKILL_MD_BYTES: usize = 32 * 1024;
+const HTTP_CONNECT_TIMEOUT_SECS: u64 = 8;
+const HTTP_REQUEST_TIMEOUT_SECS: u64 = 25;
+const PACKAGE_RESOLVE_TIMEOUT_SECS: u64 = 45;
+const MAX_PACKAGE_FILES: usize = 80;
+const MAX_PACKAGE_FILE_BYTES: usize = 256 * 1024;
+const MAX_PACKAGE_TOTAL_BYTES: usize = 1024 * 1024;
 
 fn build_skill_ref(skill_id: &str, name: &str, skill_class: &str, meta: &str) -> String {
     format!("[[skill:{}|{}|{}|{}]]", skill_id, name, skill_class, meta)
@@ -49,6 +60,22 @@ fn build_registry_plain_line_zh(name: &str, source: &str) -> String {
 
 fn build_registry_plain_line_en(name: &str, source: &str) -> String {
     format!("{} (skills.sh registry, source {})", name, source)
+}
+
+fn build_local_display_line_zh(skill_ref: &str, source: &str) -> String {
+    format!("{}（本地来源，路径{}）", skill_ref, source)
+}
+
+fn build_local_display_line_en(skill_ref: &str, source: &str) -> String {
+    format!("{} (local source, path {})", skill_ref, source)
+}
+
+fn build_local_plain_line_zh(name: &str, source: &str) -> String {
+    format!("{}（本地来源，路径{}）", name, source)
+}
+
+fn build_local_plain_line_en(name: &str, source: &str) -> String {
+    format!("{} (local source, path {})", name, source)
 }
 
 fn build_imported_display_line_zh(skill_ref: &str, version: &str) -> String {
@@ -73,6 +100,7 @@ pub struct SkillRegistryToolsProvider {
     client: Client,
     team_id: String,
     actor_id: String,
+    workspace_root: Option<PathBuf>,
     info: InitializeResult,
 }
 
@@ -167,12 +195,78 @@ struct GitHubTreeItem {
     sha: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GitHubContentResponse {
+    content: String,
+    encoding: String,
+}
+
+#[derive(Debug, Clone)]
+struct SkillInstallSpec {
+    owner: String,
+    repo: String,
+    skill_id: Option<String>,
+    source_ref: Option<String>,
+    skill_dir: Option<String>,
+    local_path: Option<PathBuf>,
+    raw: String,
+}
+
+impl SkillInstallSpec {
+    fn source(&self) -> String {
+        if let Some(path) = &self.local_path {
+            return path.to_string_lossy().to_string();
+        }
+        format!("{}/{}", self.owner, self.repo)
+    }
+
+    fn canonical_for_skill(&self, skill_id: &str) -> String {
+        if let Some(path) = &self.local_path {
+            return build_local_install_spec(path, Some(skill_id));
+        }
+        format!("{}/{}@{}", self.owner, self.repo, skill_id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SkillCandidate {
+    skill_id: String,
+    name: String,
+    source: String,
+    source_ref: String,
+    skill_dir: String,
+    install_spec: String,
+    skills_sh_url: String,
+    skill_md_path: String,
+}
+
+enum SkillResolution {
+    Resolved(ImportedSkillPackage),
+    Multiple {
+        install_spec: String,
+        source: String,
+        source_ref: String,
+        candidate_count: usize,
+        candidates: Vec<SkillCandidate>,
+    },
+    NotFound {
+        install_spec: String,
+        source: String,
+        source_ref: String,
+        message: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 struct ImportedSkillPackage {
+    source_type: String,
+    source_repo: String,
     owner: String,
     repo: String,
     skill_id: String,
     skill_dir: String,
+    install_spec: String,
+    source_url: String,
     source_ref: String,
     source_commit: String,
     source_tree_sha: String,
@@ -184,17 +278,24 @@ struct ImportedSkillPackage {
     skipped_files: Vec<String>,
 }
 
+struct LocalSkillSource {
+    root: PathBuf,
+    cleanup_root: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct ImportedSkillMetadata {
     source_type: String,
     source_repo: String,
     source_skill_path: String,
+    install_spec: Option<String>,
     source_url: Option<String>,
     source_ref: String,
     source_commit: Option<String>,
     source_tree_sha: Option<String>,
     import_mode: Option<String>,
     registry_provider: Option<String>,
+    import_actor: Option<String>,
     skipped_files: Option<Vec<String>>,
     visibility_override: Option<String>,
 }
@@ -279,12 +380,23 @@ impl SkillRegistryToolsProvider {
             db,
             client: Client::builder()
                 .user_agent("agime-team-server/skill-registry")
+                .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
+                .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
                 .build()
                 .expect("skill registry http client"),
             team_id,
             actor_id,
+            workspace_root: None,
             info,
         }
+    }
+
+    pub fn with_workspace_root(mut self, workspace_root: Option<String>) -> Self {
+        self.workspace_root = workspace_root
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+        self
     }
 
     fn service(&self) -> SkillService {
@@ -351,6 +463,18 @@ impl SkillRegistryToolsProvider {
         Ok(serde_json::from_str(&self.handle_preview(&args).await?)?)
     }
 
+    pub async fn preview_registry_install_spec(
+        &self,
+        install_spec: &str,
+    ) -> Result<serde_json::Value> {
+        let mut args = JsonObject::new();
+        args.insert(
+            "install_spec".to_string(),
+            serde_json::Value::String(install_spec.to_string()),
+        );
+        Ok(serde_json::from_str(&self.handle_preview(&args).await?)?)
+    }
+
     pub async fn import_registry_skill(
         &self,
         source: &str,
@@ -373,6 +497,25 @@ impl SkillRegistryToolsProvider {
                 serde_json::Value::String(source_ref.to_string()),
             );
         }
+        if let Some(visibility) = visibility {
+            args.insert(
+                "visibility".to_string(),
+                serde_json::Value::String(visibility.to_string()),
+            );
+        }
+        Ok(serde_json::from_str(&self.handle_import(&args).await?)?)
+    }
+
+    pub async fn import_registry_install_spec(
+        &self,
+        install_spec: &str,
+        visibility: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let mut args = JsonObject::new();
+        args.insert(
+            "install_spec".to_string(),
+            serde_json::Value::String(install_spec.to_string()),
+        );
         if let Some(visibility) = visibility {
             args.insert(
                 "visibility".to_string(),
@@ -485,6 +628,10 @@ impl SkillRegistryToolsProvider {
                 input_schema: serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
+                        "install_spec": {
+                            "type": "string",
+                            "description": "Optional standard install spec such as owner/repo@skill, a skills.sh URL, or a GitHub repo/tree URL. Prefer this when available."
+                        },
                         "source": {
                             "type": "string",
                             "description": "Source repo from search result, usually owner/repo"
@@ -498,7 +645,6 @@ impl SkillRegistryToolsProvider {
                             "description": "Optional branch, tag, or commit override"
                         }
                     },
-                    "required": ["source", "skill_id"],
                     "additionalProperties": false
                 }))
                 .unwrap_or_default(),
@@ -518,6 +664,10 @@ impl SkillRegistryToolsProvider {
                 input_schema: serde_json::from_value(json!({
                     "type": "object",
                     "properties": {
+                        "install_spec": {
+                            "type": "string",
+                            "description": "Optional standard install spec such as owner/repo@skill, a skills.sh URL, or a GitHub repo/tree URL. Prefer this when available."
+                        },
                         "source": {
                             "type": "string",
                             "description": "Source repo from search result, usually owner/repo"
@@ -535,7 +685,6 @@ impl SkillRegistryToolsProvider {
                             "description": "Optional skill visibility override (default team)"
                         }
                     },
-                    "required": ["source", "skill_id"],
                     "additionalProperties": false
                 }))
                 .unwrap_or_default(),
@@ -657,11 +806,15 @@ impl SkillRegistryToolsProvider {
                     "registry",
                     &item.source,
                 );
+                let install_spec = build_install_spec(&item.source, &item.skill_id);
+                let skills_sh_url = build_skills_sh_url(&item.source, &item.skill_id);
                 json!({
                     "rank": idx + 1,
                     "skill_id": item.skill_id,
                     "name": item.name,
                     "skill_ref": skill_ref,
+                    "install_spec": install_spec,
+                    "skills_sh_url": skills_sh_url,
                     "display_line_zh": build_registry_display_line_zh(&skill_ref, &item.source),
                     "display_line_en": build_registry_display_line_en(&skill_ref, &item.source),
                     "plain_line_zh": build_registry_plain_line_zh(&item.name, &item.source),
@@ -725,12 +878,16 @@ impl SkillRegistryToolsProvider {
                     "registry",
                     &item.source,
                 );
+                let install_spec = build_install_spec(&item.source, &item.skill_id);
+                let skills_sh_url = build_skills_sh_url(&item.source, &item.skill_id);
                 json!({
                     "rank": idx + 1,
                     "id": item.id,
                     "skill_id": item.skill_id,
                     "name": item.name,
                     "skill_ref": skill_ref,
+                    "install_spec": install_spec,
+                    "skills_sh_url": skills_sh_url,
                     "display_line_zh": build_registry_display_line_zh(&skill_ref, &item.source),
                     "display_line_en": build_registry_display_line_en(&skill_ref, &item.source),
                     "plain_line_zh": build_registry_plain_line_zh(&item.name, &item.source),
@@ -755,7 +912,61 @@ impl SkillRegistryToolsProvider {
     }
 
     async fn handle_preview(&self, args: &JsonObject) -> Result<String> {
-        let package = self.resolve_skill_package(args).await?;
+        let resolution = timeout(
+            Duration::from_secs(PACKAGE_RESOLVE_TIMEOUT_SECS),
+            self.resolve_skill_request(args),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "Timed out previewing registry skill after {}s. The upstream GitHub package may be too large or slow; try another skill or retry later.",
+                PACKAGE_RESOLVE_TIMEOUT_SECS
+            )
+        })??;
+        let package = match resolution {
+            SkillResolution::Resolved(package) => package,
+            SkillResolution::Multiple {
+                install_spec,
+                source,
+                source_ref,
+                candidate_count,
+                candidates,
+            } => {
+                return Ok(json!({
+                    "team_id": self.team_id,
+                    "resolution_status": "multiple_candidates",
+                    "install_spec": install_spec,
+                    "source": source,
+                    "source_ref": source_ref,
+                    "candidate_count": candidate_count,
+                    "candidates": candidates,
+                    "files": [],
+                    "skipped_files": [],
+                    "message": "Multiple skills were found in this repository. Choose one candidate and preview/import its install_spec.",
+                })
+                .to_string());
+            }
+            SkillResolution::NotFound {
+                install_spec,
+                source,
+                source_ref,
+                message,
+            } => {
+                return Ok(json!({
+                    "team_id": self.team_id,
+                    "resolution_status": "not_found",
+                    "install_spec": install_spec,
+                    "source": source,
+                    "source_ref": source_ref,
+                    "candidate_count": 0,
+                    "candidates": [],
+                    "files": [],
+                    "skipped_files": [],
+                    "message": message,
+                })
+                .to_string());
+            }
+        };
         let exists = self
             .service()
             .check_duplicate_name(&self.team_id, &package.skill_id, None)
@@ -775,23 +986,49 @@ impl SkillRegistryToolsProvider {
             .iter()
             .map(|file| json!({ "path": file.path }))
             .collect::<Vec<_>>();
-        let source = format!("{}/{}", package.owner, package.repo);
+        let source = if package.source_type == "local_skill_source" {
+            package.source_repo.clone()
+        } else {
+            format!("{}/{}", package.owner, package.repo)
+        };
         let skill_ref = build_skill_ref(
             &format!("registry:{}", package.skill_id),
             &package.skill_id,
             "registry",
             &source,
         );
+        let (display_line_zh, display_line_en, plain_line_zh, plain_line_en) =
+            if package.source_type == "local_skill_source" {
+                (
+                    build_local_display_line_zh(&skill_ref, &source),
+                    build_local_display_line_en(&skill_ref, &source),
+                    build_local_plain_line_zh(&package.skill_id, &source),
+                    build_local_plain_line_en(&package.skill_id, &source),
+                )
+            } else {
+                (
+                    build_registry_display_line_zh(&skill_ref, &source),
+                    build_registry_display_line_en(&skill_ref, &source),
+                    build_registry_plain_line_zh(&package.skill_id, &source),
+                    build_registry_plain_line_en(&package.skill_id, &source),
+                )
+            };
 
         Ok(json!({
             "team_id": self.team_id,
+            "resolution_status": "resolved",
             "source": source,
             "skill_id": package.skill_id,
+            "install_spec": package.install_spec,
+            "skills_sh_url": package.source_url,
+            "source_url": package.source_url,
+            "candidate_count": 1,
+            "candidates": [],
             "skill_ref": skill_ref,
-            "display_line_zh": build_registry_display_line_zh(&skill_ref, &source),
-            "display_line_en": build_registry_display_line_en(&skill_ref, &source),
-            "plain_line_zh": build_registry_plain_line_zh(&package.skill_id, &source),
-            "plain_line_en": build_registry_plain_line_en(&package.skill_id, &source),
+            "display_line_zh": display_line_zh,
+            "display_line_en": display_line_en,
+            "plain_line_zh": plain_line_zh,
+            "plain_line_en": plain_line_en,
             "skill_class": "registry",
             "source_ref": package.source_ref,
             "source_commit": package.source_commit,
@@ -809,7 +1046,36 @@ impl SkillRegistryToolsProvider {
     }
 
     async fn handle_import(&self, args: &JsonObject) -> Result<String> {
-        let package = self.resolve_skill_package(args).await?;
+        let resolution = timeout(
+            Duration::from_secs(PACKAGE_RESOLVE_TIMEOUT_SECS),
+            self.resolve_skill_request(args),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "Timed out importing registry skill after {}s. The upstream GitHub package may be too large or slow; no team skill was created.",
+                PACKAGE_RESOLVE_TIMEOUT_SECS
+            )
+        })??;
+        let package = match resolution {
+            SkillResolution::Resolved(package) => package,
+            SkillResolution::Multiple {
+                candidate_count,
+                candidates,
+                ..
+            } => {
+                return Err(anyhow!(
+                    "Multiple skills were found ({} candidates). Preview or import one candidate by its install_spec: {}",
+                    candidate_count,
+                    candidates
+                        .iter()
+                        .map(|candidate| candidate.install_spec.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            SkillResolution::NotFound { message, .. } => return Err(anyhow!(message)),
+        };
         let visibility = args
             .get("visibility")
             .and_then(|v| v.as_str())
@@ -843,11 +1109,19 @@ impl SkillRegistryToolsProvider {
             self.persist_import_metadata(skill_oid, &package, visibility.as_deref())
                 .await?;
         }
+        let verification = self.verify_import(&imported_skill_id, &skill.name).await;
 
         Ok(json!({
             "team_id": self.team_id,
-            "source": format!("{}/{}", package.owner, package.repo),
+            "source": if package.source_type == "local_skill_source" {
+                package.source_repo.clone()
+            } else {
+                format!("{}/{}", package.owner, package.repo)
+            },
             "skill_id": package.skill_id,
+            "install_spec": package.install_spec,
+            "skills_sh_url": package.source_url,
+            "source_url": package.source_url,
             "source_ref": package.source_ref,
             "source_commit": package.source_commit,
             "imported_skill_id": imported_skill_id,
@@ -862,6 +1136,7 @@ impl SkillRegistryToolsProvider {
             "visibility": skill.visibility,
             "file_count": package.files.len(),
             "skipped_files": package.skipped_files,
+            "verification": verification,
         })
         .to_string())
     }
@@ -975,14 +1250,23 @@ impl SkillRegistryToolsProvider {
         }
 
         let source = format!("{}/{}", inspection.owner, inspection.repo);
-        let package = self
-            .resolve_skill_package_from_values(
+        let package = timeout(
+            Duration::from_secs(PACKAGE_RESOLVE_TIMEOUT_SECS),
+            self.resolve_skill_package_from_values(
                 &source,
                 &inspection.skill_id,
                 Some(inspection.source_ref.as_str()),
+            ),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "Timed out upgrading registry skill after {}s. The upstream GitHub package may be too large or slow; the existing skill was not changed.",
+                PACKAGE_RESOLVE_TIMEOUT_SECS
             )
-            .await?;
-        let metadata = build_import_metadata(&package, Some(skill.visibility.as_str()));
+        })??;
+        let metadata =
+            build_import_metadata(&package, Some(skill.visibility.as_str()), &self.actor_id);
         let updated = self
             .service()
             .update_package(
@@ -1046,7 +1330,7 @@ impl SkillRegistryToolsProvider {
         visibility: Option<&str>,
     ) -> Result<()> {
         let coll = self.db.collection::<Skill>("skills");
-        let metadata = build_import_metadata(package, visibility);
+        let metadata = build_import_metadata(package, visibility, &self.actor_id);
         coll.update_one(
             doc! { "_id": skill_oid },
             doc! { "$set": { "metadata": mongodb::bson::to_bson(&metadata)? } },
@@ -1056,7 +1340,54 @@ impl SkillRegistryToolsProvider {
         Ok(())
     }
 
-    async fn resolve_skill_package(&self, args: &JsonObject) -> Result<ImportedSkillPackage> {
+    async fn verify_import(&self, imported_skill_id: &str, skill_name: &str) -> serde_json::Value {
+        let persisted = match (
+            ObjectId::parse_str(imported_skill_id),
+            ObjectId::parse_str(&self.team_id),
+        ) {
+            (Ok(skill_oid), Ok(team_oid)) => self
+                .db
+                .collection::<Skill>("skills")
+                .find_one(
+                    doc! {
+                        "_id": skill_oid,
+                        "team_id": team_oid,
+                        "is_deleted": { "$ne": true },
+                    },
+                    None,
+                )
+                .await
+                .ok()
+                .flatten()
+                .is_some(),
+            _ => false,
+        };
+        let catalog_visible = self
+            .service()
+            .list(&self.team_id, Some(1), Some(10), Some(skill_name), None)
+            .await
+            .map(|page| page.items.iter().any(|item| item.name == skill_name))
+            .unwrap_or(false);
+        json!({
+            "persisted": persisted,
+            "catalog_visible": catalog_visible,
+        })
+    }
+
+    async fn resolve_skill_request(&self, args: &JsonObject) -> Result<SkillResolution> {
+        let spec = self.parse_request_spec(args)?;
+        self.resolve_skill_resolution(spec).await
+    }
+
+    fn parse_request_spec(&self, args: &JsonObject) -> Result<SkillInstallSpec> {
+        if let Some(raw) = args
+            .get("install_spec")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return parse_install_spec(raw);
+        }
         let source = args
             .get("source")
             .and_then(|v| v.as_str())
@@ -1067,17 +1398,112 @@ impl SkillRegistryToolsProvider {
             .get("skill_id")
             .and_then(|v| v.as_str())
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow!("skill_id is required"))?;
+            .filter(|s| !s.is_empty());
         let source_ref = args
             .get("source_ref")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        let (owner, repo) = parse_github_source(source).ok_or_else(|| {
+            anyhow!(
+                "Only GitHub-backed registry sources are supported. Unsupported source: {}",
+                source
+            )
+        })?;
+        Ok(SkillInstallSpec {
+            owner,
+            repo,
+            skill_id: skill_id.map(str::to_string),
+            source_ref,
+            skill_dir: None,
+            local_path: None,
+            raw: match skill_id {
+                Some(skill_id) => build_install_spec(source, skill_id),
+                None => source.to_string(),
+            },
+        })
+    }
 
-        self.resolve_skill_package_from_values(source, skill_id, source_ref.as_deref())
-            .await
+    async fn resolve_skill_resolution(&self, spec: SkillInstallSpec) -> Result<SkillResolution> {
+        if spec.local_path.is_some() {
+            return self.resolve_local_skill_resolution(spec).await;
+        }
+        let resolved_ref = match spec.source_ref.as_deref() {
+            Some(value) => value.to_string(),
+            None => self.fetch_default_branch(&spec.owner, &spec.repo).await?,
+        };
+        let tree = self
+            .fetch_git_tree(&spec.owner, &spec.repo, &resolved_ref)
+            .await?;
+        let candidates = discover_skill_candidates(&spec, &resolved_ref, &tree.tree);
+        if candidates.is_empty() {
+            return Ok(SkillResolution::NotFound {
+                install_spec: spec.raw.clone(),
+                source: spec.source(),
+                source_ref: resolved_ref,
+                message: format!(
+                    "No SKILL.md matched '{}' in {}/{}",
+                    spec.skill_id
+                        .as_deref()
+                        .or(spec.skill_dir.as_deref())
+                        .unwrap_or("repository"),
+                    spec.owner,
+                    spec.repo
+                ),
+            });
+        }
+        if candidates.len() > 1 {
+            return Ok(SkillResolution::Multiple {
+                install_spec: spec.raw.clone(),
+                source: spec.source(),
+                source_ref: resolved_ref,
+                candidate_count: candidates.len(),
+                candidates,
+            });
+        }
+        let candidate = candidates.into_iter().next().expect("candidate exists");
+        let package = self
+            .resolve_skill_package_from_candidate(&spec, candidate, &tree)
+            .await?;
+        Ok(SkillResolution::Resolved(package))
+    }
+
+    async fn resolve_local_skill_resolution(
+        &self,
+        spec: SkillInstallSpec,
+    ) -> Result<SkillResolution> {
+        let local = self.prepare_local_skill_source(&spec)?;
+        let candidates = discover_local_skill_candidates(&spec, &local.root)?;
+        if candidates.is_empty() {
+            if let Some(cleanup_root) = &local.cleanup_root {
+                let _ = std::fs::remove_dir_all(cleanup_root);
+            }
+            return Ok(SkillResolution::NotFound {
+                install_spec: spec.raw.clone(),
+                source: spec.source(),
+                source_ref: "local".to_string(),
+                message: format!("No SKILL.md matched local source '{}'", spec.source()),
+            });
+        }
+        if candidates.len() > 1 {
+            if let Some(cleanup_root) = &local.cleanup_root {
+                let _ = std::fs::remove_dir_all(cleanup_root);
+            }
+            return Ok(SkillResolution::Multiple {
+                install_spec: spec.raw.clone(),
+                source: spec.source(),
+                source_ref: "local".to_string(),
+                candidate_count: candidates.len(),
+                candidates,
+            });
+        }
+        let candidate = candidates.into_iter().next().expect("candidate exists");
+        let package = self.resolve_local_package_from_candidate(&spec, &local, candidate)?;
+        if let Some(cleanup_root) = &local.cleanup_root {
+            let _ = std::fs::remove_dir_all(cleanup_root);
+        }
+        Ok(SkillResolution::Resolved(package))
     }
 
     async fn resolve_skill_package_from_values(
@@ -1086,60 +1512,100 @@ impl SkillRegistryToolsProvider {
         skill_id: &str,
         source_ref: Option<&str>,
     ) -> Result<ImportedSkillPackage> {
-        let (owner, repo) = parse_github_source(source).ok_or_else(|| {
-            anyhow!(
-                "Only GitHub-backed registry sources are supported in Phase 1. Unsupported source: {}",
-                source
-            )
-        })?;
-
-        let resolved_ref = match source_ref {
-            Some(value) => value.to_string(),
-            None => self.fetch_default_branch(&owner, &repo).await?,
+        let (owner, repo) =
+            parse_github_source(source).ok_or_else(|| anyhow!("Unsupported source: {}", source))?;
+        let spec = SkillInstallSpec {
+            owner,
+            repo,
+            skill_id: Some(skill_id.to_string()),
+            source_ref: source_ref.map(str::to_string),
+            skill_dir: None,
+            local_path: None,
+            raw: build_install_spec(source, skill_id),
         };
-        let tree = self.fetch_git_tree(&owner, &repo, &resolved_ref).await?;
-        let skill_dir = resolve_skill_dir(skill_id, &tree.tree).ok_or_else(|| {
-            anyhow!(
-                "Unable to locate SKILL.md for '{}' in repository {}/{}",
-                skill_id,
-                owner,
-                repo
-            )
-        })?;
+        match self.resolve_skill_resolution(spec).await? {
+            SkillResolution::Resolved(package) => Ok(package),
+            SkillResolution::Multiple {
+                candidate_count, ..
+            } => Err(anyhow!(
+                "Multiple skills were found ({} candidates); specify owner/repo@skill",
+                candidate_count
+            )),
+            SkillResolution::NotFound { message, .. } => Err(anyhow!(message)),
+        }
+    }
 
-        let skill_md_path = format!("{}/SKILL.md", skill_dir);
+    async fn resolve_skill_package_from_candidate(
+        &self,
+        spec: &SkillInstallSpec,
+        candidate: SkillCandidate,
+        tree: &GitHubTreeResponse,
+    ) -> Result<ImportedSkillPackage> {
+        let skill_md_path = candidate.skill_md_path.clone();
         let skill_md = self
-            .fetch_raw_text(&owner, &repo, &resolved_ref, &skill_md_path)
+            .fetch_raw_text(
+                &spec.owner,
+                &spec.repo,
+                &candidate.source_ref,
+                &skill_md_path,
+            )
             .await
             .with_context(|| format!("failed to load {}", skill_md_path))?;
         let (frontmatter, body) = PackageService::parse_skill_md(&skill_md)
-            .map_err(|e| anyhow!("invalid SKILL.md for '{}': {}", skill_id, e))?;
+            .map_err(|e| anyhow!("invalid SKILL.md for '{}': {}", candidate.skill_id, e))?;
 
         let mut files = Vec::new();
         let mut skipped_files = Vec::new();
+        let mut total_bytes = 0usize;
         for item in tree
             .tree
             .iter()
             .filter(|item| item.item_type == "blob")
-            .filter(|item| item.path.starts_with(&(skill_dir.clone() + "/")))
+            .filter(|item| candidate_contains_path(&candidate.skill_dir, &item.path))
             .filter(|item| item.path != skill_md_path)
         {
             let rel_path = item
                 .path
-                .strip_prefix(&(skill_dir.clone() + "/"))
+                .strip_prefix(&(candidate.skill_dir.clone() + "/"))
                 .unwrap_or(&item.path)
                 .to_string();
+            if files.len() >= MAX_PACKAGE_FILES {
+                skipped_files.push(format!(
+                    "{} (skipped: package file limit reached)",
+                    rel_path
+                ));
+                continue;
+            }
             match self
-                .fetch_raw_bytes(&owner, &repo, &resolved_ref, &item.path)
+                .fetch_raw_bytes(&spec.owner, &spec.repo, &candidate.source_ref, &item.path)
                 .await
             {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(content) => files.push(SkillFile {
-                        path: rel_path,
-                        content,
-                    }),
-                    Err(_) => skipped_files.push(rel_path),
-                },
+                Ok(bytes) => {
+                    if bytes.len() > MAX_PACKAGE_FILE_BYTES {
+                        skipped_files.push(format!(
+                            "{} (skipped: file exceeds {} bytes)",
+                            rel_path, MAX_PACKAGE_FILE_BYTES
+                        ));
+                        continue;
+                    }
+                    if total_bytes.saturating_add(bytes.len()) > MAX_PACKAGE_TOTAL_BYTES {
+                        skipped_files.push(format!(
+                            "{} (skipped: package exceeds {} bytes)",
+                            rel_path, MAX_PACKAGE_TOTAL_BYTES
+                        ));
+                        continue;
+                    }
+                    match String::from_utf8(bytes) {
+                        Ok(content) => {
+                            total_bytes += content.len();
+                            files.push(SkillFile {
+                                path: rel_path,
+                                content,
+                            });
+                        }
+                        Err(_) => skipped_files.push(rel_path),
+                    }
+                }
                 Err(_) => skipped_files.push(rel_path),
             }
         }
@@ -1154,14 +1620,195 @@ impl SkillRegistryToolsProvider {
         dedupe_tags(&mut tags);
 
         Ok(ImportedSkillPackage {
-            owner,
-            repo,
-            skill_id: skill_id.to_string(),
-            source_tree_sha: resolve_tree_sha(&skill_dir, &tree.tree)
+            source_type: "skills_sh_registry".to_string(),
+            source_repo: format!("{}/{}", spec.owner, spec.repo),
+            owner: spec.owner.clone(),
+            repo: spec.repo.clone(),
+            skill_id: candidate.skill_id.clone(),
+            source_tree_sha: resolve_tree_sha(&candidate.skill_dir, &tree.tree)
                 .unwrap_or_else(|| tree.sha.clone()),
-            skill_dir,
-            source_ref: resolved_ref,
-            source_commit: tree.sha,
+            skill_dir: candidate.skill_dir.clone(),
+            install_spec: candidate.install_spec,
+            source_url: candidate.skills_sh_url,
+            source_ref: candidate.source_ref,
+            source_commit: tree.sha.clone(),
+            skill_md,
+            description: frontmatter.description,
+            body,
+            tags,
+            files,
+            skipped_files,
+        })
+    }
+
+    fn prepare_local_skill_source(&self, spec: &SkillInstallSpec) -> Result<LocalSkillSource> {
+        let path = spec
+            .local_path
+            .as_ref()
+            .ok_or_else(|| anyhow!("local install source is required"))?;
+        if !path.exists() {
+            return Err(anyhow!(
+                "Local skill source '{}' does not exist",
+                path.display()
+            ));
+        }
+        self.ensure_local_source_in_workspace(path)?;
+        if path.is_dir() {
+            return Ok(LocalSkillSource {
+                root: path.clone(),
+                cleanup_root: None,
+            });
+        }
+
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase());
+        if matches!(
+            ext.as_deref(),
+            Some("zip")
+                | Some("rar")
+                | Some("7z")
+                | Some("tar")
+                | Some("gz")
+                | Some("tgz")
+                | Some("xz")
+                | Some("bz2")
+                | Some("zst")
+        ) {
+            return Err(anyhow!(
+                "Archive sources like '{}' are not imported directly. First extract the archive into the workspace with developer shell or another local tool, then import the extracted directory or SKILL.md path.",
+                path.display()
+            ));
+        }
+
+        if ext.as_deref() == Some("md")
+            && path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| value.eq_ignore_ascii_case("SKILL.md"))
+                .unwrap_or(false)
+        {
+            return Ok(LocalSkillSource {
+                root: path
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .ok_or_else(|| anyhow!("SKILL.md path has no parent directory"))?,
+                cleanup_root: None,
+            });
+        }
+        Err(anyhow!(
+            "Unsupported local skill source '{}'. Use a directory or a SKILL.md file.",
+            path.display()
+        ))
+    }
+
+    fn ensure_local_source_in_workspace(&self, path: &Path) -> Result<()> {
+        ensure_local_source_in_workspace_root(self.workspace_root.as_deref(), path)
+    }
+
+    fn resolve_local_package_from_candidate(
+        &self,
+        spec: &SkillInstallSpec,
+        local: &LocalSkillSource,
+        candidate: SkillCandidate,
+    ) -> Result<ImportedSkillPackage> {
+        let skill_root = if candidate.skill_dir.is_empty() {
+            local.root.clone()
+        } else {
+            local.root.join(&candidate.skill_dir)
+        };
+        let skill_md_path = skill_root.join("SKILL.md");
+        let skill_md = std::fs::read_to_string(&skill_md_path)
+            .with_context(|| format!("failed to load {}", skill_md_path.display()))?;
+        let (frontmatter, body) = PackageService::parse_skill_md(&skill_md)
+            .map_err(|e| anyhow!("invalid SKILL.md for '{}': {}", candidate.skill_id, e))?;
+
+        let mut files = Vec::new();
+        let mut skipped_files = Vec::new();
+        let mut total_bytes = 0usize;
+        for entry in std::fs::read_dir(&skill_root)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() || path == skill_md_path {
+                continue;
+            }
+            let rel_path = path
+                .strip_prefix(&skill_root)
+                .ok()
+                .and_then(|value| value.to_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    path.file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or_default()
+                        .to_string()
+                });
+            if files.len() >= MAX_PACKAGE_FILES {
+                skipped_files.push(format!(
+                    "{} (skipped: package file limit reached)",
+                    rel_path
+                ));
+                continue;
+            }
+            let bytes = std::fs::read(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            if bytes.len() > MAX_PACKAGE_FILE_BYTES {
+                skipped_files.push(format!(
+                    "{} (skipped: file exceeds {} bytes)",
+                    rel_path, MAX_PACKAGE_FILE_BYTES
+                ));
+                continue;
+            }
+            if total_bytes.saturating_add(bytes.len()) > MAX_PACKAGE_TOTAL_BYTES {
+                skipped_files.push(format!(
+                    "{} (skipped: package exceeds {} bytes)",
+                    rel_path, MAX_PACKAGE_TOTAL_BYTES
+                ));
+                continue;
+            }
+            match String::from_utf8(bytes) {
+                Ok(content) => {
+                    total_bytes += content.len();
+                    files.push(SkillFile {
+                        path: rel_path,
+                        content,
+                    });
+                }
+                Err(_) => skipped_files.push(rel_path),
+            }
+        }
+
+        let mut tags = frontmatter
+            .metadata
+            .as_ref()
+            .map(|meta| meta.keywords.clone())
+            .unwrap_or_default();
+        tags.push("local-import".to_string());
+        tags.push("registry-import".to_string());
+        dedupe_tags(&mut tags);
+
+        let source_path = spec
+            .local_path
+            .as_ref()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| local.root.to_string_lossy().to_string());
+
+        Ok(ImportedSkillPackage {
+            source_type: "local_skill_source".to_string(),
+            source_repo: source_path.clone(),
+            owner: String::new(),
+            repo: String::new(),
+            skill_id: candidate.skill_id,
+            skill_dir: candidate.skill_dir,
+            install_spec: candidate.install_spec,
+            source_url: build_local_install_spec(
+                spec.local_path.as_deref().unwrap_or(local.root.as_path()),
+                spec.skill_id.as_deref(),
+            ),
+            source_ref: "local".to_string(),
+            source_commit: "local".to_string(),
+            source_tree_sha: "local".to_string(),
             skill_md,
             description: frontmatter.description,
             body,
@@ -1177,7 +1824,7 @@ impl SkillRegistryToolsProvider {
         let mut filter = doc! {
             "team_id": team_oid,
             "is_deleted": { "$ne": true },
-            "metadata.source_type": "skills_sh_registry",
+            "metadata.import_mode": "registry_import",
         };
         if let Some(skill_id) = imported_skill_id {
             filter.insert("_id", ObjectId::parse_str(skill_id)?);
@@ -1190,6 +1837,9 @@ impl SkillRegistryToolsProvider {
         let Some(metadata) = parse_imported_metadata(skill.metadata.as_ref()) else {
             return Ok(None);
         };
+        if metadata.source_type != "skills_sh_registry" {
+            return Ok(None);
+        }
         let (owner, repo) = parse_github_source(&metadata.source_repo).ok_or_else(|| {
             anyhow!(
                 "Imported skill '{}' has invalid source_repo '{}'",
@@ -1198,13 +1848,22 @@ impl SkillRegistryToolsProvider {
             )
         })?;
         let imported_skill_key = infer_imported_skill_id(&metadata, &skill.name);
-        let package = self
-            .resolve_skill_package_from_values(
+        let package = timeout(
+            Duration::from_secs(PACKAGE_RESOLVE_TIMEOUT_SECS),
+            self.resolve_skill_package_from_values(
                 &metadata.source_repo,
                 &imported_skill_key,
                 Some(&metadata.source_ref),
+            ),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "Timed out checking registry update for '{}' after {}s",
+                skill.name,
+                PACKAGE_RESOLVE_TIMEOUT_SECS
             )
-            .await?;
+        })??;
         let current_tree_sha = metadata
             .source_tree_sha
             .clone()
@@ -1334,16 +1993,80 @@ impl SkillRegistryToolsProvider {
             "https://raw.githubusercontent.com/{}/{}/{}/{}",
             owner, repo, source_ref, path
         );
-        let response = self
+        match self.client.get(&url).send().await {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => return Ok(response.bytes().await?.to_vec()),
+                Err(err) => {
+                    tracing::debug!("raw GitHub fetch failed for {}: {}", path, err);
+                }
+            },
+            Err(err) => {
+                tracing::debug!("raw GitHub fetch failed for {}: {}", path, err);
+            }
+        }
+
+        let api_url = format!(
+            "https://api.github.com/repos/{}/{}/contents/{}",
+            owner, repo, path
+        );
+        let content = self
             .client
-            .get(&url)
+            .get(&api_url)
+            .query(&[("ref", source_ref)])
             .send()
             .await
-            .with_context(|| format!("failed to fetch {}", path))?
+            .with_context(|| format!("failed to fetch {} via GitHub contents API", path))?
             .error_for_status()
-            .with_context(|| format!("raw GitHub fetch returned non-success for {}", path))?;
-        Ok(response.bytes().await?.to_vec())
+            .with_context(|| {
+                format!(
+                    "GitHub contents API returned non-success for {}/{}@{}:{}",
+                    owner, repo, source_ref, path
+                )
+            })?
+            .json::<GitHubContentResponse>()
+            .await
+            .with_context(|| format!("failed to decode GitHub contents response for {}", path))?;
+        if !content.encoding.eq_ignore_ascii_case("base64") {
+            return Err(anyhow!(
+                "GitHub contents response for {} used unsupported encoding '{}'",
+                path,
+                content.encoding
+            ));
+        }
+        let normalized = content
+            .content
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>();
+        STANDARD
+            .decode(normalized)
+            .with_context(|| format!("failed to decode GitHub base64 content for {}", path))
     }
+}
+
+fn ensure_local_source_in_workspace_root(workspace_root: Option<&Path>, path: &Path) -> Result<()> {
+    let Some(workspace_root) = workspace_root else {
+        return Ok(());
+    };
+    let workspace_root = workspace_root.canonicalize().with_context(|| {
+        format!(
+            "workspace root '{}' is not accessible for local skill import",
+            workspace_root.display()
+        )
+    })?;
+    let source_path = path.canonicalize().with_context(|| {
+        format!(
+            "local skill source '{}' is not accessible for import",
+            path.display()
+        )
+    })?;
+    if source_path.starts_with(&workspace_root) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "Local skill source '{}' is outside the current workspace. Import the attachment or extracted skill into the workspace first, then use that workspace path.",
+        path.display()
+    ))
 }
 
 #[async_trait::async_trait]
@@ -1482,6 +2205,361 @@ fn parse_github_source(source: &str) -> Option<(String, String)> {
     Some((owner.to_string(), repo.to_string()))
 }
 
+fn build_install_spec(source: &str, skill_id: &str) -> String {
+    format!(
+        "{}@{}",
+        source.trim().trim_end_matches('/'),
+        skill_id.trim()
+    )
+}
+
+fn build_skills_sh_url(source: &str, skill_id: &str) -> String {
+    let source = source
+        .trim()
+        .trim_end_matches('/')
+        .strip_prefix("https://github.com/")
+        .unwrap_or(source.trim().trim_end_matches('/'));
+    format!("https://skills.sh/{}/{}", source, skill_id.trim())
+}
+
+fn build_local_install_spec(path: &Path, skill_id: Option<&str>) -> String {
+    let mut spec = format!("file://{}", path.to_string_lossy().replace('\\', "/"));
+    if let Some(skill_id) = skill_id.filter(|value| !value.trim().is_empty()) {
+        spec.push_str("#skill=");
+        spec.push_str(skill_id.trim());
+    }
+    spec
+}
+
+fn parse_install_spec(raw: &str) -> Result<SkillInstallSpec> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Err(anyhow!("install_spec is required"));
+    }
+
+    let local_path = Path::new(trimmed);
+    if local_path.is_absolute() {
+        return Ok(SkillInstallSpec {
+            owner: String::new(),
+            repo: String::new(),
+            skill_id: None,
+            source_ref: None,
+            skill_dir: None,
+            local_path: Some(local_path.to_path_buf()),
+            raw: trimmed.to_string(),
+        });
+    }
+
+    if let Ok(url) = Url::parse(trimmed) {
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        if url.scheme().eq_ignore_ascii_case("file") {
+            let path = url
+                .to_file_path()
+                .map_err(|_| anyhow!("Invalid local file URL '{}'", raw))?;
+            let skill_id = url
+                .fragment()
+                .and_then(|fragment| fragment.strip_prefix("skill="))
+                .map(str::to_string);
+            return Ok(SkillInstallSpec {
+                owner: String::new(),
+                repo: String::new(),
+                skill_id,
+                source_ref: None,
+                skill_dir: None,
+                local_path: Some(path),
+                raw: trimmed.to_string(),
+            });
+        }
+        let segments = url
+            .path_segments()
+            .map(|items| items.filter(|item| !item.is_empty()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if host == "skills.sh" || host == "www.skills.sh" {
+            if segments.len() >= 3 {
+                return Ok(SkillInstallSpec {
+                    owner: segments[0].to_string(),
+                    repo: segments[1].to_string(),
+                    skill_id: Some(segments[2].to_string()),
+                    source_ref: None,
+                    skill_dir: None,
+                    local_path: None,
+                    raw: trimmed.to_string(),
+                });
+            }
+        }
+        if host == "github.com" || host == "www.github.com" {
+            if segments.len() >= 2 {
+                let mut spec = SkillInstallSpec {
+                    owner: segments[0].to_string(),
+                    repo: segments[1].trim_end_matches(".git").to_string(),
+                    skill_id: None,
+                    source_ref: None,
+                    skill_dir: None,
+                    local_path: None,
+                    raw: trimmed.to_string(),
+                };
+                if segments.get(2) == Some(&"tree") && segments.len() >= 4 {
+                    spec.source_ref = Some(segments[3].to_string());
+                    if segments.len() > 4 {
+                        let path = segments[4..].join("/");
+                        spec.skill_dir = Some(path.clone());
+                        spec.skill_id = path.rsplit('/').next().map(str::to_string);
+                    }
+                }
+                return Ok(spec);
+            }
+        }
+    }
+
+    if let Some((source, skill_id)) = trimmed.split_once('@') {
+        let (owner, repo) = parse_github_source(source)
+            .ok_or_else(|| anyhow!("Invalid install spec source '{}'", source))?;
+        let skill_id = skill_id.trim();
+        if skill_id.is_empty() {
+            return Err(anyhow!("install spec '{}' is missing a skill name", raw));
+        }
+        return Ok(SkillInstallSpec {
+            owner,
+            repo,
+            skill_id: Some(skill_id.to_string()),
+            source_ref: None,
+            skill_dir: None,
+            local_path: None,
+            raw: trimmed.to_string(),
+        });
+    }
+
+    let (owner, repo) = parse_github_source(trimmed)
+        .ok_or_else(|| anyhow!("Unsupported install spec '{}'", raw))?;
+    Ok(SkillInstallSpec {
+        owner,
+        repo,
+        skill_id: None,
+        source_ref: None,
+        skill_dir: None,
+        local_path: None,
+        raw: trimmed.to_string(),
+    })
+}
+
+fn skill_id_from_dir(owner: &str, repo: &str, dir: &str) -> String {
+    if dir.is_empty() {
+        repo.to_string()
+    } else {
+        dir.rsplit('/').next().unwrap_or(repo).to_string()
+    }
+    .trim()
+    .trim_end_matches(".git")
+    .to_string()
+    .if_empty_then(format!("{}-skill", owner))
+}
+
+trait EmptyFallback {
+    fn if_empty_then(self, fallback: String) -> String;
+}
+
+impl EmptyFallback for String {
+    fn if_empty_then(self, fallback: String) -> String {
+        if self.is_empty() {
+            fallback
+        } else {
+            self
+        }
+    }
+}
+
+fn candidate_contains_path(skill_dir: &str, path: &str) -> bool {
+    if skill_dir.is_empty() {
+        path != "SKILL.md" && !path.contains('/')
+    } else {
+        path.starts_with(&(skill_dir.to_string() + "/"))
+    }
+}
+
+fn discover_skill_candidates(
+    spec: &SkillInstallSpec,
+    source_ref: &str,
+    tree: &[GitHubTreeItem],
+) -> Vec<SkillCandidate> {
+    let requested_dir = spec
+        .skill_dir
+        .as_deref()
+        .map(|value| value.trim().trim_matches('/').trim_end_matches("/SKILL.md"));
+    let requested_skill = spec.skill_id.as_deref().map(str::trim);
+    let source = spec.source();
+    let mut candidates = tree
+        .iter()
+        .filter(|item| item.item_type == "blob")
+        .filter(|item| item.path == "SKILL.md" || item.path.ends_with("/SKILL.md"))
+        .filter_map(|item| {
+            let dir = item
+                .path
+                .strip_suffix("/SKILL.md")
+                .map(str::to_string)
+                .or_else(|| (item.path == "SKILL.md").then(String::new))?;
+            let skill_id = skill_id_from_dir(&spec.owner, &spec.repo, &dir);
+            if let Some(requested_dir) = requested_dir {
+                if dir != requested_dir {
+                    return None;
+                }
+            }
+            if let Some(requested_skill) = requested_skill {
+                let path_matches = dir == requested_skill
+                    || dir == format!("skills/{}", requested_skill)
+                    || dir.rsplit('/').next() == Some(requested_skill);
+                if skill_id != requested_skill && !path_matches {
+                    return None;
+                }
+            }
+            let install_spec = spec.canonical_for_skill(&skill_id);
+            Some(SkillCandidate {
+                skill_id: skill_id.clone(),
+                name: skill_id.clone(),
+                source: source.clone(),
+                source_ref: source_ref.to_string(),
+                skill_dir: dir.clone(),
+                install_spec,
+                skills_sh_url: build_skills_sh_url(&source, &skill_id),
+                skill_md_path: item.path.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        candidate_rank(&left.skill_dir, requested_skill)
+            .cmp(&candidate_rank(&right.skill_dir, requested_skill))
+            .then(left.skill_dir.cmp(&right.skill_dir))
+    });
+    candidates
+}
+
+fn candidate_rank(skill_dir: &str, requested_skill: Option<&str>) -> u8 {
+    if skill_dir.is_empty() {
+        return 0;
+    }
+    if let Some(skill) = requested_skill {
+        if skill_dir == format!("skills/{}", skill) {
+            return 1;
+        }
+        if skill_dir == skill {
+            return 2;
+        }
+        if skill_dir.rsplit('/').next() == Some(skill) {
+            return 3;
+        }
+    }
+    if skill_dir.starts_with("skills/") {
+        4
+    } else {
+        5
+    }
+}
+
+fn discover_local_skill_candidates(
+    spec: &SkillInstallSpec,
+    root: &Path,
+) -> Result<Vec<SkillCandidate>> {
+    let requested_dir = spec
+        .skill_dir
+        .as_deref()
+        .map(|value| value.trim().trim_matches('/').trim_end_matches("/SKILL.md"));
+    let requested_skill = spec.skill_id.as_deref().map(str::trim);
+    let source = spec.source();
+    let mut candidates = Vec::new();
+
+    gather_local_skill_candidates(
+        root,
+        root,
+        spec,
+        &source,
+        requested_dir,
+        requested_skill,
+        &mut candidates,
+    )?;
+    candidates.sort_by(|left, right| {
+        candidate_rank(&left.skill_dir, requested_skill)
+            .cmp(&candidate_rank(&right.skill_dir, requested_skill))
+            .then(left.skill_dir.cmp(&right.skill_dir))
+    });
+    Ok(candidates)
+}
+
+fn gather_local_skill_candidates(
+    root: &Path,
+    current: &Path,
+    spec: &SkillInstallSpec,
+    source: &str,
+    requested_dir: Option<&str>,
+    requested_skill: Option<&str>,
+    out: &mut Vec<SkillCandidate>,
+) -> Result<()> {
+    let skill_md_path = current.join("SKILL.md");
+    if skill_md_path.is_file() {
+        let rel_dir = current
+            .strip_prefix(root)
+            .ok()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .replace('\\', "/");
+        let rel_dir = rel_dir.trim_matches('/').to_string();
+        let skill_id = if rel_dir.is_empty() {
+            spec.skill_id
+                .clone()
+                .or_else(|| {
+                    current
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| "local-skill".to_string())
+        } else {
+            rel_dir
+                .rsplit('/')
+                .next()
+                .unwrap_or("local-skill")
+                .to_string()
+        };
+        if requested_dir.is_none_or(|value| value == rel_dir)
+            && requested_skill.is_none_or(|value| {
+                value == skill_id
+                    || rel_dir == value
+                    || rel_dir == format!("skills/{}", value)
+                    || rel_dir.rsplit('/').next() == Some(value)
+            })
+        {
+            out.push(SkillCandidate {
+                skill_id: skill_id.clone(),
+                name: skill_id.clone(),
+                source: source.to_string(),
+                source_ref: "local".to_string(),
+                skill_dir: rel_dir.clone(),
+                install_spec: spec.canonical_for_skill(&skill_id),
+                skills_sh_url: build_local_install_spec(
+                    spec.local_path.as_deref().unwrap_or(root),
+                    Some(&skill_id),
+                ),
+                skill_md_path: skill_md_path.to_string_lossy().to_string(),
+            });
+        }
+    }
+
+    for entry in std::fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            gather_local_skill_candidates(
+                root,
+                &path,
+                spec,
+                source,
+                requested_dir,
+                requested_skill,
+                out,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn extract_initial_skills(html: &str) -> Result<Vec<SkillsShPopularItem>> {
     let marker = r#"\"initialSkills\":"#;
     let marker_pos = html
@@ -1605,17 +2683,25 @@ fn dedupe_tags(tags: &mut Vec<String>) {
 fn build_import_metadata(
     package: &ImportedSkillPackage,
     visibility: Option<&str>,
+    actor_id: &str,
 ) -> serde_json::Value {
+    let registry_provider = if package.source_type == "local_skill_source" {
+        "local"
+    } else {
+        "skills.sh"
+    };
     json!({
-        "source_type": "skills_sh_registry",
-        "source_repo": format!("{}/{}", package.owner, package.repo),
+        "source_type": package.source_type,
+        "source_repo": package.source_repo,
         "source_skill_path": package.skill_dir,
-        "source_url": format!("https://skills.sh/{}/{}/{}", package.owner, package.repo, package.skill_id),
+        "install_spec": package.install_spec,
+        "source_url": package.source_url,
         "source_ref": package.source_ref,
         "source_commit": package.source_commit,
         "source_tree_sha": package.source_tree_sha,
         "import_mode": "registry_import",
-        "registry_provider": "skills.sh",
+        "registry_provider": registry_provider,
+        "import_actor": actor_id,
         "skipped_files": package.skipped_files,
         "visibility_override": visibility,
     })
@@ -1638,8 +2724,9 @@ fn infer_imported_skill_id(metadata: &ImportedSkillMetadata, fallback_name: &str
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_initial_skills, infer_imported_skill_id, parse_github_source,
-        parse_imported_metadata, resolve_skill_dir, resolve_tree_sha, GitHubTreeItem,
+        discover_skill_candidates, ensure_local_source_in_workspace_root, extract_initial_skills,
+        infer_imported_skill_id, parse_github_source, parse_imported_metadata, parse_install_spec,
+        resolve_skill_dir, resolve_tree_sha, GitHubTreeItem, SkillInstallSpec,
     };
     use serde_json::json;
 
@@ -1653,6 +2740,53 @@ mod tests {
             parse_github_source("https://github.com/vercel-labs/skills"),
             Some(("vercel-labs".to_string(), "skills".to_string()))
         );
+    }
+
+    #[test]
+    fn parse_install_spec_accepts_cli_and_url_forms() {
+        let spec = parse_install_spec("vercel-labs/skills@find-skills").expect("cli spec");
+        assert_eq!(spec.owner, "vercel-labs");
+        assert_eq!(spec.repo, "skills");
+        assert_eq!(spec.skill_id.as_deref(), Some("find-skills"));
+
+        let spec = parse_install_spec("https://skills.sh/vercel-labs/skills/find-skills")
+            .expect("skills.sh url");
+        assert_eq!(spec.owner, "vercel-labs");
+        assert_eq!(spec.repo, "skills");
+        assert_eq!(spec.skill_id.as_deref(), Some("find-skills"));
+
+        let spec = parse_install_spec(
+            "https://github.com/vercel-labs/skills/tree/main/skills/find-skills",
+        )
+        .expect("github tree url");
+        assert_eq!(spec.source_ref.as_deref(), Some("main"));
+        assert_eq!(spec.skill_dir.as_deref(), Some("skills/find-skills"));
+        assert_eq!(spec.skill_id.as_deref(), Some("find-skills"));
+
+        let spec =
+            parse_install_spec("https://github.com/vercel-labs/skills").expect("github repo url");
+        assert_eq!(spec.owner, "vercel-labs");
+        assert_eq!(spec.repo, "skills");
+        assert!(spec.skill_id.is_none());
+    }
+
+    #[test]
+    fn local_skill_source_must_stay_inside_workspace_when_context_is_set() {
+        let base =
+            std::env::temp_dir().join(format!("agime-skill-boundary-{}", uuid::Uuid::new_v4()));
+        let workspace = base.join("workspace");
+        let inside = workspace.join("runs").join("run-1").join("skill");
+        let outside = base.join("outside-skill");
+        std::fs::create_dir_all(&inside).expect("inside dir");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(inside.join("SKILL.md"), "# Inside").expect("inside skill");
+        std::fs::write(outside.join("SKILL.md"), "# Outside").expect("outside skill");
+
+        assert!(ensure_local_source_in_workspace_root(Some(&workspace), &inside).is_ok());
+        let error =
+            ensure_local_source_in_workspace_root(Some(&workspace), &outside).expect_err("outside");
+        assert!(error.to_string().contains("outside the current workspace"));
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
@@ -1676,6 +2810,69 @@ mod tests {
     }
 
     #[test]
+    fn discover_candidates_supports_root_skills_root_and_nested() {
+        let spec = SkillInstallSpec {
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+            skill_id: None,
+            source_ref: None,
+            skill_dir: None,
+            local_path: None,
+            raw: "owner/repo".to_string(),
+        };
+        let tree = vec![
+            GitHubTreeItem {
+                path: "SKILL.md".to_string(),
+                item_type: "blob".to_string(),
+                sha: None,
+            },
+            GitHubTreeItem {
+                path: "skills/find-skills/SKILL.md".to_string(),
+                item_type: "blob".to_string(),
+                sha: None,
+            },
+            GitHubTreeItem {
+                path: "packages/review/SKILL.md".to_string(),
+                item_type: "blob".to_string(),
+                sha: None,
+            },
+        ];
+        let candidates = discover_skill_candidates(&spec, "main", &tree);
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(candidates[0].skill_id, "repo");
+        assert_eq!(candidates[1].skill_id, "find-skills");
+        assert_eq!(candidates[2].skill_id, "review");
+    }
+
+    #[test]
+    fn discover_candidates_filters_requested_skill() {
+        let spec = SkillInstallSpec {
+            owner: "vercel-labs".to_string(),
+            repo: "skills".to_string(),
+            skill_id: Some("find-skills".to_string()),
+            source_ref: None,
+            skill_dir: None,
+            local_path: None,
+            raw: "vercel-labs/skills@find-skills".to_string(),
+        };
+        let tree = vec![
+            GitHubTreeItem {
+                path: "skills/find-skills/SKILL.md".to_string(),
+                item_type: "blob".to_string(),
+                sha: None,
+            },
+            GitHubTreeItem {
+                path: "skills/other/SKILL.md".to_string(),
+                item_type: "blob".to_string(),
+                sha: None,
+            },
+        ];
+        let candidates = discover_skill_candidates(&spec, "main", &tree);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].install_spec, "vercel-labs/skills@find-skills");
+    }
+
+    #[test]
     fn resolve_tree_sha_uses_directory_tree_entry() {
         let tree = vec![GitHubTreeItem {
             path: "skills/find-skills".to_string(),
@@ -1696,7 +2893,9 @@ mod tests {
             "source_skill_path": "skills/find-skills",
             "source_ref": "main",
             "source_commit": "rootsha",
-            "source_tree_sha": "treesha"
+            "source_tree_sha": "treesha",
+            "install_spec": "vercel-labs/skills@find-skills",
+            "import_actor": "user-1"
         });
         let parsed = parse_imported_metadata(Some(&metadata)).expect("metadata");
         assert_eq!(parsed.source_repo, "vercel-labs/skills");

@@ -33,11 +33,6 @@
 //! ```ignore
 //! use agime::capabilities;
 //!
-//! // Check if a model supports thinking
-//! if capabilities::supports_thinking("claude-3-7-sonnet-latest") {
-//!     // Enable thinking UI
-//! }
-//!
 //! // Get resolved capabilities
 //! let caps = capabilities::resolve("claude-3-7-sonnet-latest");
 //! if caps.thinking_enabled {
@@ -56,6 +51,7 @@ pub use registry::{CapabilityRegistry, ConfigSource};
 pub use runtime::ResolvedCapabilities;
 pub use types::*;
 
+use crate::model::{ModelConfig, ModelLimitConfig};
 use std::path::PathBuf;
 
 // ============================================================================
@@ -107,23 +103,16 @@ pub fn resolve(model_name: &str) -> ResolvedCapabilities {
     with_registry(|r| r.resolve(model_name))
 }
 
-/// Resolve capabilities for a model and apply runtime thinking overrides.
-///
-/// This is used by agent-specific runtime configuration. Unsupported models
-/// automatically fall back to thinking disabled, even if the override requests it.
-pub fn resolve_with_thinking_override(
-    model_name: &str,
-    thinking_enabled: Option<bool>,
-    thinking_budget: Option<u32>,
-) -> ResolvedCapabilities {
+/// Resolve capabilities for a model and apply runtime thinking/reasoning overrides from ModelConfig.
+pub fn resolve_with_model_config(model_config: &ModelConfig) -> ResolvedCapabilities {
     with_registry(|r| {
-        r.resolve_with_thinking_override(model_name, thinking_enabled, thinking_budget)
+        r.resolve_with_runtime_overrides(
+            &model_config.model_name,
+            model_config.thinking_enabled,
+            model_config.thinking_budget,
+            model_config.reasoning_effort.as_deref(),
+        )
     })
-}
-
-/// Check if a model supports thinking mode.
-pub fn supports_thinking(model_name: &str) -> bool {
-    with_registry(|r| r.supports_thinking(model_name))
 }
 
 /// Check if thinking mode is enabled for a model.
@@ -131,21 +120,6 @@ pub fn supports_thinking(model_name: &str) -> bool {
 /// This considers both model support AND user/env configuration.
 pub fn is_thinking_enabled(model_name: &str) -> bool {
     with_registry(|r| r.is_thinking_enabled(model_name))
-}
-
-/// Get thinking budget for a model (if thinking is enabled).
-pub fn get_thinking_budget(model_name: &str) -> Option<u32> {
-    with_registry(|r| r.get_thinking_budget(model_name))
-}
-
-/// Check if a model supports reasoning effort (O-series models).
-pub fn supports_reasoning(model_name: &str) -> bool {
-    with_registry(|r| r.supports_reasoning(model_name))
-}
-
-/// Get reasoning effort level for a model.
-pub fn get_reasoning_effort(model_name: &str) -> Option<String> {
-    with_registry(|r| r.get_reasoning_effort(model_name))
 }
 
 /// Get system role name for a model ("system" or "developer").
@@ -173,19 +147,9 @@ pub fn get_schema_processor(model_name: &str) -> Option<String> {
     with_registry(|r| r.get_schema_processor(model_name))
 }
 
-/// Infer provider from model name.
-pub fn infer_provider(model_name: &str) -> Option<String> {
-    with_registry(|r| r.infer_provider(model_name))
-}
-
-/// Get all model patterns that support thinking.
-pub fn get_thinking_models() -> Vec<String> {
-    with_registry(|r| r.get_thinking_models())
-}
-
-/// Get all model patterns that support reasoning.
-pub fn get_reasoning_models() -> Vec<String> {
-    with_registry(|r| r.get_reasoning_models())
+/// Get all model context-length hints from the capability registry.
+pub fn get_model_limit_hints() -> Vec<ModelLimitConfig> {
+    with_registry(|r| r.get_model_limit_hints())
 }
 
 /// Reload capability configuration.

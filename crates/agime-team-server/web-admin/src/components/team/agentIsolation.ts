@@ -71,6 +71,7 @@ export interface AgentIsolationResult {
 }
 
 export interface DedicatedAvatarPortalLink {
+  linkKind: 'portal' | 'orphan_service';
   portalId: string;
   portalName: string;
   portalSlug: string;
@@ -172,6 +173,7 @@ export function buildDedicatedAvatarGrouping(
     const serviceAgent = serviceId ? agentById.get(serviceId) || null : null;
     if (serviceAgent) usedServiceAgentIds.add(serviceAgent.id);
     ensureGroup(groupManagerId).portals.push({
+      linkKind: 'portal',
       portalId: portal.id,
       portalName: portal.name,
       portalSlug: portal.slug,
@@ -190,6 +192,7 @@ export function buildDedicatedAvatarGrouping(
     if (!serviceDedicatedIds.has(agent.id) || usedServiceAgentIds.has(agent.id)) continue;
     const fallbackManagerId = agent.owner_manager_agent_id?.trim() || UNGROUPED_MANAGER_KEY;
     ensureGroup(fallbackManagerId).portals.push({
+      linkKind: 'orphan_service',
       portalId: `orphan:${agent.id}`,
       portalName: agent.name,
       portalSlug: '',

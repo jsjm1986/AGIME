@@ -91,8 +91,5 @@
   },
   "extensionmanager__manage_extensions": {
     "description": "启用或禁用扩展。"
-  },
-  "platform__manage_schedule": {
-    "description": "管理计划任务。"
   }
 }

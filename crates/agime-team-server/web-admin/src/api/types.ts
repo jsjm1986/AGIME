@@ -183,6 +183,8 @@ export interface SkillRegistrySearchItem {
   skill_id: string;
   name: string;
   source: string;
+  install_spec?: string;
+  skills_sh_url?: string;
   installs: number;
   is_duplicate: boolean;
   supports_preview: boolean;
@@ -200,19 +202,37 @@ export interface SkillRegistryPreviewFile {
   path: string;
 }
 
+export interface SkillRegistryCandidate {
+  skill_id: string;
+  name: string;
+  source: string;
+  source_ref: string;
+  skill_dir: string;
+  install_spec: string;
+  skills_sh_url: string;
+  skill_md_path: string;
+}
+
 export interface SkillRegistryPreviewResponse {
   team_id: string;
+  resolution_status?: "resolved" | "multiple_candidates" | "not_found";
+  install_spec?: string;
+  skills_sh_url?: string;
+  source_url?: string;
+  candidate_count?: number;
+  candidates?: SkillRegistryCandidate[];
+  message?: string;
   source: string;
-  skill_id: string;
-  source_ref: string;
-  source_commit: string;
-  skill_dir: string;
-  name: string;
-  description: string;
-  tags: string[];
-  already_imported: boolean;
-  skill_md: string;
-  truncated: boolean;
+  skill_id?: string;
+  source_ref?: string;
+  source_commit?: string;
+  skill_dir?: string;
+  name?: string;
+  description?: string;
+  tags?: string[];
+  already_imported?: boolean;
+  skill_md?: string;
+  truncated?: boolean;
   files: SkillRegistryPreviewFile[];
   skipped_files: string[];
 }
@@ -221,6 +241,9 @@ export interface SkillRegistryImportResponse {
   team_id: string;
   source: string;
   skill_id: string;
+  install_spec?: string;
+  skills_sh_url?: string;
+  source_url?: string;
   source_ref: string;
   source_commit: string;
   imported_skill_id: string;
@@ -229,6 +252,10 @@ export interface SkillRegistryImportResponse {
   visibility: string;
   file_count: number;
   skipped_files: string[];
+  verification?: {
+    persisted?: boolean;
+    catalog_visible?: boolean;
+  };
 }
 
 export interface ImportedRegistrySkillSummary {

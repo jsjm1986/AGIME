@@ -32,10 +32,10 @@ use super::utils::{
 use crate::config::declarative_providers::DeclarativeProviderConfig;
 use crate::config::env_compat::get_env_compat_or;
 use crate::conversation::message::Message;
-
 use crate::model::ModelConfig;
 use crate::providers::base::MessageStream;
 use crate::providers::utils::RequestLog;
+use crate::runtime_profile::{apply_effective_execution, resolve_for_provider_with_model};
 use rmcp::model::{Tool, ToolChoiceMode};
 
 pub const OPEN_AI_DEFAULT_MODEL: &str = "gpt-4o";
@@ -235,15 +235,21 @@ impl OpenAiProvider {
         tools: &[Tool],
         tool_choice_mode: Option<ToolChoiceMode>,
     ) -> Result<(Message, ProviderUsage), ProviderError> {
-        if Self::uses_responses_api(&model_config.model_name) {
+        let runtime_profile = resolve_for_provider_with_model(self, model_config).await;
+        let effective_model_config = apply_effective_execution(model_config, &runtime_profile);
+        if Self::uses_responses_api(&effective_model_config.model_name) {
             let payload = create_responses_request_with_tool_choice(
-                model_config,
+                &effective_model_config,
                 system,
                 messages,
                 tools,
                 tool_choice_mode,
             )?;
-            let mut log = RequestLog::start(&self.model, &payload)?;
+            let mut log = RequestLog::start_with_runtime_profile(
+                &effective_model_config,
+                &payload,
+                Some(&runtime_profile),
+            )?;
 
             let json_response = self
                 .with_retry(|| async {
@@ -271,7 +277,7 @@ impl OpenAiProvider {
             Ok((message, ProviderUsage::new(model, usage)))
         } else {
             let payload = create_request_with_tool_choice(
-                model_config,
+                &effective_model_config,
                 system,
                 messages,
                 tools,
@@ -279,7 +285,11 @@ impl OpenAiProvider {
                 tool_choice_mode,
             )?;
 
-            let mut log = RequestLog::start(&self.model, &payload)?;
+            let mut log = RequestLog::start_with_runtime_profile(
+                &effective_model_config,
+                &payload,
+                Some(&runtime_profile),
+            )?;
             let json_response = self
                 .with_retry(|| async {
                     let payload_clone = payload.clone();
@@ -292,10 +302,8 @@ impl OpenAiProvider {
 
             let message = response_to_message(
                 &json_response,
-                Some(&crate::capabilities::resolve_with_thinking_override(
-                    &model_config.model_name,
-                    model_config.thinking_enabled,
-                    model_config.thinking_budget,
+                Some(&crate::capabilities::resolve_with_model_config(
+                    &effective_model_config,
                 )),
             )?;
             let usage = json_response
@@ -434,11 +442,18 @@ impl Provider for OpenAiProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<MessageStream, ProviderError> {
-        if Self::uses_responses_api(&self.model.model_name) {
-            let mut payload = create_responses_request(&self.model, system, messages, tools)?;
+        let runtime_profile = resolve_for_provider_with_model(self, &self.model).await;
+        let effective_model_config = apply_effective_execution(&self.model, &runtime_profile);
+        if Self::uses_responses_api(&effective_model_config.model_name) {
+            let mut payload =
+                create_responses_request(&effective_model_config, system, messages, tools)?;
             payload["stream"] = serde_json::Value::Bool(true);
 
-            let mut log = RequestLog::start(&self.model, &payload)?;
+            let mut log = RequestLog::start_with_runtime_profile(
+                &effective_model_config,
+                &payload,
+                Some(&runtime_profile),
+            )?;
 
             let response = self
                 .with_retry(|| async {
@@ -469,13 +484,22 @@ impl Provider for OpenAiProvider {
                 }
             }))
         } else {
-            let mut payload =
-                create_request(&self.model, system, messages, tools, &ImageFormat::OpenAi)?;
+            let mut payload = create_request(
+                &effective_model_config,
+                system,
+                messages,
+                tools,
+                &ImageFormat::OpenAi,
+            )?;
             payload["stream"] = serde_json::Value::Bool(true);
             payload["stream_options"] = json!({
                 "include_usage": true,
             });
-            let mut log = RequestLog::start(&self.model, &payload)?;
+            let mut log = RequestLog::start_with_runtime_profile(
+                &effective_model_config,
+                &payload,
+                Some(&runtime_profile),
+            )?;
 
             let response = self
                 .with_retry(|| async {
@@ -491,11 +515,7 @@ impl Provider for OpenAiProvider {
                 })?;
 
             let stream = response.bytes_stream().map_err(io::Error::other);
-            let caps = crate::capabilities::resolve_with_thinking_override(
-                &self.model.model_name,
-                self.model.thinking_enabled,
-                self.model.thinking_budget,
-            );
+            let caps = crate::capabilities::resolve_with_model_config(&effective_model_config);
 
             Ok(Box::pin(try_stream! {
                 let stream_reader = StreamReader::new(stream);

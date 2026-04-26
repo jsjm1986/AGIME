@@ -204,10 +204,10 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
       setActionLoadingId(user.id);
       if (user.status === 'active') {
         await externalUsersApi.disable(teamId, user.id);
-        addToast('success', t('teamAdmin.externalUsers.disabled', '已禁用外部用户'));
+        addToast('success', t('teamAdmin.externalUsers.disabled', 'External user disabled'));
       } else {
         await externalUsersApi.enable(teamId, user.id);
-        addToast('success', t('teamAdmin.externalUsers.enabled', '已启用外部用户'));
+        addToast('success', t('teamAdmin.externalUsers.enabled', 'External user enabled'));
       }
       await loadUsers();
       if (selectedUserId === user.id) {
@@ -226,7 +226,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
     try {
       setResetSaving(true);
       await externalUsersApi.resetPassword(teamId, resetTarget.id, newPassword.trim());
-      addToast('success', t('teamAdmin.externalUsers.passwordReset', '密码已重置'));
+      addToast('success', t('teamAdmin.externalUsers.passwordReset', 'Password reset'));
       setResetTarget(null);
       setNewPassword('');
       setActiveMobilePanel(null);
@@ -247,7 +247,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
             applySearch();
           }
         }}
-        placeholder={t('teamAdmin.externalUsers.search', '按用户名、显示名称或手机号搜索')}
+        placeholder={t('teamAdmin.externalUsers.search', 'Search by username, display name, or phone number')}
       />
       <Select
         value={statusFilter}
@@ -257,20 +257,20 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
         }}
       >
         <SelectTrigger className="h-10">
-          <SelectValue placeholder={t('teamAdmin.externalUsers.statusAll', '全部状态')} />
+          <SelectValue placeholder={t('teamAdmin.externalUsers.statusAll', 'All statuses')} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">{t('teamAdmin.externalUsers.statusAll', '全部状态')}</SelectItem>
-          <SelectItem value="active">{t('teamAdmin.externalUsers.statusActive', '启用中')}</SelectItem>
-          <SelectItem value="disabled">{t('teamAdmin.externalUsers.statusDisabled', '已禁用')}</SelectItem>
+          <SelectItem value="all">{t('teamAdmin.externalUsers.statusAll', 'All statuses')}</SelectItem>
+          <SelectItem value="active">{t('teamAdmin.externalUsers.statusActive', 'Active')}</SelectItem>
+          <SelectItem value="disabled">{t('teamAdmin.externalUsers.statusDisabled', 'Disabled')}</SelectItem>
         </SelectContent>
       </Select>
       <div className="flex gap-2">
         <Button variant="outline" className="flex-1" onClick={applySearch}>
-          {t('common.search', '搜索')}
+          {t('common.search', 'Search')}
         </Button>
         <Button variant="outline" className="flex-1" onClick={() => void loadUsers()}>
-          {t('common.refresh', '刷新')}
+          {t('common.refresh', 'Refresh')}
         </Button>
       </div>
     </div>
@@ -284,12 +284,12 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
     }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('teamAdmin.externalUsers.resetPassword', '重置密码')}</DialogTitle>
+          <DialogTitle>{t('teamAdmin.externalUsers.resetPassword', 'Reset password')}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 py-2">
           <p className="text-sm text-[hsl(var(--muted-foreground))]">
             {resetTarget
-              ? t('teamAdmin.externalUsers.resetPasswordHint', '为 {{name}} 设置一个新密码。当前用户的已有登录 session 会被清理。', {
+              ? t('teamAdmin.externalUsers.resetPasswordHint', 'Set a new password for {{name}}. Existing login sessions for this user will be cleared.', {
                   name: resetTarget.displayName || resetTarget.username,
                 })
               : ''}
@@ -298,7 +298,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
             type="password"
             value={newPassword}
             onChange={(event) => setNewPassword(event.target.value)}
-            placeholder={t('teamAdmin.externalUsers.newPassword', '请输入新密码')}
+            placeholder={t('teamAdmin.externalUsers.newPassword', 'Enter a new password')}
           />
         </div>
         <DialogFooter>
@@ -311,7 +311,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
             {t('common.cancel')}
           </Button>
           <Button onClick={() => void handleResetPassword()} disabled={resetSaving || !newPassword.trim()}>
-            {resetSaving ? t('common.saving') : t('common.confirm', '确认')}
+            {resetSaving ? t('common.saving') : t('common.confirm', 'Confirm')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -320,13 +320,13 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
 
   const statusLabel = (status: ExternalUserStatus) => (
     status === 'active'
-      ? t('teamAdmin.externalUsers.statusActive', '启用中')
-      : t('teamAdmin.externalUsers.statusDisabled', '已禁用')
+      ? t('teamAdmin.externalUsers.statusActive', 'Active')
+      : t('teamAdmin.externalUsers.statusDisabled', 'Disabled')
   );
 
   const mobileSummaryLine = selectedSummary
     ? `${selectedSummary.displayName || selectedSummary.username} · ${statusLabel(selectedSummary.status)}`
-    : t('teamAdmin.externalUsers.mobileNoSelection', '先从列表中选择一个用户');
+    : t('teamAdmin.externalUsers.mobileNoSelection', 'Select a user from the list first');
 
   const formatUserLastSeen = (user: ExternalUserSummary) => (
     user.lastSeenAt
@@ -345,7 +345,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
     if (!detail || detail.recentUploads.length === 0) {
       return (
         <p className="text-sm text-[hsl(var(--muted-foreground))]">
-          {t('teamAdmin.externalUsers.noUploads', '暂无上传记录')}
+          {t('teamAdmin.externalUsers.noUploads', 'No uploads yet')}
         </p>
       );
     }
@@ -361,7 +361,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
               {doc.display_name || doc.name}
             </div>
             <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-              <span>{doc.mime_type || t('common.unknown', '未知')}</span>
+              <span>{doc.mime_type || t('teamAdmin.externalUsers.unknownMime', 'Unknown')}</span>
               <span>·</span>
               <span>{formatDateTime(doc.updated_at || doc.created_at)}</span>
             </div>
@@ -375,7 +375,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
     if (!detail || detail.recentSessions.length === 0) {
       return (
         <p className="text-sm text-[hsl(var(--muted-foreground))]">
-          {t('teamAdmin.externalUsers.noSessions', '暂无会话记录')}
+          {t('teamAdmin.externalUsers.noSessions', 'No sessions yet')}
         </p>
       );
     }
@@ -397,11 +397,11 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                   <span>·</span>
                   <span>{formatDateTime(session.updatedAt)}</span>
                   <span>·</span>
-                  <span>{t('teamAdmin.externalUsers.messageCount', '{{count}} 条消息', { count: session.messageCount })}</span>
+                  <span>{t('teamAdmin.externalUsers.messageCount', '{{count}} messages', { count: session.messageCount })}</span>
                 </div>
               </div>
               {session.isProcessing ? (
-                <Badge variant="outline">{t('teamAdmin.externalUsers.processing', '处理中')}</Badge>
+                <Badge variant="outline">{t('teamAdmin.externalUsers.processing', 'Processing')}</Badge>
               ) : null}
             </div>
           </div>
@@ -422,7 +422,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
     if (events.length === 0) {
       return (
         <p className="py-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
-          {t('teamAdmin.externalUsers.noEvents', '暂无事件记录')}
+          {t('teamAdmin.externalUsers.noEvents', 'No events yet')}
         </p>
       );
     }
@@ -492,16 +492,16 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
             </Badge>
           </div>
           <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-            <span>{user.phone || t('teamAdmin.externalUsers.noPhone', '未填写手机号')}</span>
+            <span>{user.phone || t('teamAdmin.externalUsers.noPhone', 'No phone number')}</span>
             <span>·</span>
             <span>{formatUserLastSeen(user)}</span>
           </div>
           <div className="mt-1.5 text-[11px] text-muted-foreground">
-            {t('teamAdmin.externalUsers.uploadCountBadge', '{{count}} 上传', { count: user.uploadCount })}
+            {t('teamAdmin.externalUsers.uploadCountBadge', '{{count}} uploads', { count: user.uploadCount })}
             {' · '}
-            {t('teamAdmin.externalUsers.sessionCountBadge', '{{count}} 会话', { count: user.sessionCount })}
+            {t('teamAdmin.externalUsers.sessionCountBadge', '{{count}} sessions', { count: user.sessionCount })}
             {' · '}
-            {t('teamAdmin.externalUsers.eventCountBadge', '{{count}} 事件', { count: user.eventCount })}
+            {t('teamAdmin.externalUsers.eventCountBadge', '{{count}} events', { count: user.eventCount })}
           </div>
         </button>
         <Button
@@ -902,7 +902,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
             {t('common.cancel')}
           </Button>
           <Button className="flex-1 rounded-[16px]" onClick={() => void handleResetPassword()} disabled={resetSaving || !newPassword.trim()}>
-            {resetSaving ? t('common.saving') : t('common.confirm', '确认')}
+            {resetSaving ? t('common.saving') : t('common.confirm', 'Confirm')}
           </Button>
         </div>
       </div>
@@ -914,11 +914,11 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
       <div className="space-y-4">
         <Card>
           <CardHeader className="pb-4">
-            <CardTitle className="text-lg">{t('teamAdmin.externalUsers.title', '外部用户')}</CardTitle>
+            <CardTitle className="text-lg">{t('teamAdmin.externalUsers.title', 'External users')}</CardTitle>
             <CardDescription>
               {t(
                 'teamAdmin.externalUsers.description',
-                '查看分身对外注册用户、上传资料归属、最近会话与访问事件。'
+                'Review externally registered users, upload ownership, recent sessions, and access events for this avatar.'
               )}
             </CardDescription>
           </CardHeader>
@@ -932,7 +932,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                     applySearch();
                   }
                 }}
-                placeholder={t('teamAdmin.externalUsers.search', '按用户名、显示名称或手机号搜索')}
+                placeholder={t('teamAdmin.externalUsers.search', 'Search by username, display name, or phone number')}
                 className="lg:max-w-md"
               />
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -944,19 +944,19 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                   }}
                 >
                   <SelectTrigger className="w-full sm:w-[min(180px,100%)]">
-                    <SelectValue placeholder={t('teamAdmin.externalUsers.statusAll', '全部状态')} />
+                    <SelectValue placeholder={t('teamAdmin.externalUsers.statusAll', 'All statuses')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">{t('teamAdmin.externalUsers.statusAll', '全部状态')}</SelectItem>
-                    <SelectItem value="active">{t('teamAdmin.externalUsers.statusActive', '启用中')}</SelectItem>
-                    <SelectItem value="disabled">{t('teamAdmin.externalUsers.statusDisabled', '已禁用')}</SelectItem>
+                    <SelectItem value="all">{t('teamAdmin.externalUsers.statusAll', 'All statuses')}</SelectItem>
+                    <SelectItem value="active">{t('teamAdmin.externalUsers.statusActive', 'Active')}</SelectItem>
+                    <SelectItem value="disabled">{t('teamAdmin.externalUsers.statusDisabled', 'Disabled')}</SelectItem>
                   </SelectContent>
                 </Select>
                 <Button variant="outline" onClick={applySearch}>
-                  {t('common.search', '搜索')}
+                  {t('common.search', 'Search')}
                 </Button>
                 <Button variant="outline" onClick={() => void loadUsers()}>
-                  {t('common.refresh', '刷新')}
+                  {t('common.refresh', 'Refresh')}
                 </Button>
               </div>
             </div>
@@ -971,10 +971,10 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">
-                    {t('teamAdmin.externalUsers.listTitle', '用户列表')}
+                    {t('teamAdmin.externalUsers.listTitle', 'User list')}
                   </CardTitle>
                   <CardDescription>
-                    {t('teamAdmin.externalUsers.listDesc', '按当前团队下的外部注册用户查看。')}
+                    {t('teamAdmin.externalUsers.listDesc', 'Browse externally registered users in the current team.')}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -984,17 +984,17 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                     </p>
                   ) : users.length === 0 ? (
                     <p className="py-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
-                      {t('teamAdmin.externalUsers.empty', '当前还没有外部用户。')}
+                      {t('teamAdmin.externalUsers.empty', 'No external users yet.')}
                     </p>
                   ) : (
                     <>
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead>{t('teamAdmin.externalUsers.username', '用户名')}</TableHead>
-                            <TableHead>{t('teamAdmin.externalUsers.status', '状态')}</TableHead>
-                            <TableHead>{t('teamAdmin.externalUsers.usage', '使用情况')}</TableHead>
-                            <TableHead>{t('teamAdmin.externalUsers.lastSeen', '最近活跃')}</TableHead>
+                            <TableHead>{t('teamAdmin.externalUsers.username', 'Username')}</TableHead>
+                            <TableHead>{t('teamAdmin.externalUsers.status', 'Status')}</TableHead>
+                            <TableHead>{t('teamAdmin.externalUsers.usage', 'Usage')}</TableHead>
+                            <TableHead>{t('teamAdmin.externalUsers.lastSeen', 'Last active')}</TableHead>
                             <TableHead className="w-[160px]">{t('common.actions')}</TableHead>
                           </TableRow>
                         </TableHeader>
@@ -1022,14 +1022,14 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                                 <TableCell>
                                   <Badge variant={statusVariant(user.status)}>
                                     {user.status === 'active'
-                                      ? t('teamAdmin.externalUsers.statusActive', '启用中')
-                                      : t('teamAdmin.externalUsers.statusDisabled', '已禁用')}
+                                      ? t('teamAdmin.externalUsers.statusActive', 'Active')
+                                      : t('teamAdmin.externalUsers.statusDisabled', 'Disabled')}
                                   </Badge>
                                 </TableCell>
                                 <TableCell className="text-xs text-[hsl(var(--muted-foreground))]">
-                                  <div>{t('teamAdmin.externalUsers.uploadCount', '上传 {{count}} 份', { count: user.uploadCount })}</div>
-                                  <div>{t('teamAdmin.externalUsers.sessionCount', '会话 {{count}} 个', { count: user.sessionCount })}</div>
-                                  <div>{t('teamAdmin.externalUsers.visitorCount', '关联访客 {{count}} 个', { count: user.linkedVisitorCount })}</div>
+                                  <div>{t('teamAdmin.externalUsers.uploadCount', '{{count}} uploads', { count: user.uploadCount })}</div>
+                                  <div>{t('teamAdmin.externalUsers.sessionCount', '{{count}} sessions', { count: user.sessionCount })}</div>
+                                  <div>{t('teamAdmin.externalUsers.visitorCount', '{{count}} linked visitors', { count: user.linkedVisitorCount })}</div>
                                 </TableCell>
                                 <TableCell className="text-xs text-[hsl(var(--muted-foreground))]">
                                   {user.lastSeenAt ? formatDateTime(user.lastSeenAt) : '—'}
@@ -1041,7 +1041,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                                       variant="outline"
                                       onClick={() => setSelectedUserId(user.id)}
                                     >
-                                      {t('common.view', '查看')}
+                                      {t('common.view', 'View')}
                                     </Button>
                                     <Button
                                       size="sm"
@@ -1050,8 +1050,8 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                                       onClick={() => void handleToggleStatus(user)}
                                     >
                                       {user.status === 'active'
-                                        ? t('teamAdmin.externalUsers.disable', '禁用')
-                                        : t('teamAdmin.externalUsers.enable', '启用')}
+                                        ? t('teamAdmin.externalUsers.disable', 'Disable')
+                                        : t('teamAdmin.externalUsers.enable', 'Enable')}
                                     </Button>
                                     <Button
                                       size="sm"
@@ -1061,7 +1061,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                                         setNewPassword('');
                                       }}
                                     >
-                                      {t('teamAdmin.externalUsers.resetPassword', '重置密码')}
+                                      {t('teamAdmin.externalUsers.resetPassword', 'Reset password')}
                                     </Button>
                                   </div>
                                 </TableCell>
@@ -1086,10 +1086,10 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-base">
-                      {t('teamAdmin.externalUsers.detailTitle', '用户详情')}
+                      {t('teamAdmin.externalUsers.detailTitle', 'User details')}
                     </CardTitle>
                     <CardDescription>
-                      {t('teamAdmin.externalUsers.detailDesc', '查看当前用户的绑定访客、最近上传和最近会话。')}
+                      {t('teamAdmin.externalUsers.detailDesc', 'Review the current user’s linked visitors, recent uploads, and recent sessions.')}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -1099,7 +1099,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                       </p>
                     ) : !detail || !selectedSummary ? (
                       <p className="py-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
-                        {t('teamAdmin.externalUsers.selectUser', '从左侧选择一个外部用户查看详情。')}
+                        {t('teamAdmin.externalUsers.selectUser', 'Select an external user from the list to view details.')}
                       </p>
                     ) : (
                       <div className="space-y-5">
@@ -1111,20 +1111,20 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                             </div>
                             <Badge variant={statusVariant(selectedSummary.status)}>
                               {selectedSummary.status === 'active'
-                                ? t('teamAdmin.externalUsers.statusActive', '启用中')
-                                : t('teamAdmin.externalUsers.statusDisabled', '已禁用')}
+                                ? t('teamAdmin.externalUsers.statusActive', 'Active')
+                                : t('teamAdmin.externalUsers.statusDisabled', 'Disabled')}
                             </Badge>
                           </div>
                           <div className="grid gap-2 text-sm text-[hsl(var(--muted-foreground))]">
-                            <div>{t('teamAdmin.externalUsers.detailPhone', '手机号')}: {selectedSummary.phone || '—'}</div>
-                            <div>{t('teamAdmin.externalUsers.detailCreated', '创建时间')}: {formatDateTime(selectedSummary.createdAt)}</div>
-                            <div>{t('teamAdmin.externalUsers.detailLastLogin', '最近登录')}: {selectedSummary.lastLoginAt ? formatDateTime(selectedSummary.lastLoginAt) : '—'}</div>
-                            <div>{t('teamAdmin.externalUsers.detailLastSeen', '最近活跃')}: {selectedSummary.lastSeenAt ? formatDateTime(selectedSummary.lastSeenAt) : '—'}</div>
+                            <div>{t('teamAdmin.externalUsers.detailPhone', 'Phone')}: {selectedSummary.phone || '—'}</div>
+                            <div>{t('teamAdmin.externalUsers.detailCreated', 'Created')}: {formatDateTime(selectedSummary.createdAt)}</div>
+                            <div>{t('teamAdmin.externalUsers.detailLastLogin', 'Last login')}: {selectedSummary.lastLoginAt ? formatDateTime(selectedSummary.lastLoginAt) : '—'}</div>
+                            <div>{t('teamAdmin.externalUsers.detailLastSeen', 'Last active')}: {selectedSummary.lastSeenAt ? formatDateTime(selectedSummary.lastSeenAt) : '—'}</div>
                           </div>
                         </div>
 
                         <div className="space-y-2">
-                          <h4 className="text-sm font-semibold">{t('teamAdmin.externalUsers.linkedVisitors', '关联访客标识')}</h4>
+                          <h4 className="text-sm font-semibold">{t('teamAdmin.externalUsers.linkedVisitors', 'Linked visitor IDs')}</h4>
                           {detail.linkedVisitorIds.length === 0 ? (
                             <p className="text-sm text-[hsl(var(--muted-foreground))]">—</p>
                           ) : (
@@ -1137,7 +1137,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                         </div>
 
                         <div className="space-y-2">
-                          <h4 className="text-sm font-semibold">{t('teamAdmin.externalUsers.recentUploads', '最近上传')}</h4>
+                          <h4 className="text-sm font-semibold">{t('teamAdmin.externalUsers.recentUploads', 'Recent uploads')}</h4>
                           {detail.recentUploads.length === 0 ? (
                             <p className="text-sm text-[hsl(var(--muted-foreground))]">
                               {t('teamAdmin.externalUsers.noUploads', '暂无上传记录')}
@@ -1157,7 +1157,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                         </div>
 
                         <div className="space-y-2">
-                          <h4 className="text-sm font-semibold">{t('teamAdmin.externalUsers.recentSessions', '最近会话')}</h4>
+                          <h4 className="text-sm font-semibold">{t('teamAdmin.externalUsers.recentSessions', 'Recent sessions')}</h4>
                           {detail.recentSessions.length === 0 ? (
                             <p className="text-sm text-[hsl(var(--muted-foreground))]">
                               {t('teamAdmin.externalUsers.noSessions', '暂无会话记录')}
@@ -1169,11 +1169,11 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                                   <div className="flex items-center justify-between gap-3">
                                     <div className="font-medium">{session.title || session.portalSlug || session.sessionId}</div>
                                     {session.isProcessing && (
-                                      <Badge variant="outline">{t('teamAdmin.externalUsers.processing', '处理中')}</Badge>
+                                      <Badge variant="outline">{t('teamAdmin.externalUsers.processing', 'Processing')}</Badge>
                                     )}
                                   </div>
                                   <div className="text-xs text-[hsl(var(--muted-foreground))]">
-                                    {(session.portalSlug || 'portal') + ' · ' + formatDateTime(session.updatedAt) + ' · ' + t('teamAdmin.externalUsers.messageCount', '{{count}} 条消息', { count: session.messageCount })}
+                                    {(session.portalSlug || 'portal') + ' · ' + formatDateTime(session.updatedAt) + ' · ' + t('teamAdmin.externalUsers.messageCount', '{{count}} messages', { count: session.messageCount })}
                                   </div>
                                 </div>
                               ))}
@@ -1188,10 +1188,10 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-base">
-                      {t('teamAdmin.externalUsers.eventsTitle', '最近事件')}
+                      {t('teamAdmin.externalUsers.eventsTitle', 'Recent events')}
                     </CardTitle>
                     <CardDescription>
-                      {t('teamAdmin.externalUsers.eventsDesc', '注册、登录、访客绑定和其他关键动作会记录在这里。')}
+                      {t('teamAdmin.externalUsers.eventsDesc', 'Registration, login, visitor binding, and other key actions are recorded here.')}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -1241,22 +1241,22 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                    {t('teamNav.externalUsers', '外部用户')}
+                    {t('teamNav.externalUsers', 'External Users')}
                   </div>
                   <div className="mt-1 text-[15px] font-semibold tracking-[-0.02em] text-foreground">
-                    {selectedSummary?.displayName || selectedSummary?.username || t('teamAdmin.externalUsers.title', '外部用户')}
+                    {selectedSummary?.displayName || selectedSummary?.username || t('teamAdmin.externalUsers.title', 'External users')}
                   </div>
                   <div className="mt-1 text-[11px] text-muted-foreground">
                     {selectedSummary
-                      ? `${statusLabel(selectedSummary.status)} · ${t('teamAdmin.externalUsers.summaryEvents', '最近事件')} ${events.length}`
+                      ? `${statusLabel(selectedSummary.status)} · ${t('teamAdmin.externalUsers.summaryEvents', 'Recent events')} ${events.length}`
                       : t(
                           'teamAdmin.externalUsers.mobileConversationDescription',
-                          '先处理用户与状态，再通过事件和上传线索判断是否需要进一步协作。',
+                          'Handle the user and status first, then use events and upload clues to decide whether deeper collaboration is needed.',
                         )}
                   </div>
                 </div>
                 <Badge variant="outline" className="rounded-full px-2.5 py-0.5 text-[10px]">
-                  {t('teamAdmin.externalUsers.summaryTotal', '用户总数')} {totalUsers}
+                  {t('teamAdmin.externalUsers.summaryTotal', 'Total users')} {totalUsers}
                 </Badge>
               </div>
             </div>
@@ -1265,7 +1265,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
             <div className="grid grid-cols-3 gap-2">
               <Button variant="outline" className="h-10 justify-center rounded-[15px] border-border/60 px-2 text-[11px]" onClick={focusMobileSearch}>
                 <Search className="mr-1.5 h-4 w-4" />
-                {t('teamAdmin.externalUsers.quickSearchUsers', '搜索用户')}
+                {t('teamAdmin.externalUsers.quickSearchUsers', 'Search users')}
               </Button>
               <Button
                 variant="outline"
@@ -1276,7 +1276,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                 }}
               >
                 <SlidersHorizontal className="mr-1.5 h-4 w-4" />
-                {t('teamAdmin.externalUsers.quickFilters', '筛选')}
+                {t('teamAdmin.externalUsers.quickFilters', 'Filters')}
               </Button>
               <Button
                 variant="outline"
@@ -1284,23 +1284,23 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                 onClick={() => navigate(`/teams/${teamId}?section=collaboration`)}
               >
                 <MessageSquareText className="mr-1.5 h-4 w-4" />
-                {t('teamAdmin.externalUsers.quickChat', '智能协作')}
+                {t('teamAdmin.externalUsers.quickChat', 'Collaboration')}
               </Button>
             </div>
           )}
           stage={mobileView === 'detail' ? renderMobileDetailView(true) : renderMobileListView(true)}
         >
           <ManagementRail
-            title={t('teamAdmin.externalUsers.mobileRailTitle', '当前用户上下文')}
+            title={t('teamAdmin.externalUsers.mobileRailTitle', 'Current user context')}
             description={t(
               'teamAdmin.externalUsers.mobileConversationRail',
-              '只保留当前用户的关键状态与处理入口，详细资料退到详情页或面板。',
+              'Keep only the key status and actions for the current user here. Move detailed information into the detail page or side panel.',
             )}
           >
             <div className="space-y-2.5">
               <div className="rounded-[16px] border border-border/60 bg-background px-3 py-2.5">
                 <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                  {t('teamAdmin.externalUsers.currentUser', '当前用户')}
+                  {t('teamAdmin.externalUsers.currentUser', 'Current user')}
                 </div>
                 <div className="mt-1 text-[13px] font-semibold text-foreground">
                   {selectedSummary?.displayName || selectedSummary?.username || '—'}
@@ -1310,7 +1310,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-[16px] border border-border/60 bg-background px-3 py-2.5">
                   <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                    {t('teamAdmin.externalUsers.linkedVisitors', '关联访客')}
+                    {t('teamAdmin.externalUsers.linkedVisitors', 'Linked visitors')}
                   </div>
                   <div className="mt-1 text-[13px] font-semibold text-foreground">
                     {selectedSummary?.linkedVisitorCount ?? 0}
@@ -1318,7 +1318,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                 </div>
                 <div className="rounded-[16px] border border-border/60 bg-background px-3 py-2.5">
                   <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                    {t('teamAdmin.externalUsers.summaryEvents', '最近事件')}
+                    {t('teamAdmin.externalUsers.summaryEvents', 'Recent events')}
                   </div>
                   <div className="mt-1 text-[13px] font-semibold text-foreground">
                     {events.length}
@@ -1332,7 +1332,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                   disabled={!selectedSummary}
                   onClick={() => setMobileView('detail')}
                 >
-                  {t('common.view', '查看')}
+                  {t('common.view', 'View')}
                 </Button>
                 <Button
                   variant="outline"
@@ -1340,7 +1340,7 @@ export function ExternalUsersTab({ teamId }: ExternalUsersTabProps) {
                   disabled={!selectedSummary}
                   onClick={() => setActiveMobilePanel('events')}
                 >
-                  {t('teamAdmin.externalUsers.eventsTitle', '最近事件')}
+                  {t('teamAdmin.externalUsers.eventsTitle', 'Recent events')}
                 </Button>
               </div>
             </div>

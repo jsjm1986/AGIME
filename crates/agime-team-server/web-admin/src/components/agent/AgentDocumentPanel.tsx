@@ -23,7 +23,7 @@ const DocumentPreview = lazy(() =>
 function DocumentPreviewLoading() {
   return (
     <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/10 text-sm text-muted-foreground">
-      正在加载文档预览...
+      Loading document preview...
     </div>
   );
 }
@@ -34,13 +34,13 @@ function formatAccessMode(
 ): string {
   switch (mode) {
     case 'read_only':
-      return t('ecosystem.documentAccessModeReadOnly', '只读');
+      return t('ecosystem.documentAccessModeReadOnly', 'Read only');
     case 'co_edit_draft':
-      return t('ecosystem.documentAccessModeCoEditDraft', '协作草稿');
+      return t('ecosystem.documentAccessModeCoEditDraft', 'Collaborative draft');
     case 'controlled_write':
-      return t('ecosystem.documentAccessModeControlledWrite', '受控写入');
+      return t('ecosystem.documentAccessModeControlledWrite', 'Controlled write');
     default:
-      return t('common.notSet', '未设置');
+      return t('common.notSet', 'Not set');
   }
 }
 
@@ -52,22 +52,22 @@ function formatFamilyHint(
     case 'read_only':
       return t(
         'agent.manage.agentDocumentsFamilyHintReadOnly',
-        '当前以查看和问答为主，只展示原始文档及其相关 AI 版本。'
+        'This mode focuses on viewing and Q&A, showing only the original document and its related AI versions.'
       );
     case 'co_edit_draft':
       return t(
         'agent.manage.agentDocumentsFamilyHintDraft',
-        '对话式修改会优先沉淀到 AI 工作区草稿，方便继续迭代。'
+        'Conversational edits first land in the AI workspace draft so you can continue iterating.'
       );
     case 'controlled_write':
       return t(
         'agent.manage.agentDocumentsFamilyHintControlledWrite',
-        '对话式修改既可以继续沿用 AI 版本，也可以直接写回目标文档。'
+        'Conversational edits can keep using the AI version or write back directly into the target document.'
       );
     default:
       return t(
         'agent.manage.agentDocumentsFamilyHintDefault',
-        '这里按原始文档聚合展示相关 AI 版本，方便你确认当前工作上下文。'
+        'Related AI versions are grouped by original document here so you can confirm the current working context.'
       );
   }
 }
@@ -283,7 +283,7 @@ export function AgentDocumentPanel({
                   <DialogDescription className="text-left">
                     {t(
                       'agent.manage.agentDocumentsFamilyDescription',
-                      '按原始绑定文档聚合查看服务 Agent 的文档家族：原文、相关 AI 版本和版本时间线。'
+                      'Review the service agent document family grouped by original bound document: source doc, related AI versions, and version timeline.'
                     )}
                   </DialogDescription>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -505,7 +505,7 @@ export function AgentDocumentPanel({
                           <div className="rounded-xl border border-dashed border-border/70 bg-muted/10 px-4 py-5 text-sm text-muted-foreground">
                             {t(
                               'agent.manage.agentDocumentsNoDerived',
-                              '当前这份原始文档还没有关联的 AI 文档版本。'
+                            'This original document does not have any related AI document versions yet.'
                             )}
                           </div>
                         ) : (
@@ -573,7 +573,7 @@ export function AgentDocumentPanel({
                         <p className="mt-2 text-xs leading-5 text-muted-foreground">
                           {t(
                             'agent.manage.agentDocumentsVersionHint',
-                            '原始文档和 AI 文档都保留各自的版本时间线。默认会继续更新当前工作稿，并把历史变更保存在版本记录里。'
+                            'Original and AI documents each keep their own version timeline. By default the current working draft is updated and historical changes are stored in version history.'
                           )}
                         </p>
                       </div>
@@ -604,11 +604,11 @@ export function AgentDocumentPanel({
                     {selectedDocIsDerived
                       ? t(
                           'agent.manage.agentDocumentsCurrentPreviewDerived',
-                          '当前预览的是 AI 版本文档，可用于继续对话式迭代。'
+                          'You are previewing an AI-version document, which can be used for further conversational iteration.'
                         )
                       : t(
                           'agent.manage.agentDocumentsCurrentPreviewOriginal',
-                          '当前预览的是原始绑定文档，可作为后续对话修改的基准版本。'
+                          'You are previewing the original bound document, which serves as the baseline for future conversational edits.'
                         )}
                   </div>
                 )}
@@ -633,7 +633,7 @@ export function AgentDocumentPanel({
                 {versionTarget
                   ? t(
                       'agent.manage.agentDocumentsVersionTimelineDescription',
-                      '查看 {{name}} 的历史版本快照，确认每次对话式修改沉淀下来的变更。',
+                      'Review historical snapshots for {{name}} and confirm the changes captured from each conversational edit.',
                       { name: getDocDisplayName(versionTarget) },
                     )
                   : ''}

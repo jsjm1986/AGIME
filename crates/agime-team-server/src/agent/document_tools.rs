@@ -14,7 +14,7 @@ use mongodb::bson::{doc, oid::ObjectId, Document as BsonDocument};
 use rmcp::model::*;
 use rmcp::ServiceError;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -46,6 +46,8 @@ pub struct DocumentToolsProvider {
     legacy_document_access_mode: Option<String>,
     /// Document IDs read during this session (for automatic lineage tracking)
     read_doc_ids: Mutex<Vec<String>>,
+    /// First materialized workspace path for each accessed document in this session.
+    materialized_doc_paths: Mutex<HashMap<String, String>>,
 }
 
 impl DocumentToolsProvider {
@@ -88,6 +90,7 @@ impl DocumentToolsProvider {
             ),
             legacy_document_access_mode: document_policy.document_access_mode,
             read_doc_ids: Mutex::new(Vec::new()),
+            materialized_doc_paths: Mutex::new(HashMap::new()),
         }
     }
 
@@ -410,6 +413,98 @@ impl DocumentToolsProvider {
         }
     }
 
+    fn track_materialized_path(&self, doc_id: &str, file_path: &str) {
+        self.track_read(doc_id);
+        self.materialized_doc_paths
+            .lock()
+            .unwrap()
+            .entry(doc_id.to_string())
+            .or_insert_with(|| file_path.to_string());
+    }
+
+    fn existing_materialized_path(&self, doc_id: &str) -> Option<String> {
+        self.materialized_doc_paths
+            .lock()
+            .unwrap()
+            .get(doc_id)
+            .cloned()
+    }
+
+    fn document_access_ledger_path(&self, doc_id: &str) -> Option<PathBuf> {
+        let workspace = self.workspace_path.as_deref()?;
+        Some(
+            PathBuf::from(workspace)
+                .join(".agime")
+                .join("document_access")
+                .join(format!("{doc_id}.json")),
+        )
+    }
+
+    async fn existing_materialized_path_for_session(&self, doc_id: &str) -> Option<String> {
+        if let Some(path) = self.existing_materialized_path(doc_id) {
+            return Some(path);
+        }
+        let ledger_path = self.document_access_ledger_path(doc_id)?;
+        let raw = tokio::fs::read_to_string(ledger_path).await.ok()?;
+        let entry: DocumentAccessLedgerEntry = serde_json::from_str(&raw).ok()?;
+        self.materialized_doc_paths
+            .lock()
+            .unwrap()
+            .insert(doc_id.to_string(), entry.file_path.clone());
+        Some(entry.file_path)
+    }
+
+    async fn persist_materialized_path_for_session(
+        &self,
+        doc_id: &str,
+        file_path: &str,
+    ) -> Result<()> {
+        let Some(ledger_path) = self.document_access_ledger_path(doc_id) else {
+            return Ok(());
+        };
+        if let Some(parent) = ledger_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let entry = DocumentAccessLedgerEntry {
+            doc_id: doc_id.to_string(),
+            file_path: file_path.to_string(),
+        };
+        tokio::fs::write(&ledger_path, serde_json::to_vec(&entry)?).await?;
+        self.materialized_doc_paths
+            .lock()
+            .unwrap()
+            .insert(doc_id.to_string(), file_path.to_string());
+        Ok(())
+    }
+
+    fn repeated_access_redirect(
+        &self,
+        tool_name: &str,
+        doc_id: &str,
+        doc_name: &str,
+        file_path: &str,
+    ) -> String {
+        json!({
+            "type": "document_access_redirect",
+            "doc_id": doc_id,
+            "doc_name": doc_name,
+            "file_path": file_path,
+            "access_established": true,
+            "content_accessed": false,
+            "analysis_complete": false,
+            "reason_code": "document_access_already_established",
+            "next_action": "use_local_tool",
+            "message": format!(
+                "{} was already completed for document '{}' ({}). Reuse the existing workspace file at '{}' and continue with developer shell, MCP, or another local tool instead of calling another document access tool.",
+                tool_name,
+                doc_name,
+                doc_id,
+                file_path,
+            ),
+        })
+        .to_string()
+    }
+
     fn is_doc_allowed(&self, doc_id: &str) -> bool {
         if !self.restrict_to_allowed_documents {
             return true;
@@ -451,8 +546,7 @@ impl DocumentToolsProvider {
         if self.can_access_doc_summary(&meta) {
             return Ok(meta);
         }
-        let reason =
-            "Document access denied: this session can only access bound documents and related AI drafts";
+        let reason = "Document access denied: this session can only access bound documents and related AI drafts";
         self.log_access_denied(action, doc_id, reason);
         Err(anyhow::anyhow!(reason))
     }
@@ -1257,21 +1351,8 @@ impl McpClientTrait for DocumentToolsProvider {
         };
 
         match result {
-            Ok(text) => {
-                let structured_content = serde_json::from_str::<serde_json::Value>(&text).ok();
-                Ok(CallToolResult {
-                    content: vec![Content::text(
-                        structured_content
-                            .as_ref()
-                            .map(render_document_tool_result_for_model)
-                            .unwrap_or_else(|| text.clone()),
-                    )],
-                    structured_content,
-                    is_error: Some(false),
-                    meta: None,
-                })
-            }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e.to_string())])),
+            Ok(text) => Ok(build_document_tool_call_result(text, false)),
+            Err(e) => Ok(build_document_tool_call_result(e.to_string(), true)),
         }
     }
 
@@ -1338,6 +1419,20 @@ impl McpClientTrait for DocumentToolsProvider {
     }
 }
 
+fn build_document_tool_call_result(raw: String, is_error: bool) -> CallToolResult {
+    let structured_content = serde_json::from_str::<serde_json::Value>(&raw).ok();
+    let rendered = structured_content
+        .as_ref()
+        .map(render_document_tool_result_for_model)
+        .unwrap_or_else(|| raw.clone());
+    CallToolResult {
+        content: vec![Content::text(rendered)],
+        structured_content,
+        is_error: Some(is_error),
+        meta: None,
+    }
+}
+
 fn render_document_tool_result_for_model(value: &serde_json::Value) -> String {
     match value.get("type").and_then(|item| item.as_str()) {
         Some("document_access") | Some("workspace_export") | Some("binary_export") => {
@@ -1358,6 +1453,20 @@ fn render_document_tool_result_for_model(value: &serde_json::Value) -> String {
             format!(
                 "Document access established for {} (MIME: {}). Workspace path: {}. Use developer shell, MCP, or another local tool to read the file content from this path.",
                 name, mime, path
+            )
+        }
+        Some("document_access_redirect") => {
+            let name = value
+                .get("doc_name")
+                .and_then(|item| item.as_str())
+                .unwrap_or("document");
+            let path = value
+                .get("file_path")
+                .and_then(|item| item.as_str())
+                .unwrap_or("workspace export");
+            format!(
+                "Document access is already established for {} at {}. Do not call another document access tool. Use developer shell, MCP, or another local tool to inspect the workspace file content from that path.",
+                name, path
             )
         }
         Some("text_read") => {
@@ -1398,6 +1507,12 @@ struct WorkspaceMaterializedDocument {
     mime_type: String,
     file_size: u64,
     source_name: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct DocumentAccessLedgerEntry {
+    doc_id: String,
+    file_path: String,
 }
 
 // ── Tool handler implementations ──
@@ -1744,6 +1859,14 @@ impl DocumentToolsProvider {
         let doc_meta = self
             .get_accessible_doc_metadata(doc_id, "read_document")
             .await?;
+        if let Some(existing_path) = self.existing_materialized_path_for_session(doc_id).await {
+            return Ok(self.repeated_access_redirect(
+                "read_document",
+                doc_id,
+                &doc_meta.name,
+                &existing_path,
+            ));
+        }
         let materialized = self
             .materialize_document_to_workspace(doc_id, Some(&doc_meta.name), None, None)
             .await?;
@@ -1774,6 +1897,14 @@ impl DocumentToolsProvider {
         let doc_meta = self
             .get_accessible_doc_metadata(doc_id, "export_document")
             .await?;
+        if let Some(existing_path) = self.existing_materialized_path_for_session(doc_id).await {
+            return Ok(self.repeated_access_redirect(
+                "export_document",
+                doc_id,
+                &doc_meta.name,
+                &existing_path,
+            ));
+        }
 
         let output_dir = args
             .get("output_dir")
@@ -1817,6 +1948,23 @@ impl DocumentToolsProvider {
     }
 
     async fn handle_import_document_to_workspace(&self, args: &JsonObject) -> Result<String> {
+        if let Some(doc_id) = args.get("doc_id").and_then(|v| v.as_str()) {
+            if let Ok(doc_meta) = self
+                .get_accessible_doc_metadata(doc_id, "import_document_to_workspace")
+                .await
+            {
+                if let Some(existing_path) =
+                    self.existing_materialized_path_for_session(doc_id).await
+                {
+                    return Ok(self.repeated_access_redirect(
+                        "import_document_to_workspace",
+                        doc_id,
+                        &doc_meta.name,
+                        &existing_path,
+                    ));
+                }
+            }
+        }
         let mut forwarded = args.clone();
         if !forwarded.contains_key("output_dir") {
             forwarded.insert("output_dir".to_string(), json!("attachments"));
@@ -1889,12 +2037,15 @@ impl DocumentToolsProvider {
             tokio::fs::write(&file_path, &data).await?;
         }
 
-        self.track_read(doc_id);
+        let file_path_string = file_path.to_string_lossy().to_string();
+        self.track_materialized_path(doc_id, &file_path_string);
+        self.persist_materialized_path_for_session(doc_id, &file_path_string)
+            .await?;
 
         Ok(WorkspaceMaterializedDocument {
             output_name,
             output_dir: output_dir_rel,
-            file_path: file_path.to_string_lossy().to_string(),
+            file_path: file_path_string,
             mime_type: metadata.mime_type,
             file_size,
             source_name: metadata.name,
@@ -2036,6 +2187,14 @@ impl DocumentToolsProvider {
         // Clear tracked reads after successful create to prevent accumulation
         // across multiple creates within the same task.
         self.read_doc_ids.lock().unwrap().clear();
+        self.materialized_doc_paths.lock().unwrap().clear();
+        if let Some(workspace) = self.workspace_path.as_deref() {
+            let _ = std::fs::remove_dir_all(
+                PathBuf::from(workspace)
+                    .join(".agime")
+                    .join("document_access"),
+            );
+        }
 
         let doc_id = doc.id.map(|id| id.to_hex()).unwrap_or_default();
 
@@ -2201,6 +2360,14 @@ impl DocumentToolsProvider {
             .await?;
 
         self.read_doc_ids.lock().unwrap().clear();
+        self.materialized_doc_paths.lock().unwrap().clear();
+        if let Some(workspace) = self.workspace_path.as_deref() {
+            let _ = std::fs::remove_dir_all(
+                PathBuf::from(workspace)
+                    .join(".agime")
+                    .join("document_access"),
+            );
+        }
 
         let doc_id = doc.id.map(|id| id.to_hex()).unwrap_or_default();
         Ok(json!({
@@ -2724,5 +2891,41 @@ mod tests {
         assert!(rendered.contains("report.pdf"));
         assert!(rendered.contains("workspace/documents/report.pdf"));
         assert!(rendered.contains("Use developer shell"));
+    }
+
+    #[test]
+    fn render_document_access_redirect_requires_local_tool() {
+        let rendered = render_document_tool_result_for_model(&json!({
+            "type": "document_access_redirect",
+            "doc_name": "demo.txt",
+            "file_path": "workspace/documents/demo.txt"
+        }));
+
+        assert!(rendered.contains("already established"));
+        assert!(rendered.contains("workspace/documents/demo.txt"));
+        assert!(rendered.contains("Do not call another document access tool"));
+    }
+
+    #[test]
+    fn build_document_tool_call_result_preserves_structured_redirect_payload() {
+        let result = build_document_tool_call_result(
+            json!({
+                "type": "document_access_redirect",
+                "doc_name": "demo.txt",
+                "file_path": "workspace/documents/demo.txt",
+                "reason_code": "document_access_already_established"
+            })
+            .to_string(),
+            false,
+        );
+
+        assert_eq!(result.is_error, Some(false));
+        assert!(result.structured_content.is_some());
+        let rendered = result
+            .content
+            .iter()
+            .find_map(|content| content.as_text().map(|text| text.text.clone()))
+            .unwrap_or_default();
+        assert!(rendered.contains("Do not call another document access tool"));
     }
 }

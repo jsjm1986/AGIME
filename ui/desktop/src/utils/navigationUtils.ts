@@ -13,7 +13,6 @@ export type View =
   | 'ConfigureProviders'
   | 'settingsV2'
   | 'sessions'
-  | 'schedules'
   | 'sharedSession'
   | 'loading'
   | 'recipes'
@@ -35,7 +34,6 @@ export type ViewOptions = {
   resetChat?: boolean;
   shareToken?: string;
   resumeSessionId?: string;
-  pendingScheduleDeepLink?: string;
 };
 
 export const createNavigationHandler = (navigate: NavigateFunction) => {
@@ -52,9 +50,6 @@ export const createNavigationHandler = (navigate: NavigateFunction) => {
         break;
       case 'sessions':
         navigate('/sessions', { state: options });
-        break;
-      case 'schedules':
-        navigate('/schedules', { state: options });
         break;
       case 'recipes':
         navigate('/recipes', { state: options });

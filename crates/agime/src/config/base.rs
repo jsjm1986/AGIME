@@ -1,4 +1,4 @@
-use crate::config::env_compat::{env_compat_exists, get_env_compat};
+use crate::config::env_compat::get_env_compat;
 use crate::config::paths::Paths;
 use crate::config::AgimeMode;
 use fs2::FileExt;
@@ -227,7 +227,7 @@ fn migrate_keyring_credentials() -> Result<(), ConfigError> {
 ///
 /// Secrets are loaded with the following precedence:
 /// 1. Environment variables (dual-prefix: AGIME_ preferred, GOOSE_ fallback)
-/// 2. System keyring (which can be disabled with AGIME_DISABLE_KEYRING or GOOSE_DISABLE_KEYRING)
+/// 2. System keyring (which can be disabled with AGIME_DISABLE_KEYRING)
 /// 3. If the keyring is disabled, secrets are stored in a secrets file
 ///    (platform-specific config directory)
 ///
@@ -268,19 +268,87 @@ enum SecretStorage {
     File { path: PathBuf },
 }
 
+fn should_use_file_secrets(
+    disable_keyring: bool,
+    is_linux: bool,
+    has_dbus_session_bus: bool,
+    has_display: bool,
+    has_wayland_display: bool,
+) -> bool {
+    if disable_keyring {
+        return true;
+    }
+
+    // Secret Service keyring access on Linux requires a user-session DBus.
+    // In headless/server runtimes, default to file-backed secrets instead of
+    // failing provider initialization for child runs.
+    is_linux && !has_dbus_session_bus && !has_display && !has_wayland_display
+}
+
+fn agime_disable_keyring_env_requested() -> bool {
+    std::env::var_os("AGIME_DISABLE_KEYRING").is_some()
+}
+
+fn agime_disable_keyring_config_requested(config_path: &Path) -> bool {
+    let Ok(file_content) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    let Ok(values) = parse_yaml_content(&file_content) else {
+        return false;
+    };
+
+    let Some(value) = values.get("AGIME_DISABLE_KEYRING") else {
+        return false;
+    };
+
+    match value {
+        serde_yaml::Value::Bool(flag) => *flag,
+        serde_yaml::Value::String(flag) => {
+            let normalized = flag.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        }
+        _ => false,
+    }
+}
+
+fn disable_keyring_explicitly_requested(config_path: &Path) -> bool {
+    agime_disable_keyring_env_requested() || agime_disable_keyring_config_requested(config_path)
+}
+
+fn should_use_file_secrets_for_runtime() -> bool {
+    let config_dir = Paths::config_dir();
+    let config_path = config_dir.join(CONFIG_YAML_NAME);
+    should_use_file_secrets(
+        disable_keyring_explicitly_requested(&config_path),
+        cfg!(target_os = "linux"),
+        std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some(),
+        std::env::var_os("DISPLAY").is_some(),
+        std::env::var_os("WAYLAND_DISPLAY").is_some(),
+    )
+}
+
 // Global instance
 static GLOBAL_CONFIG: OnceCell<Config> = OnceCell::new();
 
 impl Default for Config {
     fn default() -> Self {
         let config_dir = Paths::config_dir();
-
         let config_path = config_dir.join(CONFIG_YAML_NAME);
+        let disable_keyring_explicit = disable_keyring_explicitly_requested(&config_path);
 
-        let secrets = match env_compat_exists("DISABLE_KEYRING") {
-            true => SecretStorage::File {
-                path: config_dir.join("secrets.yaml"),
-            },
+        let secrets = match should_use_file_secrets_for_runtime() {
+            true => {
+                if disable_keyring_explicit {
+                    tracing::info!("System keyring disabled explicitly; using file-backed secrets");
+                } else if cfg!(target_os = "linux") {
+                    tracing::info!(
+                        "No user-session DBus/keyring detected; using file-backed secrets"
+                    );
+                }
+                SecretStorage::File {
+                    path: config_dir.join("secrets.yaml"),
+                }
+            }
             false => SecretStorage::Keyring {
                 service: KEYRING_SERVICE.to_string(),
             },
@@ -439,6 +507,14 @@ impl Config {
 
     pub fn path(&self) -> String {
         self.config_path.to_string_lossy().to_string()
+    }
+
+    pub fn uses_file_secrets(&self) -> bool {
+        matches!(self.secrets, SecretStorage::File { .. })
+    }
+
+    pub fn keyring_disabled_explicitly(&self) -> bool {
+        disable_keyring_explicitly_requested(&self.config_path)
     }
 
     fn load(&self) -> Result<Mapping, ConfigError> {
@@ -1791,6 +1867,59 @@ mod tests {
         // Clean up
         std::env::remove_var("AGIME_TEST_PRECEDENCE");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_should_use_file_secrets_when_disable_keyring_is_set() {
+        assert!(should_use_file_secrets(true, false, true, true, true));
+        assert!(should_use_file_secrets(true, true, false, false, false));
+    }
+
+    #[test]
+    fn test_should_use_file_secrets_for_headless_linux() {
+        assert!(should_use_file_secrets(false, true, false, false, false));
+        assert!(!should_use_file_secrets(false, true, true, false, false));
+        assert!(!should_use_file_secrets(false, true, false, true, false));
+        assert!(!should_use_file_secrets(false, true, false, false, true));
+    }
+
+    #[test]
+    fn test_should_not_force_file_secrets_off_linux_without_override() {
+        assert!(!should_use_file_secrets(false, false, false, false, false));
+        assert!(!should_use_file_secrets(false, false, true, false, false));
+    }
+
+    #[test]
+    fn test_disable_keyring_explicit_request_only_uses_agime_key() -> Result<(), ConfigError> {
+        let temp_file = NamedTempFile::new().unwrap();
+        std::env::remove_var("AGIME_DISABLE_KEYRING");
+        std::env::remove_var("LEGACY_DISABLE_KEYRING");
+
+        assert!(!disable_keyring_explicitly_requested(temp_file.path()));
+
+        std::env::set_var("LEGACY_DISABLE_KEYRING", "1");
+        assert!(!disable_keyring_explicitly_requested(temp_file.path()));
+
+        std::env::set_var("AGIME_DISABLE_KEYRING", "1");
+        assert!(disable_keyring_explicitly_requested(temp_file.path()));
+
+        std::env::remove_var("AGIME_DISABLE_KEYRING");
+        std::env::remove_var("LEGACY_DISABLE_KEYRING");
+        Ok(())
+    }
+
+    #[test]
+    fn test_disable_keyring_explicit_request_reads_agime_config_only() -> Result<(), ConfigError> {
+        let temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(
+            temp_file.path(),
+            "LEGACY_DISABLE_KEYRING: true\nAGIME_DISABLE_KEYRING: \"\"\n",
+        )?;
+        assert!(!disable_keyring_explicitly_requested(temp_file.path()));
+
+        std::fs::write(temp_file.path(), "AGIME_DISABLE_KEYRING: true\n")?;
+        assert!(disable_keyring_explicitly_requested(temp_file.path()));
         Ok(())
     }
 }

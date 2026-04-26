@@ -273,7 +273,7 @@ pub async fn reply(
 
         let session_config = SessionConfig {
             id: session_id.clone(),
-            schedule_id: session.schedule_id.clone(),
+            schedule_id: None,
             max_turns: None,
             retry_config: None,
         };

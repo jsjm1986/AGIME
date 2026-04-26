@@ -1005,6 +1005,12 @@ mod tests {
                     max_tokens: None,
                     context_limit: None,
                     thinking_enabled: None,
+                    thinking_budget: None,
+                    reasoning_effort: None,
+                    output_reserve_tokens: None,
+                    auto_compact_threshold: None,
+                    prompt_caching_mode: None,
+                    cache_edit_mode: None,
                     assigned_skills: None,
                     skill_binding_mode: None,
                     delegation_policy: None,
@@ -1124,6 +1130,12 @@ mod tests {
                     max_tokens: None,
                     context_limit: None,
                     thinking_enabled: None,
+                    thinking_budget: None,
+                    reasoning_effort: None,
+                    output_reserve_tokens: None,
+                    auto_compact_threshold: None,
+                    prompt_caching_mode: None,
+                    cache_edit_mode: None,
                     assigned_skills: None,
                     skill_binding_mode: None,
                     delegation_policy: None,
@@ -1736,6 +1748,12 @@ impl PortalToolsProvider {
             max_tokens: template_agent.max_tokens,
             context_limit: template_agent.context_limit,
             thinking_enabled: Some(template_agent.thinking_enabled),
+            thinking_budget: template_agent.thinking_budget,
+            reasoning_effort: template_agent.reasoning_effort.clone(),
+            output_reserve_tokens: template_agent.output_reserve_tokens,
+            auto_compact_threshold: template_agent.auto_compact_threshold,
+            prompt_caching_mode: Some(template_agent.prompt_caching_mode),
+            cache_edit_mode: Some(template_agent.cache_edit_mode),
             assigned_skills: Some(template_agent.assigned_skills.clone()),
             skill_binding_mode: Some(template_agent.skill_binding_mode),
             delegation_policy: Some(template_agent.delegation_policy.clone()),
@@ -1812,7 +1830,7 @@ impl PortalToolsProvider {
                 return Err(anyhow::anyhow!(
                     "Invalid document_access_mode '{}'. Use read_only | co_edit_draft | controlled_write",
                     raw
-                ))
+                ));
             }
         };
         Ok(Some(mode))
@@ -1834,7 +1852,9 @@ impl PortalToolsProvider {
             "document_tools" | "documenttools" => Ok(BuiltinExtension::DocumentTools),
             "developer" => Ok(BuiltinExtension::Developer),
             "memory" => Ok(BuiltinExtension::Memory),
-            "computer_controller" | "computercontroller" => Ok(BuiltinExtension::ComputerController),
+            "computer_controller" | "computercontroller" => {
+                Ok(BuiltinExtension::ComputerController)
+            }
             "auto_visualiser" | "autovisualiser" => Ok(BuiltinExtension::AutoVisualiser),
             "tutorial" => Ok(BuiltinExtension::Tutorial),
             _ => Err(anyhow::anyhow!(
@@ -1922,7 +1942,7 @@ impl PortalToolsProvider {
                 return Err(anyhow::anyhow!(
                     "Invalid output_form '{}'. Use website | widget | agent_only",
                     raw
-                ))
+                ));
             }
         };
         Ok(Some(form))
@@ -3246,6 +3266,12 @@ impl PortalToolsProvider {
                             max_tokens: None,
                             context_limit: None,
                             thinking_enabled: None,
+                            thinking_budget: None,
+                            reasoning_effort: None,
+                            output_reserve_tokens: None,
+                            auto_compact_threshold: None,
+                            prompt_caching_mode: None,
+                            cache_edit_mode: None,
                             assigned_skills: None,
                             skill_binding_mode: None,
                             delegation_policy: None,
@@ -3335,6 +3361,12 @@ impl PortalToolsProvider {
                         max_tokens: None,
                         context_limit: None,
                         thinking_enabled: None,
+                        thinking_budget: None,
+                        reasoning_effort: None,
+                        output_reserve_tokens: None,
+                        auto_compact_threshold: None,
+                        prompt_caching_mode: None,
+                        cache_edit_mode: None,
                         assigned_skills: None,
                         skill_binding_mode: None,
                         delegation_policy: None,

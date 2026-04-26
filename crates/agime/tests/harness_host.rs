@@ -6,6 +6,9 @@ use agime::agents::{
     HarnessHostDependencies, HarnessHostRequest, HarnessMode, HarnessPersistenceAdapter,
     ProviderTurnMode, SessionConfig,
 };
+use agime::context_runtime::{
+    CompactBoundaryMetadata, CompactDirection, ContextRuntimeState, PreservedSegmentMetadata,
+};
 use agime::conversation::message::{Message, MessageContent};
 use agime::conversation::Conversation;
 use agime::model::ModelConfig;
@@ -65,6 +68,11 @@ struct RecordingSink {
     texts: Mutex<Vec<String>>,
 }
 
+#[derive(Default)]
+struct RecordingControlSink {
+    envelopes: Mutex<Vec<agime::agents::HarnessControlEnvelope>>,
+}
+
 #[async_trait]
 impl HarnessEventSink for RecordingSink {
     async fn handle(
@@ -81,6 +89,14 @@ impl HarnessEventSink for RecordingSink {
                 }
             }
         }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl agime::agents::HarnessControlSink for RecordingControlSink {
+    async fn handle(&self, envelope: &agime::agents::HarnessControlEnvelope) -> Result<()> {
+        self.envelopes.lock().await.push(envelope.clone());
         Ok(())
     }
 }
@@ -110,6 +126,7 @@ impl HarnessPersistenceAdapter for RecordingPersistence {
         _runtime_session_id: &str,
         _final_conversation: &Conversation,
         _mode: HarnessMode,
+        _context_runtime_state: Option<&ContextRuntimeState>,
         _total_tokens: Option<i32>,
         _input_tokens: Option<i32>,
         _output_tokens: Option<i32>,
@@ -123,6 +140,7 @@ impl HarnessPersistenceAdapter for RecordingPersistence {
 async fn direct_host_runs_agent_reply_and_returns_conversation() {
     let agent = Arc::new(Agent::new());
     let sink = Arc::new(RecordingSink::default());
+    let control_sink = Arc::new(RecordingControlSink::default());
     let persistence = Arc::new(RecordingPersistence::default());
     let provider = Arc::new(MockProvider {
         model_config: ModelConfig::new_or_fail("mock-model"),
@@ -156,6 +174,7 @@ async fn direct_host_runs_agent_reply_and_returns_conversation() {
         swarm_budget: None,
         validation_mode: false,
         worker_extensions: Vec::new(),
+        initial_context_runtime_state: None,
         task_runtime: None,
         system_prompt_override: None,
         system_prompt_extras: Vec::new(),
@@ -168,6 +187,7 @@ async fn direct_host_runs_agent_reply_and_returns_conversation() {
         HarnessHostDependencies {
             agent,
             event_sink: sink.clone(),
+            control_sink: control_sink.clone(),
             persistence: persistence.clone(),
         },
     )
@@ -179,6 +199,36 @@ async fn direct_host_runs_agent_reply_and_returns_conversation() {
     assert_eq!(result.final_mode, HarnessMode::Conversation);
     assert_eq!(result.total_tokens, None);
     assert!(!sink.texts.lock().await.is_empty());
+    let envelopes = control_sink.envelopes.lock().await.clone();
+    assert!(!envelopes.is_empty());
+    assert_eq!(envelopes[0].sequence, 1);
+    assert!(envelopes
+        .windows(2)
+        .all(|pair| pair[1].sequence > pair[0].sequence));
+    assert!(envelopes.iter().any(|item| {
+        matches!(
+            item.payload,
+            agime::agents::HarnessControlMessage::Session(
+                agime::agents::SessionControlEvent::Started { .. }
+            )
+        )
+    }));
+    assert!(envelopes.iter().any(|item| {
+        matches!(
+            item.payload,
+            agime::agents::HarnessControlMessage::Completion(
+                agime::agents::CompletionControlEvent::StructuredPublished { .. }
+            )
+        )
+    }));
+    assert!(envelopes.iter().any(|item| {
+        matches!(
+            item.payload,
+            agime::agents::HarnessControlMessage::Session(
+                agime::agents::SessionControlEvent::Finished { .. }
+            )
+        )
+    }));
     assert_eq!(*persistence.started.lock().await, 1);
     assert_eq!(*persistence.finished.lock().await, 1);
 }
@@ -190,6 +240,7 @@ async fn direct_host_planner_auto_injects_swarm_request() {
 
     let agent = Arc::new(Agent::new());
     let sink = Arc::new(RecordingSink::default());
+    let control_sink = Arc::new(RecordingControlSink::default());
     let persistence = Arc::new(RecordingPersistence::default());
     let provider = Arc::new(MockProvider {
         model_config: ModelConfig::new_or_fail("mock-model"),
@@ -224,6 +275,7 @@ async fn direct_host_planner_auto_injects_swarm_request() {
         swarm_budget: Some(2),
         validation_mode: false,
         worker_extensions: Vec::new(),
+        initial_context_runtime_state: None,
         task_runtime: None,
         system_prompt_override: None,
         system_prompt_extras: Vec::new(),
@@ -236,6 +288,7 @@ async fn direct_host_planner_auto_injects_swarm_request() {
         HarnessHostDependencies {
             agent,
             event_sink: sink,
+            control_sink,
             persistence,
         },
     )
@@ -263,4 +316,104 @@ async fn direct_host_planner_auto_injects_swarm_request() {
 
     std::env::remove_var("AGIME_ENABLE_NATIVE_SWARM_TOOL");
     std::env::remove_var("AGIME_ENABLE_SWARM_PLANNER_AUTO");
+}
+
+#[tokio::test]
+async fn direct_host_roundtrips_context_runtime_state() {
+    let agent = Arc::new(Agent::new());
+    let sink = Arc::new(RecordingSink::default());
+    let control_sink = Arc::new(RecordingControlSink::default());
+    let persistence = Arc::new(RecordingPersistence::default());
+    let provider = Arc::new(MockProvider {
+        model_config: ModelConfig::new_or_fail("mock-model"),
+        response: "runtime reply".to_string(),
+    });
+    let initial_state = ContextRuntimeState {
+        runtime_compactions: 3,
+        ..ContextRuntimeState::default()
+    };
+    let mut initial_state = initial_state;
+    initial_state.set_compact_boundary(Some(CompactBoundaryMetadata {
+        anchor_index: 0,
+        head_index: 0,
+        tail_index: 0,
+        direction: CompactDirection::UpTo,
+        anchor_message_id: None,
+        head_message_id: None,
+        tail_message_id: None,
+        created_at: 1,
+    }));
+    initial_state.set_preserved_segment(Some(PreservedSegmentMetadata {
+        start_index: 0,
+        end_index: 0,
+        tail_anchor_index: 0,
+        start_message_id: None,
+        end_message_id: None,
+        tail_anchor_message_id: None,
+        reason: "test_boundary".to_string(),
+    }));
+    let request = HarnessHostRequest {
+        logical_session_id: "logical-runtime".to_string(),
+        working_dir: std::env::temp_dir(),
+        session_name: "host-runtime".to_string(),
+        session_type: SessionType::Hidden,
+        initial_conversation: Conversation::empty(),
+        user_message: Message::user().with_text("hello"),
+        session_config: SessionConfig {
+            id: "placeholder-runtime".to_string(),
+            schedule_id: None,
+            max_turns: Some(4),
+            retry_config: None,
+        },
+        provider,
+        mode: HarnessMode::Conversation,
+        delegation_mode: agime::agents::DelegationMode::Subagent,
+        coordinator_execution_mode: CoordinatorExecutionMode::SingleWorker,
+        provider_turn_mode: ProviderTurnMode::Streaming,
+        completion_surface_policy: CompletionSurfacePolicy::Conversation,
+        write_scope: Vec::new(),
+        target_artifacts: Vec::new(),
+        result_contract: Vec::new(),
+        server_local_tool_names: Vec::new(),
+        required_tool_prefixes: Vec::new(),
+        parallelism_budget: None,
+        swarm_budget: None,
+        validation_mode: false,
+        worker_extensions: Vec::new(),
+        initial_context_runtime_state: Some(initial_state.clone()),
+        task_runtime: None,
+        system_prompt_override: None,
+        system_prompt_extras: Vec::new(),
+        extensions: Vec::new(),
+        final_output: None,
+        cancel_token: None,
+    };
+
+    let result = run_harness_host(
+        request,
+        HarnessHostDependencies {
+            agent,
+            event_sink: sink,
+            control_sink,
+            persistence,
+        },
+    )
+    .await
+    .expect("host should succeed");
+
+    let final_state = result
+        .context_runtime_state
+        .expect("context runtime state should roundtrip");
+    assert_eq!(
+        final_state.runtime_compactions,
+        initial_state.runtime_compactions
+    );
+    assert_eq!(
+        final_state
+            .preserved_segment()
+            .expect("preserved segment")
+            .reason,
+        "test_boundary"
+    );
+    assert!(final_state.last_projection_stats.is_some());
 }

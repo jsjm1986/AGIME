@@ -8,6 +8,7 @@ use crate::conversation::message::ToolRequest;
 use crate::providers::base::Provider;
 use anyhow::{anyhow, Result};
 use rmcp::model::{ErrorCode, ErrorData, JsonObject, Tool};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -24,6 +25,28 @@ impl Default for ToolRouteManager {
 }
 
 impl ToolRouteManager {
+    fn collect_router_recent_tools(
+        recent_calls: Vec<String>,
+        extension_tools: Vec<Tool>,
+    ) -> Vec<Tool> {
+        let mut tools_by_name = HashMap::new();
+        for tool in extension_tools {
+            tools_by_name.entry(tool.name.to_string()).or_insert(tool);
+        }
+
+        let mut seen = HashSet::new();
+        let mut selected = Vec::new();
+        for tool_name in recent_calls {
+            if !seen.insert(tool_name.clone()) {
+                continue;
+            }
+            if let Some(tool) = tools_by_name.remove(&tool_name) {
+                selected.push(tool);
+            }
+        }
+        selected
+    }
+
     pub fn new() -> Self {
         Self {
             router_tool_selector: Mutex::new(None),
@@ -165,15 +188,13 @@ impl ToolRouteManager {
         let selector = self.router_tool_selector.lock().await.clone();
         if let Some(selector) = selector {
             if let Ok(recent_calls) = selector.get_recent_tool_calls(20).await {
-                // Add recent tool calls to the list, avoiding duplicates
-                for tool_name in recent_calls {
-                    // Find the tool in the extension manager's tools
-                    if let Ok(extension_tools) = extension_manager.get_prefixed_tools(None).await {
-                        if let Some(tool) = extension_tools.iter().find(|t| t.name == tool_name) {
-                            // Only add if not already in prefixed_tools
-                            if !prefixed_tools.iter().any(|t| t.name == tool.name) {
-                                prefixed_tools.push(tool.clone());
-                            }
+                if let Ok(extension_tools) = extension_manager.get_prefixed_tools(None).await {
+                    for tool in Self::collect_router_recent_tools(recent_calls, extension_tools) {
+                        if !prefixed_tools
+                            .iter()
+                            .any(|existing| existing.name == tool.name)
+                        {
+                            prefixed_tools.push(tool);
                         }
                     }
                 }
@@ -181,5 +202,35 @@ impl ToolRouteManager {
         }
 
         prefixed_tools
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ToolRouteManager;
+    use rmcp::model::Tool;
+    use rmcp::object;
+
+    fn tool(name: &str) -> Tool {
+        Tool::new(name.to_string(), "test tool", object!({"type":"object"}))
+    }
+
+    #[test]
+    fn collect_router_recent_tools_preserves_first_seen_order_and_deduplicates() {
+        let selected = ToolRouteManager::collect_router_recent_tools(
+            vec![
+                "b".to_string(),
+                "a".to_string(),
+                "b".to_string(),
+                "missing".to_string(),
+            ],
+            vec![tool("a"), tool("b"), tool("c")],
+        );
+
+        let names = selected
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["b".to_string(), "a".to_string()]);
     }
 }

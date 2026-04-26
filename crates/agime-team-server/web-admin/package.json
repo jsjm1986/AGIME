@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "check:external-runtime": "node ./scripts/check-no-external-runtime-assets.mjs",
+    "check:i18n-targeted": "node ./scripts/check-targeted-i18n-cleanup.mjs",
+    "build": "npm run check:external-runtime && npm run check:i18n-targeted && tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },

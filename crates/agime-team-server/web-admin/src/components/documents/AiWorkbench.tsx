@@ -32,6 +32,7 @@ import { StatusBadge, DOC_STATUS_MAP } from '../ui/status-badge';
 import { EmptyState } from '../ui/empty-state';
 import { LoadingState } from '../ui/loading-state';
 import { formatDateTime } from '../../utils/format';
+import i18n from '../../i18n';
 
 const DocumentPreview = lazy(() =>
   import('./DocumentPreview').then((module) => ({ default: module.DocumentPreview })),
@@ -40,7 +41,7 @@ const DocumentPreview = lazy(() =>
 function DocumentPreviewLoading() {
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center text-sm text-muted-foreground">
-      正在加载文档预览...
+      {bilingual('正在加载文档预览...', 'Loading document preview...')}
     </div>
   );
 }
@@ -48,6 +49,10 @@ function DocumentPreviewLoading() {
 interface AiWorkbenchProps {
   teamId: string;
   canManage?: boolean;
+}
+
+function bilingual(zh: string, en: string): string {
+  return i18n.language?.startsWith('zh') ? zh : en;
 }
 
 function categoryIcon(category: string): string {
@@ -232,31 +237,31 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
         </Select>
         <Select value={sourceSpaceFilter || '__all__'} onValueChange={v => { setSourceSpaceFilter(v === '__all__' ? '' : v); setPage(1); }}>
           <SelectTrigger className="w-36 h-8">
-            <SelectValue placeholder="来源" />
+            <SelectValue placeholder={bilingual('来源', 'Source')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">全部来源</SelectItem>
-            <SelectItem value="personal_chat">个人对话</SelectItem>
-            <SelectItem value="team_channel">团队频道</SelectItem>
-            <SelectItem value="portal">分身 / Portal</SelectItem>
-            <SelectItem value="system">系统</SelectItem>
+            <SelectItem value="__all__">{bilingual('全部来源', 'All sources')}</SelectItem>
+            <SelectItem value="personal_chat">{bilingual('个人对话', 'Personal chat')}</SelectItem>
+            <SelectItem value="team_channel">{bilingual('团队频道', 'Team channel')}</SelectItem>
+            <SelectItem value="portal">{bilingual('分身 / Portal', 'Avatar / Portal')}</SelectItem>
+            <SelectItem value="system">{bilingual('系统', 'System')}</SelectItem>
           </SelectContent>
         </Select>
         <Select value={workbenchGroupFilter || '__all__'} onValueChange={v => { setWorkbenchGroupFilter(v === '__all__' ? '' : v); setPage(1); }}>
           <SelectTrigger className="w-36 h-8">
-            <SelectValue placeholder="分组" />
+            <SelectValue placeholder={bilingual('分组', 'Group')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">全部分组</SelectItem>
-            <SelectItem value="draft">草稿</SelectItem>
-            <SelectItem value="report">报告</SelectItem>
-            <SelectItem value="summary">总结</SelectItem>
-            <SelectItem value="review">审查</SelectItem>
-            <SelectItem value="artifact">产物</SelectItem>
-            <SelectItem value="plan">计划</SelectItem>
-            <SelectItem value="research">研究</SelectItem>
-            <SelectItem value="code">代码</SelectItem>
-            <SelectItem value="other">其他</SelectItem>
+            <SelectItem value="__all__">{bilingual('全部分组', 'All groups')}</SelectItem>
+            <SelectItem value="draft">{bilingual('草稿', 'Draft')}</SelectItem>
+            <SelectItem value="report">{bilingual('报告', 'Report')}</SelectItem>
+            <SelectItem value="summary">{bilingual('总结', 'Summary')}</SelectItem>
+            <SelectItem value="review">{bilingual('审查', 'Review')}</SelectItem>
+            <SelectItem value="artifact">{bilingual('产物', 'Artifact')}</SelectItem>
+            <SelectItem value="plan">{bilingual('计划', 'Plan')}</SelectItem>
+            <SelectItem value="research">{bilingual('研究', 'Research')}</SelectItem>
+            <SelectItem value="code">{bilingual('代码', 'Code')}</SelectItem>
+            <SelectItem value="other">{bilingual('其他', 'Other')}</SelectItem>
           </SelectContent>
         </Select>
         <Select value={groupMode} onValueChange={v => setGroupMode(v as 'source' | 'group' | 'none')}>
@@ -264,9 +269,9 @@ export function AiWorkbench({ teamId, canManage = false }: AiWorkbenchProps) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="source">按来源分组</SelectItem>
-            <SelectItem value="group">按产出分组</SelectItem>
-            <SelectItem value="none">不分组</SelectItem>
+            <SelectItem value="source">{bilingual('按来源分组', 'Group by source')}</SelectItem>
+            <SelectItem value="group">{bilingual('按产出分组', 'Group by output')}</SelectItem>
+            <SelectItem value="none">{bilingual('不分组', 'No grouping')}</SelectItem>
           </SelectContent>
         </Select>
         {!loading && (
@@ -489,7 +494,9 @@ function DocCard({
         )}
         {doc.source_channel_id && (
           <Button size="sm" variant="ghost" onClick={onOpenSource}>
-            {doc.source_thread_root_id ? '打开来源线程' : '打开来源频道'}
+            {doc.source_thread_root_id
+              ? bilingual('打开来源线程', 'Open source thread')
+              : bilingual('打开来源频道', 'Open source channel')}
           </Button>
         )}
         <Button size="sm" variant="ghost" onClick={onDownload}>
@@ -516,42 +523,54 @@ function flattenFolders(nodes: FolderTreeNode[], level = 0): Array<{ path: strin
 
 function renderWorkbenchGroupLabel(group?: string | null): string {
   switch (group) {
-    case 'draft': return '草稿';
-    case 'report': return '报告';
-    case 'summary': return '总结';
-    case 'review': return '审查';
-    case 'plan': return '计划';
-    case 'research': return '研究';
-    case 'artifact': return '产物';
-    case 'code': return '代码';
-    default: return '其他';
+    case 'draft': return bilingual('草稿', 'Draft');
+    case 'report': return bilingual('报告', 'Report');
+    case 'summary': return bilingual('总结', 'Summary');
+    case 'review': return bilingual('审查', 'Review');
+    case 'plan': return bilingual('计划', 'Plan');
+    case 'research': return bilingual('研究', 'Research');
+    case 'artifact': return bilingual('产物', 'Artifact');
+    case 'code': return bilingual('代码', 'Code');
+    default: return bilingual('其他', 'Other');
   }
 }
 
 function renderSourceTypeLabel(type?: string | null): string {
   switch (type) {
-    case 'personal_chat': return '个人对话';
-    case 'team_channel': return '团队频道';
-    case 'agent_app': return 'Agent 应用';
-    case 'portal': return '分身 / Portal';
-    case 'system': return '系统';
-    default: return '未知来源';
+    case 'personal_chat': return bilingual('个人对话', 'Personal chat');
+    case 'team_channel': return bilingual('团队频道', 'Team channel');
+    case 'agent_app': return bilingual('Agent 应用', 'Agent app');
+    case 'portal': return bilingual('分身 / Portal', 'Avatar / Portal');
+    case 'system': return bilingual('系统', 'System');
+    default: return bilingual('未知来源', 'Unknown source');
   }
 }
 
 function renderSourceLabel(doc: DocumentSummary): string {
   const sourceType = renderSourceTypeLabel(doc.source_space_type);
   if (doc.source_channel_name) {
-    return `来自 ${sourceType}「${doc.source_channel_name}」`;
+    return bilingual(
+      `来自 ${sourceType}「${doc.source_channel_name}」`,
+      `From ${sourceType} "${doc.source_channel_name}"`,
+    );
   }
   if (doc.source_space_name) {
-    return `来自 ${sourceType}「${doc.source_space_name}」`;
+    return bilingual(
+      `来自 ${sourceType}「${doc.source_space_name}」`,
+      `From ${sourceType} "${doc.source_space_name}"`,
+    );
   }
   if (doc.source_space_id) {
-    return `来自 ${sourceType} · ${doc.source_space_id.slice(0, 8)}`;
+    return bilingual(
+      `来自 ${sourceType} · ${doc.source_space_id.slice(0, 8)}`,
+      `From ${sourceType} · ${doc.source_space_id.slice(0, 8)}`,
+    );
   }
   if (doc.source_session_id) {
-    return `来自会话 · ${doc.source_session_id.slice(0, 8)}`;
+    return bilingual(
+      `来自会话 · ${doc.source_session_id.slice(0, 8)}`,
+      `From session · ${doc.source_session_id.slice(0, 8)}`,
+    );
   }
   return sourceType;
 }

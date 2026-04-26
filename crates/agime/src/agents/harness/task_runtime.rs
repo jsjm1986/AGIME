@@ -185,6 +185,7 @@ pub enum TaskRuntimeEvent {
         worker_name: Option<String>,
         tool_name: String,
         decision: String,
+        source: Option<String>,
     },
     PermissionTimedOut {
         task_id: String,
@@ -233,6 +234,7 @@ pub trait TaskRuntimeHost: Send + Sync {
         worker_name: Option<String>,
         tool_name: impl Into<String> + Send,
         decision: impl Into<String> + Send,
+        source: Option<String>,
     ) -> Result<()>;
     async fn record_permission_timed_out(
         &self,
@@ -472,6 +474,7 @@ impl TaskRuntimeHost for TaskRuntime {
         worker_name: Option<String>,
         tool_name: impl Into<String> + Send,
         decision: impl Into<String> + Send,
+        source: Option<String>,
     ) -> Result<()> {
         let Some(mut entry) = self.tasks.get_mut(task_id) else {
             return Err(anyhow!("task {} not found", task_id));
@@ -484,6 +487,7 @@ impl TaskRuntimeHost for TaskRuntime {
                 worker_name,
                 tool_name: tool_name.into(),
                 decision: decision.into(),
+                source,
             },
         );
         Ok(())

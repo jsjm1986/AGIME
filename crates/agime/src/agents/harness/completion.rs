@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::Conversation;
+use std::collections::HashMap;
 
 use super::{CoordinatorSignalSummary, FinalOutputState};
 
@@ -49,8 +50,10 @@ pub struct ExecutionHostCompletionReport {
     pub analysis_complete: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum CompletionSurfacePolicy {
+    #[default]
     Conversation,
     Execute,
     SystemDocumentAnalysis,
@@ -206,6 +209,34 @@ fn runtime_completion_evidence_ready(signal_summary: &CoordinatorSignalSummary) 
         || signal_summary.validation_passed > 0
 }
 
+fn fallback_requested_without_terminal_evidence(signal_summary: &CoordinatorSignalSummary) -> bool {
+    signal_summary.fallback_requested > 0 && !runtime_completion_evidence_ready(signal_summary)
+}
+
+fn hard_validation_failure_present(signal_summary: &CoordinatorSignalSummary) -> bool {
+    signal_summary.has_hard_blocking_signals()
+        && signal_summary.permission_timed_out == 0
+        && signal_summary.fallback_requested == 0
+}
+
+fn completion_has_hard_blocking_signals(signal_summary: &CoordinatorSignalSummary) -> bool {
+    hard_validation_failure_present(signal_summary)
+        || signal_summary.permission_timed_out > 0
+        || fallback_requested_without_terminal_evidence(signal_summary)
+}
+
+fn conversation_has_hard_blocking_signals(signal_summary: &CoordinatorSignalSummary) -> bool {
+    let has_terminal_worker_result = signal_summary.worker_completed > 0
+        && signal_summary
+            .latest_completion_summary
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+
+    signal_summary.permission_timed_out > 0
+        || fallback_requested_without_terminal_evidence(signal_summary)
+        || (hard_validation_failure_present(signal_summary) && !has_terminal_worker_result)
+}
+
 fn latest_user_visible_assistant_text(conversation: &Conversation) -> Option<String> {
     conversation
         .messages()
@@ -216,8 +247,173 @@ fn latest_user_visible_assistant_text(conversation: &Conversation) -> Option<Str
         })
         .and_then(|message| {
             let text = message.as_concat_text().trim().to_string();
-            (!text.is_empty()).then_some(text)
+            assistant_text_counts_as_terminal_reply(&text).then_some(text)
         })
+}
+
+pub fn assistant_text_counts_as_terminal_reply(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty() && !summary_indicates_runtime_internal_only(trimmed)
+}
+
+fn summary_indicates_runtime_internal_only(summary: &str) -> bool {
+    let normalized = summary.trim().to_ascii_lowercase();
+
+    if normalized.starts_with("tool `")
+        && (normalized.ends_with(" completed") || normalized.contains("` failed:"))
+    {
+        return true;
+    }
+
+    if normalized.starts_with("permission requested for `")
+        || normalized.starts_with("permission bridge timed out while waiting for `")
+        || (normalized.starts_with("permission `") && normalized.contains(" resolved for `"))
+    {
+        return true;
+    }
+
+    if normalized.starts_with("document access established;")
+        || normalized.starts_with("document access established for ")
+        || (normalized.contains("document access established")
+            && normalized.contains("materialized into the workspace"))
+        || (normalized.contains("document access established")
+            && normalized.contains("workspace path:")
+            && normalized.contains("use developer shell"))
+        || (normalized.contains("document access established")
+            && normalized.contains("use developer shell, mcp, or another local tool"))
+        || normalized == "document content observed; continue the final analysis"
+        || normalized == "document analysis is ready for validation"
+        || normalized == "document access has not been established yet"
+    {
+        return true;
+    }
+
+    if normalized.starts_with("swarm run `") || normalized.contains("mailbox root:") {
+        return true;
+    }
+
+    if normalized.starts_with("bounded swarm produced no accepted target delta.")
+        || normalized.starts_with("planner auto-upgraded this turn")
+    {
+        return true;
+    }
+
+    false
+}
+
+pub fn latest_terminal_user_visible_assistant_text(conversation: &Conversation) -> Option<String> {
+    let messages = conversation.messages();
+    let last_tool_response_idx = messages.iter().rposition(|message| {
+        message.metadata.user_visible
+            && message.content.iter().any(|content| {
+                matches!(
+                    content,
+                    crate::conversation::message::MessageContent::ToolResponse(_)
+                )
+            })
+    });
+
+    let Some(start_idx) = last_tool_response_idx.map(|idx| idx + 1) else {
+        return latest_user_visible_assistant_text(conversation);
+    };
+    messages[start_idx..]
+        .iter()
+        .rev()
+        .find(|message| {
+            message.role == rmcp::model::Role::Assistant && message.metadata.user_visible
+        })
+        .and_then(|message| {
+            let text = message.as_concat_text().trim().to_string();
+            assistant_text_counts_as_terminal_reply(&text).then_some(text)
+        })
+}
+
+fn conversation_validation_status(
+    final_conversation: &Conversation,
+    signal_summary: Option<&CoordinatorSignalSummary>,
+    has_terminal_assistant_summary: bool,
+) -> &'static str {
+    let Some(summary) = signal_summary else {
+        return "not_run";
+    };
+    if let Some(status) = summary.validation_status() {
+        return status;
+    }
+    if (summary.document_analysis_complete()
+        || (summary.document_access_established()
+            && conversation_indicates_document_content_read(final_conversation)))
+        && has_terminal_assistant_summary
+    {
+        return "passed";
+    }
+    if summary.document_access_established() {
+        return "failed";
+    }
+    "not_run"
+}
+
+fn conversation_indicates_document_content_read(conversation: &Conversation) -> bool {
+    let mut tool_names = HashMap::new();
+    let mut document_access_established = false;
+
+    for message in conversation.messages() {
+        for content in &message.content {
+            if let Some(request) = content.as_tool_request() {
+                if let Ok(tool_call) = &request.tool_call {
+                    tool_names.insert(request.id.clone(), tool_call.name.to_string());
+                }
+                continue;
+            }
+
+            let Some(response) = content.as_tool_response() else {
+                continue;
+            };
+            let Ok(result) = &response.tool_result else {
+                continue;
+            };
+            let tool_name = tool_names
+                .get(&response.id)
+                .map(String::as_str)
+                .unwrap_or("");
+
+            if tool_name.starts_with("document_tools__") {
+                if result
+                    .structured_content
+                    .as_ref()
+                    .and_then(|value| value.get("content_accessed"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+                if result
+                    .structured_content
+                    .as_ref()
+                    .and_then(|value| value.get("access_established"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    document_access_established = true;
+                }
+                continue;
+            }
+
+            if !document_access_established || result.is_error.unwrap_or(false) {
+                continue;
+            }
+
+            let has_text = result.content.iter().any(|item| {
+                item.as_text()
+                    .map(|text| !text.text.trim().is_empty())
+                    .unwrap_or(false)
+            });
+            if has_text {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 fn summary_indicates_document_content_unavailable(summary: &str) -> bool {
@@ -312,7 +508,7 @@ pub fn normalize_execution_host_completion_report(
             required_tool_prefixes.join(", ")
         ));
     } else if report.status.eq_ignore_ascii_case("completed")
-        && signal_summary.is_some_and(CoordinatorSignalSummary::has_blocking_signals)
+        && signal_summary.is_some_and(completion_has_hard_blocking_signals)
     {
         report.status = "blocked".to_string();
         if report.blocking_reason.is_none() {
@@ -409,13 +605,16 @@ pub fn build_conversation_completion_report(
         }
     }
 
-    let assistant_summary = latest_user_visible_assistant_text(final_conversation);
-    let has_blocking_signals =
-        signal_summary.is_some_and(CoordinatorSignalSummary::has_blocking_signals);
-    if let Some(summary) = assistant_summary
-        .or_else(|| completion_outcome.and_then(|outcome| outcome.summary.clone()))
-        .filter(|_| !has_blocking_signals)
-    {
+    let assistant_summary = latest_terminal_user_visible_assistant_text(final_conversation);
+    let has_hard_blocking_signals =
+        signal_summary.is_some_and(conversation_has_hard_blocking_signals);
+    let validation_status = conversation_validation_status(
+        final_conversation,
+        signal_summary,
+        assistant_summary.is_some(),
+    )
+    .to_string();
+    if let Some(summary) = assistant_summary.filter(|_| !has_hard_blocking_signals) {
         let evidence = signal_summary.map(CoordinatorSignalSummary::completion_evidence);
         return ExecutionHostCompletionReport {
             status: "completed".to_string(),
@@ -429,12 +628,7 @@ pub fn build_conversation_completion_report(
                 .map(|value| value.accepted_targets.clone())
                 .unwrap_or_default(),
             next_steps: Vec::new(),
-            validation_status: Some(
-                signal_summary
-                    .and_then(CoordinatorSignalSummary::validation_status)
-                    .unwrap_or("not_run")
-                    .to_string(),
-            ),
+            validation_status: Some(validation_status.clone()),
             blocking_reason: None,
             reason_code: None,
             content_accessed: None,
@@ -450,12 +644,7 @@ pub fn build_conversation_completion_report(
         next_steps: vec![
             "Provide additional context or retry after resolving the blocking issue.".to_string(),
         ],
-        validation_status: Some(
-            signal_summary
-                .and_then(CoordinatorSignalSummary::validation_status)
-                .unwrap_or("not_run")
-                .to_string(),
-        ),
+        validation_status: Some(validation_status),
         blocking_reason: completion_outcome
             .and_then(|outcome| outcome.blocking_reason.clone())
             .or_else(|| signal_summary.and_then(CoordinatorSignalSummary::default_blocking_reason))
@@ -567,7 +756,7 @@ pub fn derive_execute_completion_outcome(
     let completion_ready = runtime_evidence_ready;
     let required_tools_satisfied =
         signal_summary.satisfies_required_tool_prefixes(required_tool_prefixes);
-    let has_blocking_signals = signal_summary.has_blocking_signals();
+    let has_blocking_signals = completion_has_hard_blocking_signals(signal_summary);
 
     let structured_report = signal_summary.latest_structured_completion.clone();
 
@@ -653,6 +842,7 @@ mod tests {
             summary: "updated docs/out.md".to_string(),
             accepted_targets: vec!["docs/out.md".to_string()],
             produced_delta: true,
+            recovered_terminal_summary: false,
             attempt_identity: None,
         });
         summary.accepted_targets = vec!["docs/out.md".to_string()];
@@ -726,6 +916,118 @@ mod tests {
     }
 
     #[test]
+    fn derive_execute_completion_outcome_allows_worker_failures_with_terminal_summary() {
+        let summary = CoordinatorSignalSummary {
+            worker_completed: 1,
+            worker_failed: 1,
+            latest_completion_summary: Some("leader summarized partial success".to_string()),
+            produced_targets: vec!["docs/out.md".to_string()],
+            accepted_targets: vec!["docs/out.md".to_string()],
+            ..Default::default()
+        };
+
+        let outcome = derive_execute_completion_outcome(
+            &summary,
+            &FinalOutputState {
+                tool_present: true,
+                collected_output: None,
+            },
+            &[],
+            false,
+        );
+
+        assert_eq!(outcome.state, ExecuteCompletionState::Completed);
+        assert_eq!(outcome.status, "completed");
+        assert!(!outcome.has_blocking_signals);
+    }
+
+    #[test]
+    fn derive_execute_completion_outcome_does_not_block_completed_swarm_on_fallback_signal_alone() {
+        let summary = CoordinatorSignalSummary {
+            worker_completed: 2,
+            fallback_requested: 1,
+            latest_completion_summary: Some("swarm leader produced final summary".to_string()),
+            produced_targets: vec!["README.md".to_string()],
+            accepted_targets: vec!["README.md".to_string()],
+            ..Default::default()
+        };
+
+        let outcome = derive_execute_completion_outcome(
+            &summary,
+            &FinalOutputState {
+                tool_present: true,
+                collected_output: None,
+            },
+            &[],
+            false,
+        );
+
+        assert_eq!(outcome.state, ExecuteCompletionState::Completed);
+        assert_eq!(outcome.status, "completed");
+        assert!(!outcome.has_blocking_signals);
+    }
+
+    #[test]
+    fn derive_execute_completion_outcome_ignores_document_validation_failures_contradicted_by_read_tool() {
+        let summary = CoordinatorSignalSummary::from_signals(&[
+            CoordinatorSignal::ToolCompleted {
+                request_id: "req-1".to_string(),
+                tool_name: "document_tools__read_document".to_string(),
+                transport: ToolTransportKind::ServerLocal,
+            },
+            CoordinatorSignal::ValidationReported {
+                report: ValidationReport {
+                    status: ValidationStatus::Failed,
+                    reason: Some(
+                        "The validation worker cannot access the target document content because no document read tools are available."
+                            .to_string(),
+                    ),
+                    reason_code: None,
+                    validator_task_id: Some("validator-1".to_string()),
+                    target_artifacts: vec!["document:doc-1".to_string()],
+                    evidence_summary: None,
+                    content_accessed: false,
+                    analysis_complete: false,
+                },
+            },
+            CoordinatorSignal::CompletionReady {
+                report: StructuredCompletionSignal {
+                    status: "completed".to_string(),
+                    summary: Some("Document verified and summarized.".to_string()),
+                    accepted_targets: vec!["document:doc-1".to_string()],
+                    produced_targets: vec![],
+                    validation_status: Some("failed".to_string()),
+                    blocking_reason: Some(
+                        "The validation worker cannot access the target document content because no document read tools are available."
+                            .to_string(),
+                    ),
+                    reason_code: None,
+                    content_accessed: Some(true),
+                    analysis_complete: Some(true),
+                },
+            },
+        ]);
+
+        let outcome = derive_execute_completion_outcome(
+            &summary,
+            &FinalOutputState {
+                tool_present: true,
+                collected_output: None,
+            },
+            &["document_tools__".to_string()],
+            false,
+        );
+
+        assert_eq!(outcome.state, ExecuteCompletionState::Completed);
+        assert_eq!(outcome.status, "completed");
+        assert!(!outcome.has_blocking_signals);
+        assert_eq!(
+            outcome.summary.as_deref(),
+            Some("Document verified and summarized.")
+        );
+    }
+
+    #[test]
     fn structured_final_output_no_longer_overrides_terminal_status() {
         let summary = CoordinatorSignalSummary {
             worker_completed: 1,
@@ -789,6 +1091,282 @@ mod tests {
         assert_eq!(report.status, "completed");
         assert_eq!(report.summary, "hi there");
         assert_eq!(report.blocking_reason, None);
+    }
+
+    #[test]
+    fn conversation_completion_allows_terminal_assistant_summary_despite_worker_failure() {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::user().with_text("run swarm"));
+        conversation.push(Message::assistant().with_text("worker A completed; worker B failed"));
+        let summary = CoordinatorSignalSummary {
+            worker_completed: 1,
+            worker_failed: 1,
+            latest_completion_summary: Some("worker A completed; worker B failed".to_string()),
+            ..Default::default()
+        };
+
+        let report = build_conversation_completion_report(&conversation, None, Some(&summary));
+
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.summary, "worker A completed; worker B failed");
+        assert_eq!(report.blocking_reason, None);
+    }
+
+    #[test]
+    fn conversation_completion_allows_terminal_swarm_summary_despite_internal_validation_failures()
+    {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::user().with_text("run swarm"));
+        conversation.push(
+            Message::assistant()
+                .with_text("Swarm completed. Key findings:\n- Worker 1: README.md is missing."),
+        );
+        let summary = CoordinatorSignalSummary {
+            worker_completed: 2,
+            validation_failed: 2,
+            fallback_requested: 1,
+            latest_completion_summary: Some(
+                "Swarm completed. Key findings:\n- Worker 1: README.md is missing.".to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let report = build_conversation_completion_report(&conversation, None, Some(&summary));
+
+        assert_eq!(report.status, "completed");
+        assert_eq!(
+            report.summary,
+            "Swarm completed. Key findings:\n- Worker 1: README.md is missing."
+        );
+        assert_eq!(report.blocking_reason, None);
+    }
+
+    #[test]
+    fn conversation_completion_ignores_assistant_text_before_last_tool_response() {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::assistant().with_text("hi there"));
+        conversation.push(Message::user().with_tool_response(
+            "tool-1",
+            Ok(rmcp::model::CallToolResult {
+                content: vec![rmcp::model::Content::text("tool completed")],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+
+        let report = build_conversation_completion_report(&conversation, None, None);
+
+        assert_eq!(report.status, "blocked");
+    }
+
+    #[test]
+    fn conversation_completion_does_not_fallback_to_runtime_summary_without_terminal_reply() {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::assistant().with_text("hi there"));
+        conversation.push(Message::user().with_tool_response(
+            "tool-1",
+            Ok(rmcp::model::CallToolResult {
+                content: vec![rmcp::model::Content::text("tool completed")],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+        let outcome = ExecuteCompletionOutcome {
+            state: ExecuteCompletionState::Completed,
+            status: "completed".to_string(),
+            summary: Some("worker finished".to_string()),
+            blocking_reason: None,
+            completion_ready: true,
+            required_tools_satisfied: true,
+            has_blocking_signals: false,
+            active_child_tasks: false,
+        };
+
+        let report = build_conversation_completion_report(&conversation, Some(&outcome), None);
+
+        assert_eq!(report.status, "blocked");
+    }
+
+    #[test]
+    fn conversation_completion_rejects_tool_completed_echo_as_terminal_reply() {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::assistant().with_tool_request(
+            "tool-1",
+            Ok(rmcp::model::CallToolRequestParams {
+                name: "document_tools__document_inventory".into(),
+                arguments: None,
+                meta: None,
+                task: None,
+            }),
+        ));
+        conversation.push(Message::user().with_tool_response(
+            "tool-1",
+            Ok(rmcp::model::CallToolResult {
+                content: vec![rmcp::model::Content::text("inventory json")],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+        conversation.push(
+            Message::assistant().with_text("tool `document_tools__document_inventory` completed"),
+        );
+
+        let report = build_conversation_completion_report(&conversation, None, None);
+
+        assert_eq!(report.status, "blocked");
+        assert_eq!(
+            report.blocking_reason.as_deref(),
+            Some("runtime exited without a user-visible assistant response")
+        );
+    }
+
+    #[test]
+    fn conversation_completion_rejects_document_progress_echo_as_terminal_reply() {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::assistant().with_tool_request(
+            "tool-1",
+            Ok(rmcp::model::CallToolRequestParams {
+                name: "document_tools__document_inventory".into(),
+                arguments: None,
+                meta: None,
+                task: None,
+            }),
+        ));
+        conversation.push(Message::user().with_tool_response(
+            "tool-1",
+            Ok(rmcp::model::CallToolResult {
+                content: vec![rmcp::model::Content::text("document access established")],
+                structured_content: Some(serde_json::json!({
+                    "access_established": true,
+                    "content_accessed": false
+                })),
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+        conversation.push(
+            Message::assistant()
+                .with_text("document access established; continue with local tools"),
+        );
+
+        let report = build_conversation_completion_report(&conversation, None, None);
+
+        assert_eq!(report.status, "blocked");
+    }
+
+    #[test]
+    fn conversation_completion_rejects_document_workspace_handoff_as_terminal_reply() {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::assistant().with_tool_request(
+            "doc-read",
+            Ok(rmcp::model::CallToolRequestParams {
+                name: "document_tools__read_document".into(),
+                arguments: None,
+                meta: None,
+                task: None,
+            }),
+        ));
+        conversation.push(Message::user().with_tool_response(
+            "doc-read",
+            Ok(rmcp::model::CallToolResult {
+                content: vec![rmcp::model::Content::text(
+                    "Document access established and the file was materialized into the workspace.",
+                )],
+                structured_content: Some(serde_json::json!({
+                    "access_established": true,
+                    "content_accessed": false,
+                    "analysis_complete": false,
+                    "reason_code": "document_access_established"
+                })),
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+        conversation.push(Message::assistant().with_text(
+            "Document access established and the file was materialized into the workspace. Use developer shell, MCP, or another local tool to read the file content from the workspace path.",
+        ));
+
+        let report = build_conversation_completion_report(&conversation, None, None);
+
+        assert_eq!(report.status, "blocked");
+        assert_eq!(
+            report.blocking_reason.as_deref(),
+            Some("runtime exited without a user-visible assistant response")
+        );
+    }
+
+    #[test]
+    fn conversation_completion_marks_document_chat_as_passed_when_analysis_completes() {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::assistant().with_text("final analysis"));
+        let summary = CoordinatorSignalSummary {
+            document_phase: Some(
+                super::super::signals::DocumentAnalysisPhase::AnalysisReadyForValidation,
+            ),
+            ..Default::default()
+        };
+
+        let report = build_conversation_completion_report(&conversation, None, Some(&summary));
+
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.validation_status.as_deref(), Some("passed"));
+    }
+
+    #[test]
+    fn conversation_completion_marks_document_chat_as_passed_after_access_and_local_read() {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::assistant().with_tool_request(
+            "doc-read",
+            Ok(rmcp::model::CallToolRequestParams {
+                name: "document_tools__read_document".into(),
+                arguments: None,
+                meta: None,
+                task: None,
+            }),
+        ));
+        conversation.push(Message::user().with_tool_response(
+            "doc-read",
+            Ok(rmcp::model::CallToolResult {
+                content: vec![rmcp::model::Content::text("document access established")],
+                structured_content: Some(serde_json::json!({
+                    "access_established": true,
+                    "content_accessed": false
+                })),
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+        conversation.push(Message::assistant().with_tool_request(
+            "editor-view",
+            Ok(rmcp::model::CallToolRequestParams {
+                name: "developer__text_editor".into(),
+                arguments: None,
+                meta: None,
+                task: None,
+            }),
+        ));
+        conversation.push(Message::user().with_tool_response(
+            "editor-view",
+            Ok(rmcp::model::CallToolResult {
+                content: vec![rmcp::model::Content::text("actual document body")],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+        conversation.push(Message::assistant().with_text("final analysis"));
+        let summary = CoordinatorSignalSummary {
+            document_phase: Some(super::super::signals::DocumentAnalysisPhase::AccessEstablished),
+            ..Default::default()
+        };
+
+        let report = build_conversation_completion_report(&conversation, None, Some(&summary));
+
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.validation_status.as_deref(), Some("passed"));
     }
 
     #[test]

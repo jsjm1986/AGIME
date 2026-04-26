@@ -1,21 +1,19 @@
 use crate::agents::agent::{
-    build_cfpm_runtime_inline_message, current_cfpm_runtime_visibility,
-    should_emit_cfpm_runtime_notification, Agent, AgentEvent, HistoryCapturePolicy,
-    NoToolTurnHandling, TurnFinalization,
+    Agent, AgentEvent, HistoryCapturePolicy, NoToolTurnHandling, TurnFinalization,
 };
 use crate::agents::types::SessionConfig;
-use crate::context_mgmt::ContextCompactionStrategy;
 use crate::conversation::{
-    message::{Message, MessageContent, MessageMetadata, SystemNotificationType},
+    message::{Message, MessageContent, MessageMetadata},
     Conversation,
 };
-use crate::session::SessionManager;
+use crate::utils::{normalize_delegation_summary_text, safe_truncate};
 use anyhow::Result;
 
 use super::{
-    derive_execute_completion_outcome, no_tool_turn_action_with_final_output, record_transition,
-    resolve_post_turn_transition, snapshot_final_output_state, update_host_completion_outcome,
-    update_host_signal_summary, CoordinatorExecutionMode, ExecuteCompletionState,
+    derive_execute_completion_outcome, has_active_persisted_tasks,
+    no_tool_turn_action_with_final_output, record_transition, resolve_post_turn_transition,
+    snapshot_final_output_state, update_host_completion_outcome, update_host_signal_summary,
+    CompletionSurfacePolicy, CoordinatorExecutionMode, ExecuteCompletionState,
     HarnessCheckpointStore, HarnessMode, HarnessTranscriptStore, NoToolTurnAction,
     SessionHarnessStore, SharedCoordinatorSignalStore, SharedTransitionTrace, TaskRuntime,
     TransitionKind,
@@ -33,7 +31,9 @@ impl Agent {
                     matches!(
                         content,
                         crate::conversation::message::MessageContent::Text(text)
-                            if !text.text.trim().is_empty()
+                            if super::completion::assistant_text_counts_as_terminal_reply(
+                                &text.text
+                            )
                     )
                 })
         })
@@ -70,10 +70,42 @@ impl Agent {
                     && message.content.iter().any(|content| {
                         matches!(
                             content,
-                            MessageContent::Text(text) if !text.text.trim().is_empty()
+                            MessageContent::Text(text)
+                                if super::completion::assistant_text_counts_as_terminal_reply(
+                                    &text.text
+                                )
                         )
                     })
             })
+    }
+
+    fn latest_user_visible_tool_response_text(messages: &Conversation) -> Option<String> {
+        messages
+            .messages()
+            .iter()
+            .rev()
+            .filter(|message| message.metadata.user_visible)
+            .find_map(|message| {
+                message
+                    .content
+                    .iter()
+                    .rev()
+                    .find_map(MessageContent::as_tool_response_text)
+            })
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+    }
+
+    fn build_tool_response_summary_fallback(messages: &Conversation) -> Option<String> {
+        let raw = Self::latest_user_visible_tool_response_text(messages)?;
+        let normalized = normalize_delegation_summary_text(&raw);
+        if normalized.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "Tool execution completed. Result:\n{}",
+            safe_truncate(&normalized, 500)
+        ))
     }
 
     fn build_post_tool_conversation_follow_up_message() -> Message {
@@ -86,6 +118,60 @@ impl Agent {
         Message::user()
             .with_text(Self::EXECUTE_STRUCTURED_COMPLETION_FOLLOW_UP)
             .with_metadata(MessageMetadata::agent_only())
+    }
+
+    fn should_accept_bounded_child_terminal_assistant_text(
+        no_tools_called: bool,
+        delegation_depth: u32,
+        current_mode: HarnessMode,
+        messages_to_add: &Conversation,
+    ) -> bool {
+        no_tools_called
+            && delegation_depth > 0
+            && matches!(current_mode, HarnessMode::Conversation)
+            && Self::has_user_visible_assistant_text(messages_to_add)
+    }
+
+    fn should_accept_bounded_child_terminal_tool_result(
+        turns_taken: u32,
+        delegation_depth: u32,
+        completion_surface_policy: CompletionSurfacePolicy,
+        has_user_visible_tool_response: bool,
+        active_child_tasks: bool,
+        has_blocking_signals: bool,
+    ) -> bool {
+        turns_taken > 1
+            && delegation_depth > 0
+            && matches!(
+                completion_surface_policy,
+                CompletionSurfacePolicy::Conversation
+            )
+            && has_user_visible_tool_response
+            && !active_child_tasks
+            && !has_blocking_signals
+    }
+
+    fn build_delegation_summary_fallback(
+        signal_summary: &super::signals::CoordinatorSignalSummary,
+    ) -> Option<String> {
+        signal_summary
+            .latest_completion_summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| super::completion::assistant_text_counts_as_terminal_reply(value))
+            .map(ToString::to_string)
+            .or_else(|| {
+                signal_summary.worker_outcomes.iter().find_map(|outcome| {
+                    let summary = outcome.summary.trim();
+                    super::completion::assistant_text_counts_as_terminal_reply(summary).then(|| {
+                        if signal_summary.worker_outcomes.len() == 1 {
+                            format!("Worker completed. Summary:\n{}", summary)
+                        } else {
+                            format!("Delegation completed. Summary:\n{}", summary)
+                        }
+                    })
+                })
+            })
     }
 
     pub(crate) fn should_complete_coordinator_turn(
@@ -108,11 +194,10 @@ impl Agent {
             return has_completion_ready && required_tools_satisfied;
         }
 
-        if has_user_visible_tool_response {
-            return has_user_visible_assistant_text && !has_blocking_signals;
-        }
-
-        has_completion_ready || (has_user_visible_assistant_text && !has_blocking_signals)
+        let _ = has_completion_ready;
+        let _ = required_tools_satisfied;
+        let _ = has_user_visible_tool_response;
+        has_user_visible_assistant_text && !has_blocking_signals
     }
 
     pub(crate) async fn handle_no_tool_turn(
@@ -179,97 +264,6 @@ impl Agent {
         })
     }
 
-    pub(crate) async fn refresh_cfpm_runtime_after_turn(
-        &self,
-        session_config: &SessionConfig,
-        conversation: &Conversation,
-        messages_to_add: &Conversation,
-        active_compaction_strategy: ContextCompactionStrategy,
-    ) -> Result<Vec<AgentEvent>> {
-        let mut events = Vec::new();
-        if !active_compaction_strategy.is_cfpm() || messages_to_add.is_empty() {
-            return Ok(events);
-        }
-
-        if matches!(
-            active_compaction_strategy,
-            ContextCompactionStrategy::CfpmMemoryV2
-        ) {
-            let sem = self.cfpm_v2_extract_semaphore.clone();
-            if let Ok(permit) = sem.clone().try_acquire_owned() {
-                if let Ok(provider) = self.provider().await {
-                    let sid = session_config.id.clone();
-                    let msgs = conversation.messages().to_vec();
-                    let new_msgs: Vec<Message> = messages_to_add.messages().to_vec();
-                    tokio::spawn(async move {
-                        let _permit = permit;
-                        let mut all_msgs = msgs;
-                        all_msgs.extend(new_msgs.clone());
-                        match crate::session::cfpm_extract_v2::extract_memory_facts_via_llm(
-                            provider.as_ref(),
-                            &all_msgs,
-                        )
-                        .await
-                        {
-                            Ok(drafts) if !drafts.is_empty() => {
-                                if let Err(e) = SessionManager::merge_cfpm_memory_facts(
-                                    &sid,
-                                    drafts,
-                                    "v2_llm_extract",
-                                )
-                                .await
-                                {
-                                    tracing::warn!("V2 LLM merge failed: {}", e);
-                                }
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                tracing::warn!(
-                                    "V2 LLM extraction failed, falling back to V1: {}",
-                                    e
-                                );
-                                let _ = SessionManager::refresh_cfpm_memory_facts_from_recent_messages_with_report(
-                                    &sid,
-                                    &new_msgs,
-                                    "v2_fallback",
-                                )
-                                .await;
-                            }
-                        }
-                    });
-                }
-            }
-            return Ok(events);
-        }
-
-        match SessionManager::refresh_cfpm_memory_facts_from_recent_messages_with_report(
-            &session_config.id,
-            messages_to_add.messages(),
-            "turn_checkpoint",
-        )
-        .await
-        {
-            Ok(report) => {
-                let visibility = current_cfpm_runtime_visibility();
-                if should_emit_cfpm_runtime_notification(visibility, &report) {
-                    let msg = build_cfpm_runtime_inline_message(&report, visibility);
-                    events.push(AgentEvent::Message(
-                        Message::assistant()
-                            .with_system_notification(SystemNotificationType::InlineMessage, msg),
-                    ));
-                }
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to refresh CFPM memory facts from recent messages: {}",
-                    err
-                );
-            }
-        }
-
-        Ok(events)
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn finalize_turn(
         &self,
@@ -281,10 +275,10 @@ impl Agent {
         initial_messages: &[Message],
         terminal_provider_error: bool,
         transcript_store: &SessionHarnessStore,
-        active_compaction_strategy: ContextCompactionStrategy,
         turns_taken: u32,
         current_mode: HarnessMode,
-        compaction_count: u32,
+        runtime_compaction_count: u32,
+        completion_surface_policy: CompletionSurfacePolicy,
         delegation_depth: u32,
         coordinator_execution_mode: CoordinatorExecutionMode,
         required_tool_prefixes: &[String],
@@ -311,6 +305,18 @@ impl Agent {
                 "finalize_turn: terminal provider error, skipping no-tool repair"
             );
             false
+        } else if Self::should_accept_bounded_child_terminal_assistant_text(
+            no_tools_called,
+            delegation_depth,
+            current_mode,
+            messages_to_add,
+        ) {
+            exit_chat = true;
+            tracing::info!(
+                session_id = %session_config.id,
+                "finalize_turn: accepting bounded child terminal assistant text without retry"
+            );
+            false
         } else {
             let no_tool_handling = self
                 .handle_no_tool_turn(
@@ -333,8 +339,8 @@ impl Agent {
                     transition_trace,
                     turns_taken,
                     current_mode,
-                    TransitionKind::NoToolRepair,
-                    "retry_logic_requested",
+                    TransitionKind::PostTurnAdjudication,
+                    "no_tool_repair_transition",
                     std::collections::BTreeMap::new(),
                 )
                 .await;
@@ -357,8 +363,11 @@ impl Agent {
         };
         let signal_summary = coordinator_signals.summarize().await;
         let _ = update_host_signal_summary(&session_config.id, signal_summary.clone()).await;
-        let active_child_tasks =
-            task_runtime.has_active_tasks_for_parent_session(&session_config.id);
+        let active_child_tasks = task_runtime
+            .has_active_tasks_for_parent_session(&session_config.id)
+            || has_active_persisted_tasks(&session_config.id)
+                .await
+                .unwrap_or(false);
         let completion_outcome = derive_execute_completion_outcome(
             &signal_summary,
             &final_output_state,
@@ -370,30 +379,88 @@ impl Agent {
         let has_completion_ready = completion_outcome.completion_ready;
         let required_tools_satisfied = completion_outcome.required_tools_satisfied;
         let has_blocking_signals = completion_outcome.has_blocking_signals;
-        let has_user_visible_tool_response = Self::has_user_visible_tool_response(messages_to_add);
-        let has_terminal_user_visible_assistant_text =
+        let mut visible_conversation = conversation.clone();
+        visible_conversation.extend(messages_to_add.messages().clone());
+        let has_user_visible_tool_response =
+            Self::has_user_visible_tool_response(&visible_conversation);
+        let mut has_terminal_user_visible_assistant_text =
             Self::has_user_visible_assistant_text_after_last_tool_response(messages_to_add);
-        let coordinator_should_complete = if matches!(current_mode, HarnessMode::Execute) {
-            completion_outcome.state.is_terminal()
-        } else {
-            Self::should_complete_coordinator_turn(
-                current_mode,
-                coordinator_execution_mode,
-                has_completion_ready,
-                required_tools_satisfied,
-                has_terminal_user_visible_assistant_text,
+        if !has_terminal_user_visible_assistant_text {
+            if let Some(summary) = Self::build_delegation_summary_fallback(&signal_summary) {
+                let assistant_summary = Message::assistant().with_text(summary);
+                messages_to_add.push(assistant_summary.clone());
+                events.push(AgentEvent::Message(assistant_summary.clone()));
+                visible_conversation.push(assistant_summary);
+                has_terminal_user_visible_assistant_text = true;
+            }
+        }
+        if no_tools_called
+            && !has_terminal_user_visible_assistant_text
+            && matches!(
+                completion_surface_policy,
+                CompletionSurfacePolicy::Conversation
+            )
+            && has_user_visible_tool_response
+            && !active_child_tasks
+            && !has_blocking_signals
+        {
+            if let Some(summary) = Self::build_tool_response_summary_fallback(&visible_conversation)
+            {
+                let assistant_summary = Message::assistant().with_text(summary);
+                messages_to_add.push(assistant_summary.clone());
+                events.push(AgentEvent::Message(assistant_summary.clone()));
+                visible_conversation.push(assistant_summary);
+                has_terminal_user_visible_assistant_text = true;
+            }
+        }
+        let bounded_child_tool_result_is_terminal =
+            Self::should_accept_bounded_child_terminal_tool_result(
+                turns_taken,
+                delegation_depth,
+                completion_surface_policy,
+                has_user_visible_tool_response,
                 active_child_tasks,
                 has_blocking_signals,
-                has_user_visible_tool_response,
-            )
+            );
+        let coordinator_should_complete = match completion_surface_policy {
+            CompletionSurfacePolicy::Execute | CompletionSurfacePolicy::SystemDocumentAnalysis => {
+                if matches!(current_mode, HarnessMode::Execute) {
+                    completion_outcome.state.is_terminal()
+                } else {
+                    Self::should_complete_coordinator_turn(
+                        current_mode,
+                        coordinator_execution_mode,
+                        has_completion_ready,
+                        required_tools_satisfied,
+                        has_terminal_user_visible_assistant_text,
+                        active_child_tasks,
+                        has_blocking_signals,
+                        has_user_visible_tool_response,
+                    )
+                }
+            }
+            CompletionSurfacePolicy::Conversation => {
+                let _ = current_mode;
+                let _ = coordinator_execution_mode;
+                let _ = has_completion_ready;
+                let _ = required_tools_satisfied;
+                let _ = has_user_visible_tool_response;
+                (has_terminal_user_visible_assistant_text || bounded_child_tool_result_is_terminal)
+                    && !active_child_tasks
+                    && !has_blocking_signals
+            }
         };
-        let needs_post_tool_conversation_reply = matches!(current_mode, HarnessMode::Conversation)
-            && has_user_visible_tool_response
+        let needs_post_tool_conversation_reply = matches!(
+            completion_surface_policy,
+            CompletionSurfacePolicy::Conversation
+        ) && has_user_visible_tool_response
             && !has_terminal_user_visible_assistant_text
+            && !bounded_child_tool_result_is_terminal
             && !active_child_tasks
             && !has_blocking_signals;
         let needs_execute_structured_completion_follow_up =
-            matches!(current_mode, HarnessMode::Execute)
+            matches!(completion_surface_policy, CompletionSurfacePolicy::Execute)
+                && matches!(current_mode, HarnessMode::Execute)
                 && final_output_state.tool_present
                 && !completion_outcome.state.is_terminal()
                 && !active_child_tasks
@@ -407,7 +474,7 @@ impl Agent {
                 transition_trace,
                 turns_taken,
                 current_mode,
-                TransitionKind::CoordinatorCompletion,
+                TransitionKind::PostTurnAdjudication,
                 "conversation_post_tool_reply_required",
                 std::collections::BTreeMap::new(),
             )
@@ -421,32 +488,23 @@ impl Agent {
                 transition_trace,
                 turns_taken,
                 current_mode,
-                TransitionKind::CoordinatorCompletion,
+                TransitionKind::PostTurnAdjudication,
                 "execute_structured_completion_required",
                 std::collections::BTreeMap::new(),
             )
             .await;
         }
         if coordinator_should_complete {
-            let reason = if matches!(current_mode, HarnessMode::Execute) {
-                match completion_outcome.state {
-                    ExecuteCompletionState::Completed => {
-                        "execute_host_completed_with_terminal_completion_outcome"
-                    }
-                    ExecuteCompletionState::Blocked => {
-                        "execute_host_blocked_with_terminal_completion_outcome"
-                    }
-                    _ => "execute_host_terminal_outcome",
-                }
-            } else {
-                "coordinator_signals_settled_and_terminal_output_available"
-            };
             record_transition(
                 transition_trace,
                 turns_taken,
                 current_mode,
-                TransitionKind::CoordinatorCompletion,
-                reason,
+                TransitionKind::PostTurnAdjudication,
+                if matches!(completion_outcome.state, ExecuteCompletionState::Blocked) {
+                    "completion_blocked"
+                } else {
+                    "completion_completed"
+                },
                 std::collections::BTreeMap::new(),
             )
             .await;
@@ -471,21 +529,36 @@ impl Agent {
         );
 
         let mut next_mode = current_mode;
-        if let Some(post_turn_transition) = resolve_post_turn_transition(
-            current_mode,
-            no_tools_called,
-            &final_output_state,
-            retry_requested,
-            "",
-        ) {
+        let allow_post_turn_transition = !coordinator_should_complete && !terminal_provider_error;
+        if let Some(post_turn_transition) = allow_post_turn_transition
+            .then(|| {
+                resolve_post_turn_transition(
+                    current_mode,
+                    no_tools_called,
+                    &final_output_state,
+                    retry_requested,
+                    "",
+                )
+            })
+            .flatten()
+        {
             next_mode = post_turn_transition.transition.to;
+            let mut metadata = std::collections::BTreeMap::new();
+            metadata.insert(
+                "transition_reason".to_string(),
+                post_turn_transition.transition.reason.clone(),
+            );
+            metadata.insert(
+                "next_mode".to_string(),
+                post_turn_transition.transition.to.to_string(),
+            );
             record_transition(
                 transition_trace,
                 turns_taken,
                 next_mode,
-                TransitionKind::ModeTransition,
-                post_turn_transition.transition.reason.clone(),
-                std::collections::BTreeMap::new(),
+                TransitionKind::PostTurnAdjudication,
+                "mode_transition",
+                metadata,
             )
             .await;
             transcript_store
@@ -524,23 +597,6 @@ impl Agent {
             "finalize_turn: append_messages complete"
         );
 
-        let cfpm_events = self
-            .refresh_cfpm_runtime_after_turn(
-                session_config,
-                conversation,
-                messages_to_add,
-                active_compaction_strategy,
-            )
-            .await?;
-        tracing::info!(
-            session_id = %session_config.id,
-            cfpm_event_count = cfpm_events.len(),
-            "finalize_turn: cfpm refresh complete"
-        );
-        for event in cfpm_events {
-            events.push(event);
-        }
-
         conversation.extend(messages_to_add.clone());
         let _ = transcript_store
             .record_checkpoint(
@@ -557,7 +613,7 @@ impl Agent {
                 &session_config.id,
                 next_mode,
                 turns_taken,
-                compaction_count,
+                runtime_compaction_count,
                 delegation_depth,
             )
             .await;
@@ -671,6 +727,21 @@ mod tests {
     }
 
     #[test]
+    fn conversation_turn_without_terminal_assistant_reply_does_not_complete_from_runtime_evidence()
+    {
+        assert!(!Agent::should_complete_coordinator_turn(
+            HarnessMode::Conversation,
+            CoordinatorExecutionMode::ExplicitSwarm,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
     fn detects_assistant_reply_only_after_last_tool_response() {
         let mut conversation = Conversation::default();
         conversation.push(Message::assistant().with_text("Starting swarm now."));
@@ -691,6 +762,49 @@ mod tests {
     }
 
     #[test]
+    fn runtime_only_summary_after_tool_response_is_not_terminal_reply() {
+        let mut conversation = Conversation::default();
+        conversation.push(Message::assistant().with_text("Checking documents."));
+        conversation.push(Message::user().with_tool_response(
+            "tool-1",
+            Ok(rmcp::model::CallToolResult {
+                content: vec![rmcp::model::Content::text("tool completed")],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+        conversation.push(
+            Message::assistant().with_text("tool `document_tools__document_inventory` completed"),
+        );
+
+        assert!(!Agent::has_user_visible_assistant_text_after_last_tool_response(&conversation));
+    }
+
+    #[test]
+    fn document_workspace_handoff_is_not_considered_user_visible_terminal_text() {
+        let mut conversation = Conversation::default();
+        conversation.push(Message::assistant().with_text(
+            "Document access established and the file was materialized into the workspace. Use developer shell, MCP, or another local tool to read the file content from the workspace path.",
+        ));
+
+        assert!(!Agent::has_user_visible_assistant_text(&conversation));
+    }
+
+    #[test]
+    fn delegation_summary_fallback_rejects_document_workspace_handoff() {
+        let signal_summary = crate::agents::harness::signals::CoordinatorSignalSummary {
+            latest_completion_summary: Some(
+                "Document access established and the file was materialized into the workspace. Use developer shell, MCP, or another local tool to read the file content from the workspace path."
+                    .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        assert!(Agent::build_delegation_summary_fallback(&signal_summary).is_none());
+    }
+
+    #[test]
     fn post_tool_follow_up_message_is_agent_only() {
         let message = Agent::build_post_tool_conversation_follow_up_message();
         assert_eq!(message.role, rmcp::model::Role::User);
@@ -708,5 +822,99 @@ mod tests {
         assert!(message
             .as_concat_text()
             .contains("Call the `final_output` tool now"));
+    }
+
+    #[test]
+    fn bounded_child_terminal_assistant_text_short_circuits_no_tool_retry() {
+        let mut messages = Conversation::default();
+        messages.push(
+            Message::assistant().with_text("Scope: inspect README\nResult: README.md is missing."),
+        );
+        assert!(Agent::should_accept_bounded_child_terminal_assistant_text(
+            true,
+            1,
+            HarnessMode::Conversation,
+            &messages,
+        ));
+        assert!(!Agent::should_accept_bounded_child_terminal_assistant_text(
+            true,
+            0,
+            HarnessMode::Conversation,
+            &messages,
+        ));
+        assert!(!Agent::should_accept_bounded_child_terminal_assistant_text(
+            false,
+            1,
+            HarnessMode::Conversation,
+            &messages,
+        ));
+    }
+
+    #[test]
+    fn bounded_child_tool_result_can_complete_without_extra_assistant_turn() {
+        assert!(Agent::should_accept_bounded_child_terminal_tool_result(
+            2,
+            1,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            false,
+            false,
+        ));
+        assert!(!Agent::should_accept_bounded_child_terminal_tool_result(
+            2,
+            0,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            false,
+            false,
+        ));
+        assert!(!Agent::should_accept_bounded_child_terminal_tool_result(
+            2,
+            1,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            true,
+            false,
+        ));
+        assert!(!Agent::should_accept_bounded_child_terminal_tool_result(
+            1,
+            1,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn builds_tool_response_summary_fallback_from_latest_user_visible_tool_result() {
+        let mut conversation = Conversation::default();
+        conversation.push(Message::assistant().with_text("Checking health."));
+        conversation.push(Message::user().with_tool_response(
+            "tool-1",
+            Ok(rmcp::model::CallToolResult {
+                content: vec![rmcp::model::Content::text(
+                    "{\"status\":\"healthy\",\"database_connected\":true,\"version\":\"2.8.0\"}",
+                )],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+
+        let summary =
+            Agent::build_tool_response_summary_fallback(&conversation).expect("summary fallback");
+        assert!(summary.starts_with("Tool execution completed. Result:"));
+        assert!(summary.contains("2.8.0"));
+    }
+
+    #[test]
+    fn preexisting_assistant_notice_does_not_count_as_terminal_reply_for_new_turn() {
+        let mut existing = Conversation::default();
+        existing.push(Message::assistant().with_text("已初始化应用。"));
+        assert!(Agent::has_user_visible_assistant_text(&existing));
+
+        let new_turn = Conversation::default();
+        assert!(!Agent::has_user_visible_assistant_text_after_last_tool_response(&new_turn));
     }
 }

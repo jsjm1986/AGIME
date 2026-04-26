@@ -173,7 +173,7 @@ impl ExtensionInstaller {
                         "Unsupported install kind '{}' for extension '{}'",
                         other,
                         ext.name
-                    ))
+                    ));
                 }
             };
 
@@ -564,7 +564,7 @@ async fn acquire_lock(lock_path: &Path, timeout: Duration) -> Result<InstallLock
                     "Failed to acquire install lock {}: {}",
                     lock_path.display(),
                     e
-                ))
+                ));
             }
         }
     }

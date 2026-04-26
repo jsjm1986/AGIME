@@ -70,11 +70,47 @@ pub struct PermissionBridgeRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionDecisionSource {
+    Config,
+    RuntimePolicy,
+    UserTemporary,
+    UserPersistent,
+    UserReject,
+    Cached,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionBridgeResolution {
     pub request_id: String,
     pub permission: Permission,
     pub feedback: Option<String>,
+    #[serde(default = "default_permission_decision_source")]
+    pub source: PermissionDecisionSource,
     pub resolved_at: String,
+}
+
+fn default_permission_decision_source() -> PermissionDecisionSource {
+    PermissionDecisionSource::Config
+}
+
+pub fn permission_decision_source_label(source: &PermissionDecisionSource) -> &'static str {
+    match source {
+        PermissionDecisionSource::Config => "config",
+        PermissionDecisionSource::RuntimePolicy => "runtime_policy",
+        PermissionDecisionSource::UserTemporary => "user_temporary",
+        PermissionDecisionSource::UserPersistent => "user_persistent",
+        PermissionDecisionSource::UserReject => "user_reject",
+        PermissionDecisionSource::Cached => "cached",
+    }
+}
+
+pub fn permission_resolution_feedback(resolution: &PermissionBridgeResolution) -> Option<String> {
+    let source = permission_decision_source_label(&resolution.source);
+    match resolution.feedback.as_deref().map(str::trim) {
+        Some(feedback) if !feedback.is_empty() => Some(format!("{} [source:{}]", feedback, source)),
+        _ => Some(format!("decision source: {}", source)),
+    }
 }
 
 pub type PermissionBridgeResolver =
@@ -273,6 +309,7 @@ pub fn auto_resolve_request(request: &PermissionBridgeRequest) -> PermissionBrid
             Permission::DenyOnce
         },
         feedback,
+        source: PermissionDecisionSource::Config,
         resolved_at: Utc::now().to_rfc3339(),
     }
 }
@@ -289,6 +326,7 @@ pub fn timeout_resolution(
             timeout.as_secs(),
             request.tool_name
         )),
+        source: PermissionDecisionSource::RuntimePolicy,
         resolved_at: Utc::now().to_rfc3339(),
     }
 }
@@ -388,6 +426,7 @@ mod tests {
             request_id: request.request_id.clone(),
             permission: Permission::DenyOnce,
             feedback: Some("custom policy".to_string()),
+            source: PermissionDecisionSource::RuntimePolicy,
             resolved_at: Utc::now().to_rfc3339(),
         }));
 
@@ -412,6 +451,64 @@ mod tests {
         let resolved = resolve_permission_request_via_policy(&request);
         assert_eq!(resolved.permission, Permission::DenyOnce);
         clear_permission_bridge_resolver();
+    }
+
+    #[test]
+    fn auto_resolve_request_uses_config_source() {
+        let request = PermissionBridgeRequest {
+            request_id: "req-5".to_string(),
+            run_id: "run-1".to_string(),
+            worker_name: "worker-1".to_string(),
+            logical_worker_id: None,
+            attempt_id: None,
+            attempt_index: None,
+            previous_task_id: None,
+            tool_name: "read_file".to_string(),
+            tool_use_id: "tool-5".to_string(),
+            description: "read".to_string(),
+            arguments: JsonObject::default(),
+            tool_input_snapshot: None,
+            write_scope: vec!["src/out.md".to_string()],
+            validation_mode: false,
+            permission_policy: None,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        let resolved = auto_resolve_request(&request);
+        assert_eq!(permission_decision_source_label(&resolved.source), "config");
+        assert_eq!(
+            permission_resolution_feedback(&resolved).as_deref(),
+            Some("decision source: config")
+        );
+    }
+
+    #[test]
+    fn timeout_resolution_uses_runtime_policy_source() {
+        let request = PermissionBridgeRequest {
+            request_id: "req-6".to_string(),
+            run_id: "run-1".to_string(),
+            worker_name: "worker-1".to_string(),
+            logical_worker_id: None,
+            attempt_id: None,
+            attempt_index: None,
+            previous_task_id: None,
+            tool_name: "write_file".to_string(),
+            tool_use_id: "tool-6".to_string(),
+            description: "write".to_string(),
+            arguments: JsonObject::default(),
+            tool_input_snapshot: None,
+            write_scope: vec!["src/out.md".to_string()],
+            validation_mode: false,
+            permission_policy: None,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        let resolved = timeout_resolution(&request, Duration::from_secs(5));
+        assert_eq!(
+            permission_decision_source_label(&resolved.source),
+            "runtime_policy"
+        );
+        assert!(permission_resolution_feedback(&resolved)
+            .as_deref()
+            .is_some_and(|value| value.contains("[source:runtime_policy]")));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use agime::agents::harness::{
     build_swarm_worker_instructions, build_validation_worker_instructions,
-    classify_child_task_result, parse_validation_outcome, TaskKind, ValidationStatus,
+    classify_child_task_result, parse_validation_outcome, ChildExecutionExpectation,
+    ValidationStatus,
 };
 
 #[test]
@@ -26,7 +27,7 @@ fn structured_validation_result_takes_priority_over_text_fallback() {
 #[test]
 fn classify_validation_worker_never_produces_delta() {
     let classification = classify_child_task_result(
-        TaskKind::ValidationWorker,
+        ChildExecutionExpectation::Validation,
         &["src/out.md".to_string()],
         &["src/".to_string()],
         "PASS: verified",
@@ -43,4 +44,18 @@ fn worker_instruction_helpers_include_contract() {
         build_validation_worker_instructions("src/out.md", &["src/out.md".to_string()], "PASS: ok");
     assert!(worker.contains("src/out.md"));
     assert!(validation.contains("PASS: ok"));
+}
+
+#[test]
+fn validation_worker_instructions_explain_document_targets() {
+    let validation = build_validation_worker_instructions(
+        "document:doc-smoke",
+        &["document:doc-smoke".to_string()],
+        "The primary worker read the document.",
+    );
+
+    assert!(validation.contains("document_tools__read_document"));
+    assert!(validation.contains("read-only document tools"));
+    assert!(validation.contains("PASS:"));
+    assert!(validation.contains("FAIL:"));
 }

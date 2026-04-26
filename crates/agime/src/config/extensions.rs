@@ -242,7 +242,7 @@ fn get_extensions_map() -> IndexMap<String, ExtensionEntry> {
     let raw: Mapping = config
         .get_param(EXTENSIONS_CONFIG_KEY)
         .unwrap_or_else(|err| {
-            warn!(
+            tracing::info!(
                 "Failed to load {}: {err}. Falling back to empty object.",
                 EXTENSIONS_CONFIG_KEY
             );

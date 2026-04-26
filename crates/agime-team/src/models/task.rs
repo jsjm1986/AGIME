@@ -14,6 +14,8 @@ pub enum TaskStatus {
     Pending,
     /// Task has been approved, waiting to run
     Approved,
+    /// Task is queued waiting for an available execution slot
+    Queued,
     /// Task has been rejected
     Rejected,
     /// Task is currently running
@@ -31,6 +33,7 @@ impl std::fmt::Display for TaskStatus {
         match self {
             Self::Pending => write!(f, "pending"),
             Self::Approved => write!(f, "approved"),
+            Self::Queued => write!(f, "queued"),
             Self::Rejected => write!(f, "rejected"),
             Self::Running => write!(f, "running"),
             Self::Completed => write!(f, "completed"),
@@ -47,6 +50,7 @@ impl std::str::FromStr for TaskStatus {
         match s.to_lowercase().as_str() {
             "pending" => Ok(Self::Pending),
             "approved" => Ok(Self::Approved),
+            "queued" => Ok(Self::Queued),
             "rejected" => Ok(Self::Rejected),
             "running" => Ok(Self::Running),
             "completed" => Ok(Self::Completed),

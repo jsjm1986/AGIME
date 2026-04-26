@@ -509,7 +509,8 @@ Do not add extra headings or filler."
 
     fn builtin_ext_system_prompt(lang: &str) -> &'static str {
         match lang {
-            "zh" => "\
+            "zh" => {
+                "\
 你是技术文档专家。请用简洁通俗的中文描述这个内置扩展在 AI Agent 架构中的角色，让非技术人员也能理解。\n\
 重点关注：\n\
 - 它在 Agent 工作流中承担什么职责\n\
@@ -520,8 +521,10 @@ Do not add extra headings or filler."
 **核心职责**\n\n\
 - 职责1\n\
 - 职责2\n\n\
-不要添加其他标题或多余内容。",
-            _ => "\
+不要添加其他标题或多余内容。"
+            }
+            _ => {
+                "\
 You are a technical documentation expert. Describe this built-in extension's role in the AI Agent architecture.\n\
 Focus on:\n\
 - What responsibility it has in the Agent workflow\n\
@@ -532,13 +535,15 @@ A brief summary (1-2 sentences on its Agent role)\n\n\
 **Core Responsibilities**\n\n\
 - Responsibility 1\n\
 - Responsibility 2\n\n\
-Do not add extra headings or filler.",
+Do not add extra headings or filler."
+            }
         }
     }
 
     fn builtin_skill_system_prompt(lang: &str) -> &'static str {
         match lang {
-            "zh" => "\
+            "zh" => {
+                "\
 你是技术文档专家。请用简洁通俗的中文描述这个内置技能在 AI Agent 工作流中的作用，让非技术人员也能理解。\n\
 重点关注：\n\
 - 它帮助用户完成什么任务\n\
@@ -552,8 +557,10 @@ Do not add extra headings or filler.",
 **输出内容**\n\n\
 - 输出1\n\
 - 输出2\n\n\
-不要添加其他标题或多余内容。",
-            _ => "\
+不要添加其他标题或多余内容。"
+            }
+            _ => {
+                "\
 You are a technical documentation expert. Describe this built-in skill's role in the AI Agent workflow.\n\
 Focus on:\n\
 - What task it helps users accomplish\n\
@@ -567,7 +574,8 @@ A brief summary (1-2 sentences on core value)\n\n\
 **Output**\n\n\
 - Output 1\n\
 - Output 2\n\n\
-Do not add extra headings or filler.",
+Do not add extra headings or filler."
+            }
         }
     }
 

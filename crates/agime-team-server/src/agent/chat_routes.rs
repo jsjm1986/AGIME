@@ -5,25 +5,42 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{
+        header::{CONTENT_DISPOSITION, CONTENT_TYPE},
+        HeaderMap, StatusCode,
+    },
     response::{
         sse::{Event, Sse},
-        Json,
+        Html, IntoResponse, Json,
     },
     routing::{delete, get, patch, post, put},
     Extension, Router,
 };
+use chrono::Utc;
 use futures::{stream::Stream, StreamExt};
 use mongodb::bson::{doc, oid::ObjectId, Bson, Document};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::Infallible;
+use std::fs;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use uuid::Uuid;
 
 use crate::auth::middleware::UserContext;
 use crate::auth::service_mongo::ChatPersonaProfile;
+use agime::agents::harness::{
+    load_host_session_state, load_task_ledger_evidence_view, load_task_ledger_state,
+    load_task_ledger_transcript_resume_view, render_child_evidence_line,
+    select_replayable_child_evidence, select_replayable_child_transcript_resume,
+    ChildTranscriptResumeSelection, HarnessTaskLedgerState, PersistedChildEvidenceItem,
+    PersistedChildTranscriptView,
+};
 use agime::agents::types::{RetryConfig, SuccessCheck};
+use agime::context_runtime::{summarize_context_runtime_state, ContextRuntimeState};
 use agime::session::{ExtensionState, SessionManager, TaskScope, TasksStateV2, TodoState};
+use agime_team::db::collections;
 use agime_team::models::mongo::PortalDetail;
 use agime_team::models::{
     AgentSkillConfig, BuiltinExtension, CustomExtensionConfig, ListAgentsQuery, TeamAgent,
@@ -31,18 +48,29 @@ use agime_team::models::{
 use agime_team::MongoDb;
 
 use super::agent_prompt_composer::build_prompt_introspection_snapshot;
-use super::capability_policy::AgentRuntimePolicyResolver;
+use super::capability_policy::{
+    source_delegation_override_for_session_source, AgentRuntimePolicyResolver,
+};
+use super::channel_coding_cards::{
+    attach_card_domain_metadata, build_channel_coding_payload, build_thread_coding_payload,
+};
+use super::channel_project_workspace::{ChannelProjectWorkspaceService, ThreadWorktreeBinding};
+use super::channel_workspace_governance::{
+    ChannelProjectWorkspaceDoc, ChannelProjectWorkspaceLifecycleState,
+    ChannelWorkspaceGovernanceService,
+};
 use super::chat_channel_executor::{ChatChannelExecutor, ExecuteChannelMessageRequest};
 use super::chat_channel_manager::ChatChannelManager;
 use super::chat_channels::{
     AddChatChannelMemberRequest, ChatChannelAgentAutonomyMode, ChatChannelAuthorType,
-    ChatChannelDetail, ChatChannelDisplayKind, ChatChannelDisplayStatus,
-    ChatChannelInteractionMode, ChatChannelListFilters, ChatChannelMemberResponse,
-    ChatChannelMemberRole, ChatChannelMessageSurface, ChatChannelReadResponse, ChatChannelService,
-    ChatChannelSummary, ChatChannelThreadResponse, ChatChannelThreadState,
-    ChatChannelUserPrefResponse, CreateChatChannelRequest, MarkChatChannelReadRequest,
-    SendChatChannelMessageRequest, UpdateChatChannelMemberRequest, UpdateChatChannelPrefsRequest,
-    UpdateChatChannelRequest,
+    ChatChannelCardEmissionFamily, ChatChannelCardEmissionRegistry, ChatChannelDetail,
+    ChatChannelDisplayKind, ChatChannelDisplayStatus, ChatChannelInteractionMode,
+    ChatChannelListFilters, ChatChannelMemberResponse, ChatChannelMemberRole,
+    ChatChannelMessageSurface, ChatChannelReadResponse, ChatChannelService, ChatChannelSummary,
+    ChatChannelThreadResponse, ChatChannelThreadRuntimeResponse, ChatChannelThreadState,
+    ChatChannelType, ChatChannelUserPrefResponse, CreateChatChannelRequest,
+    MarkChatChannelReadRequest, SendChatChannelMessageRequest, UpdateChatChannelMemberRequest,
+    UpdateChatChannelPrefsRequest, UpdateChatChannelRequest,
 };
 use super::chat_executor::ChatExecutor;
 use super::chat_manager::ChatManager;
@@ -51,15 +79,21 @@ use super::chat_memory::{
     ChatMemoryService, UpdateUserChatMemoryRequest, UserChatMemoryResponse,
     UserChatMemorySuggestionResponse,
 };
+use super::delegation_runtime::{
+    build_delegation_runtime, delegation_event_from_worker_stream, DelegationRuntimeResponse,
+};
 use super::normalize_workspace_path;
 use super::prompt_profiles::{
-    build_portal_coding_overlay, build_portal_manager_overlay, PortalCodingProfileInput,
+    build_channel_coding_overlay, build_chat_delegation_overlay, build_portal_coding_overlay,
+    build_portal_manager_overlay, ChannelCodingIntent, ChannelCodingProfileInput,
+    ChatDelegationIntent, ChatDelegationProfileInput, PortalCodingProfileInput,
 };
 use super::service_mongo::AgentService;
 use super::session_mongo::{
     CreateChatSessionRequest, SendChatMessageRequest, SendMessageResponse, SessionListItem,
     UserSessionListQuery,
 };
+use super::workspace_service::WorkspaceService;
 use agime_team::services::mongo::{PortalService, TeamService};
 
 type ChatState = (
@@ -70,6 +104,53 @@ type ChatState = (
     String,
 );
 
+type ChatPublicState = (Arc<AgentService>, Arc<MongoDb>);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChatWorkspaceShareDoc {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    id: Option<ObjectId>,
+    share_id: String,
+    session_id: String,
+    team_id: String,
+    user_id: String,
+    path: String,
+    label: String,
+    content_type: String,
+    preview_supported: bool,
+    created_at: mongodb::bson::DateTime,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_accessed_at: Option<mongodb::bson::DateTime>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateSessionWorkspaceShareRequest {
+    path: String,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionWorkspaceShareResponse {
+    share_id: String,
+    path: String,
+    label: String,
+    content_type: String,
+    preview_supported: bool,
+    preview_url: String,
+    download_url: String,
+    content_url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SharePreviewEmbedKind {
+    Image,
+    Audio,
+    Video,
+    Iframe,
+    Unsupported,
+}
+
 fn non_empty_text(value: Option<String>) -> Option<String> {
     value.and_then(|raw| {
         let trimmed = raw.trim().to_string();
@@ -79,6 +160,751 @@ fn non_empty_text(value: Option<String>) -> Option<String> {
             Some(trimmed)
         }
     })
+}
+
+fn chat_workspace_shares_collection(db: &MongoDb) -> mongodb::Collection<ChatWorkspaceShareDoc> {
+    db.collection(collections::CHAT_WORKSPACE_SHARES)
+}
+
+fn chat_workspace_share_preview_path(share_id: &str, content_type: &str) -> String {
+    format!("/admin/chat/public-workspace-preview?share={share_id}&contentType={content_type}")
+}
+
+fn chat_workspace_share_download_path(share_id: &str) -> String {
+    format!("/api/team/agent/chat/public/workspace-shares/{share_id}/download")
+}
+
+fn chat_workspace_share_content_path(share_id: &str) -> String {
+    format!("/api/team/agent/chat/public/workspace-shares/{share_id}/content")
+}
+
+fn build_session_workspace_share_response(
+    share: &ChatWorkspaceShareDoc,
+) -> SessionWorkspaceShareResponse {
+    SessionWorkspaceShareResponse {
+        share_id: share.share_id.clone(),
+        path: share.path.clone(),
+        label: share.label.clone(),
+        content_type: share.content_type.clone(),
+        preview_supported: share.preview_supported,
+        preview_url: chat_workspace_share_preview_path(&share.share_id, &share.content_type),
+        download_url: chat_workspace_share_download_path(&share.share_id),
+        content_url: chat_workspace_share_content_path(&share.share_id),
+    }
+}
+
+fn derive_workspace_share_label(path: &str, requested_label: Option<&str>) -> String {
+    requested_label
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            FsPath::new(path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn workspace_share_preview_supported(path: &str, content_type: &str) -> bool {
+    let lowered_path = path.to_ascii_lowercase();
+    content_type.starts_with("text/")
+        || matches!(
+            content_type,
+            "application/json"
+                | "application/pdf"
+                | "image/svg+xml"
+                | "application/msword"
+                | "application/vnd.ms-excel"
+                | "application/vnd.ms-powerpoint"
+                | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        )
+        || content_type.starts_with("image/")
+        || content_type.starts_with("audio/")
+        || content_type.starts_with("video/")
+        || lowered_path.ends_with(".csv")
+        || lowered_path.ends_with(".json")
+        || lowered_path.ends_with(".md")
+        || lowered_path.ends_with(".txt")
+        || lowered_path.ends_with(".html")
+        || lowered_path.ends_with(".htm")
+        || lowered_path.ends_with(".svg")
+        || lowered_path.ends_with(".doc")
+        || lowered_path.ends_with(".docx")
+        || lowered_path.ends_with(".xls")
+        || lowered_path.ends_with(".xlsx")
+        || lowered_path.ends_with(".ppt")
+        || lowered_path.ends_with(".pptx")
+}
+
+fn share_preview_embed_kind(content_type: &str) -> SharePreviewEmbedKind {
+    if content_type.starts_with("image/") {
+        SharePreviewEmbedKind::Image
+    } else if content_type.starts_with("audio/") {
+        SharePreviewEmbedKind::Audio
+    } else if content_type.starts_with("video/") {
+        SharePreviewEmbedKind::Video
+    } else if content_type.starts_with("text/")
+        || matches!(
+            content_type,
+            "application/json" | "application/pdf" | "image/svg+xml"
+        )
+    {
+        SharePreviewEmbedKind::Iframe
+    } else {
+        SharePreviewEmbedKind::Unsupported
+    }
+}
+
+fn sanitize_download_filename(name: &str) -> String {
+    let sanitized = name
+        .trim()
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => ch,
+        })
+        .collect::<String>();
+    let trimmed = sanitized.trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "download.bin".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn content_disposition_value(label: &str, attachment: bool) -> String {
+    let fallback = sanitize_download_filename(label).replace('"', "");
+    let mode = if attachment { "attachment" } else { "inline" };
+    format!("{mode}; filename=\"{fallback}\"")
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn channel_has_project_binding(channel: &super::chat_channels::ChatChannelDoc) -> bool {
+    channel
+        .workspace_path
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || channel
+            .repo_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || channel
+            .main_checkout_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+async fn ensure_channel_project_binding(
+    channel_service: &ChatChannelService,
+    governance_service: &ChannelWorkspaceGovernanceService,
+    workspace_root: &str,
+    channel: super::chat_channels::ChatChannelDoc,
+) -> Result<super::chat_channels::ChatChannelDoc, StatusCode> {
+    if !channel_has_project_binding(&channel) {
+        if let Some(restorable) = governance_service
+            .latest_restorable_workspace_for_channel(&channel.channel_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            let restored = restore_registered_workspace_binding(
+                channel_service,
+                governance_service,
+                &channel,
+                &restorable,
+            )
+            .await?;
+            return Ok(restored);
+        }
+    }
+
+    let workspace_display_name = channel
+        .workspace_display_name
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| channel.name.clone());
+    let repo_default_branch = channel
+        .repo_default_branch
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "main".to_string());
+    let manager = ChannelProjectWorkspaceService::new(workspace_root.to_string());
+    let binding = manager
+        .ensure_channel_project_workspace(
+            &channel.team_id,
+            &channel.channel_id,
+            &channel.name,
+            Some(&workspace_display_name),
+            Some(&repo_default_branch),
+        )
+        .map_err(|error| {
+            tracing::error!(
+                "Failed to ensure channel project workspace binding for {}: {:?}",
+                channel.channel_id,
+                error
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let updated = channel_service
+        .set_channel_project_binding(
+            &channel.channel_id,
+            &binding.workspace.workspace_id,
+            &binding.workspace.root_path,
+            binding.workspace.workspace_kind.as_str(),
+            &binding.workspace_display_name,
+            &binding.repo_path,
+            &binding.main_checkout_path,
+            &binding.main_checkout_path,
+            &binding.repo_default_branch,
+            binding.repo_storage_mode,
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    register_active_workspace_binding(governance_service, &updated).await
+}
+
+async fn sync_channel_type_and_workspace(
+    channel_service: &ChatChannelService,
+    governance_service: &ChannelWorkspaceGovernanceService,
+    workspace_root: &str,
+    channel: super::chat_channels::ChatChannelDoc,
+) -> Result<super::chat_channels::ChatChannelDoc, StatusCode> {
+    Ok(match channel.channel_type {
+        ChatChannelType::Coding => {
+            ensure_channel_project_binding(
+                channel_service,
+                governance_service,
+                workspace_root,
+                channel,
+            )
+            .await?
+        }
+        ChatChannelType::General | ChatChannelType::ScheduledTask => {
+            if channel_has_project_binding(&channel) {
+                governance_service
+                    .detach_workspace(&channel, Some("channel_downgraded"))
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                channel_service
+                    .clear_channel_project_binding(&channel.channel_id)
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                    .ok_or(StatusCode::NOT_FOUND)?
+            } else {
+                channel
+            }
+        }
+    })
+}
+
+async fn restore_registered_workspace_binding(
+    channel_service: &ChatChannelService,
+    governance_service: &ChannelWorkspaceGovernanceService,
+    channel: &super::chat_channels::ChatChannelDoc,
+    workspace: &ChannelProjectWorkspaceDoc,
+) -> Result<super::chat_channels::ChatChannelDoc, StatusCode> {
+    let restored = channel_service
+        .set_channel_project_binding(
+            &channel.channel_id,
+            &workspace.workspace_id,
+            &workspace.workspace_path,
+            channel
+                .workspace_kind
+                .as_deref()
+                .unwrap_or("channel_project"),
+            workspace
+                .workspace_display_name
+                .as_deref()
+                .unwrap_or(&channel.name),
+            &workspace.repo_path,
+            &workspace.main_checkout_path,
+            &workspace.main_checkout_path,
+            &workspace.repo_default_branch,
+            workspace.repo_storage_mode,
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    governance_service
+        .restore_workspace_binding(&workspace.workspace_id, &workspace.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    register_active_workspace_binding(governance_service, &restored).await
+}
+
+fn is_channel_manager(role: ChatChannelMemberRole, is_admin: bool) -> bool {
+    is_admin
+        || matches!(
+            role,
+            ChatChannelMemberRole::Owner | ChatChannelMemberRole::Manager
+        )
+}
+
+async fn register_active_workspace_binding(
+    governance_service: &ChannelWorkspaceGovernanceService,
+    channel: &super::chat_channels::ChatChannelDoc,
+) -> Result<super::chat_channels::ChatChannelDoc, StatusCode> {
+    governance_service
+        .register_active_binding(channel)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(channel.clone())
+}
+
+async fn ensure_channel_thread_worktree(
+    service: &AgentService,
+    workspace_root: &str,
+    channel: &super::chat_channels::ChatChannelDoc,
+    session: &super::session_mongo::AgentSessionDoc,
+    thread_root_id: &str,
+) -> Result<ThreadWorktreeBinding, StatusCode> {
+    let manager = ChannelProjectWorkspaceService::new(workspace_root.to_string());
+    let worktree = manager
+        .ensure_thread_worktree(channel, thread_root_id)
+        .map_err(|error| {
+            tracing::error!(
+                "Failed to ensure thread worktree for channel {} thread {}: {:?}",
+                channel.channel_id,
+                thread_root_id,
+                error
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let mut session_for_workspace = session.clone();
+    session_for_workspace.workspace_path = Some(worktree.worktree_path.clone());
+    let workspace_binding =
+        super::workspace_service::WorkspaceService::new(workspace_root.to_string())
+            .ensure_channel_workspace(&session_for_workspace)
+            .map_err(|error| {
+                tracing::error!(
+                    "Failed to ensure workspace manifest for channel {} thread {}: {:?}",
+                    channel.channel_id,
+                    thread_root_id,
+                    error
+                );
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+    service
+        .set_session_workspace_binding(&session.session_id, &workspace_binding)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    service
+        .set_session_thread_repo_context(&session.session_id, &worktree.branch, &worktree.repo_ref)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(worktree)
+}
+
+fn build_thread_runtime_response(
+    channel: &super::chat_channels::ChatChannelDoc,
+    session: Option<&super::session_mongo::AgentSessionDoc>,
+    thread_root_id: &str,
+) -> Option<ChatChannelThreadRuntimeResponse> {
+    if !matches!(channel.channel_type, ChatChannelType::Coding) {
+        return None;
+    }
+    let channel_workspace_path = channel.workspace_path.clone()?;
+    let repo_path = channel.repo_path.clone().unwrap_or_else(|| {
+        std::path::Path::new(&channel_workspace_path)
+            .join("repo")
+            .to_string_lossy()
+            .to_string()
+    });
+    let thread_worktree_path = session
+        .and_then(|item| item.workspace_path.clone())
+        .unwrap_or_else(|| {
+            std::path::Path::new(&repo_path)
+                .join("worktrees")
+                .join(thread_root_id)
+                .to_string_lossy()
+                .to_string()
+        });
+    let thread_branch = session
+        .and_then(|item| item.thread_branch.clone())
+        .unwrap_or_else(|| {
+            ChannelProjectWorkspaceService::thread_branch_name(&channel.channel_id, thread_root_id)
+        });
+    let thread_repo_ref = session
+        .and_then(|item| item.thread_repo_ref.clone())
+        .or_else(|| {
+            Some(
+                std::path::Path::new(&repo_path)
+                    .join("bare.git")
+                    .to_string_lossy()
+                    .to_string(),
+            )
+        });
+    Some(ChatChannelThreadRuntimeResponse {
+        runtime_session_id: session.map(|item| item.session_id.clone()),
+        workspace_path: session.and_then(|item| item.workspace_path.clone()),
+        workspace_id: session.and_then(|item| item.workspace_id.clone()),
+        workspace_kind: session.and_then(|item| item.workspace_kind.clone()),
+        thread_worktree_path: Some(thread_worktree_path),
+        thread_branch: Some(thread_branch),
+        thread_repo_ref,
+        last_execution_status: session.and_then(|item| item.last_execution_status.clone()),
+        last_execution_error: session.and_then(|item| item.last_execution_error.clone()),
+        last_execution_finished_at: session.and_then(|item| {
+            item.last_execution_finished_at
+                .map(|value| value.to_chrono().to_rfc3339())
+        }),
+    })
+}
+
+fn preferred_code_root_path(
+    channel: &super::chat_channels::ChatChannelDoc,
+    thread_runtime: Option<&ChatChannelThreadRuntimeResponse>,
+) -> Option<String> {
+    thread_runtime
+        .and_then(|item| item.thread_worktree_path.clone())
+        .or_else(|| channel.main_checkout_path.clone())
+        .or_else(|| channel.repo_root.clone())
+        .or_else(|| channel.workspace_path.clone())
+}
+
+fn is_ignored_project_dir(name: &str) -> bool {
+    matches!(
+        name,
+        ".git"
+            | "node_modules"
+            | "dist"
+            | "build"
+            | "target"
+            | ".next"
+            | "coverage"
+            | "out"
+            | "attachments"
+            | "artifacts"
+            | "notes"
+            | "runs"
+    )
+}
+
+fn is_ignored_project_file(name: &str) -> bool {
+    matches!(name, ".git" | "workspace.json" | ".ds_store" | "thumbs.db")
+}
+
+fn workspace_preview_mime_from_path(path: &FsPath) -> String {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "md" | "markdown" => "text/markdown".to_string(),
+        "json" => "application/json".to_string(),
+        "html" | "htm" => "text/html".to_string(),
+        "ts" | "tsx" => "text/x-typescript".to_string(),
+        "js" | "jsx" => "text/javascript".to_string(),
+        "py" => "text/x-python".to_string(),
+        "rs" => "text/x-rust".to_string(),
+        "go" => "text/x-go".to_string(),
+        "java" => "text/x-java".to_string(),
+        "kt" => "text/x-kotlin".to_string(),
+        "c" => "text/x-c".to_string(),
+        "cpp" | "cc" | "cxx" => "text/x-c++".to_string(),
+        "cs" => "text/x-csharp".to_string(),
+        "php" => "text/x-php".to_string(),
+        "rb" => "text/x-ruby".to_string(),
+        "swift" => "text/x-swift".to_string(),
+        "yml" | "yaml" => "application/x-yaml".to_string(),
+        _ => mime_guess::from_path(path)
+            .first_or_text_plain()
+            .essence_str()
+            .to_string(),
+    }
+}
+
+fn collect_project_files_recursive(
+    root: &FsPath,
+    current: &FsPath,
+    files: &mut Vec<String>,
+    truncated: &mut bool,
+    limit: usize,
+) -> std::io::Result<()> {
+    if *truncated {
+        return Ok(());
+    }
+    let entries = match fs::read_dir(current) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if file_type.is_dir() {
+            if is_ignored_project_dir(&name) {
+                continue;
+            }
+            collect_project_files_recursive(root, &path, files, truncated, limit)?;
+            if *truncated {
+                break;
+            }
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        if is_ignored_project_file(&name.to_ascii_lowercase()) {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.push(relative);
+        if files.len() >= limit {
+            *truncated = true;
+            break;
+        }
+    }
+    Ok(())
+}
+
+async fn list_code_files_for_root(root_path: String) -> Result<(Vec<String>, bool), StatusCode> {
+    tokio::task::spawn_blocking(move || {
+        let root = PathBuf::from(&root_path);
+        if !root.exists() || !root.is_dir() {
+            return Ok((Vec::new(), false));
+        }
+        let mut files = Vec::new();
+        let mut truncated = false;
+        collect_project_files_recursive(&root, &root, &mut files, &mut truncated, 800)?;
+        files.sort();
+        Ok::<_, std::io::Error>((files, truncated))
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn sanitize_workspace_relative_path(path: &str) -> Option<String> {
+    let trimmed = path.trim().replace('\\', "/");
+    if trimmed.is_empty() || trimmed.starts_with('/') {
+        return None;
+    }
+    let candidate = FsPath::new(&trimmed);
+    if candidate.components().any(|part| {
+        matches!(
+            part,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return None;
+    }
+    Some(trimmed)
+}
+
+async fn inspect_workspace_file(
+    root_path: String,
+    relative_path: String,
+) -> Result<(String, u64), StatusCode> {
+    tokio::task::spawn_blocking(move || {
+        let root = std::fs::canonicalize(&root_path)?;
+        let target = std::fs::canonicalize(root.join(&relative_path))?;
+        if !target.starts_with(&root) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "path escapes workspace root",
+            ));
+        }
+        let metadata = std::fs::metadata(&target)?;
+        let mime = workspace_preview_mime_from_path(&target);
+        Ok::<_, std::io::Error>((mime, metadata.len()))
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
+        std::io::ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+async fn read_workspace_file_content(
+    root_path: String,
+    relative_path: String,
+) -> Result<(Vec<u8>, String), StatusCode> {
+    tokio::task::spawn_blocking(move || {
+        let root = std::fs::canonicalize(&root_path)?;
+        let target = std::fs::canonicalize(root.join(&relative_path))?;
+        if !target.starts_with(&root) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "path escapes workspace root",
+            ));
+        }
+        let content = std::fs::read(&target)?;
+        let mime = workspace_preview_mime_from_path(&target);
+        Ok::<_, std::io::Error>((content, mime))
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
+        std::io::ErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    })
+}
+
+async fn load_chat_workspace_share(
+    db: &MongoDb,
+    share_id: &str,
+) -> Result<ChatWorkspaceShareDoc, StatusCode> {
+    chat_workspace_shares_collection(db)
+        .find_one(doc! { "share_id": share_id }, None)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn resolve_chat_workspace_share(
+    service: &AgentService,
+    db: &MongoDb,
+    share_id: &str,
+) -> Result<(ChatWorkspaceShareDoc, String), StatusCode> {
+    let share = load_chat_workspace_share(db, share_id).await?;
+    let session = service
+        .get_session(&share.session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if session.user_id != share.user_id || session.team_id != share.team_id {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    if !session.session_source.eq_ignore_ascii_case("chat") {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let root_path = session.workspace_path.ok_or(StatusCode::NOT_FOUND)?;
+    let _ = chat_workspace_shares_collection(db)
+        .update_one(
+            doc! { "share_id": &share.share_id },
+            doc! { "$set": { "last_accessed_at": mongodb::bson::DateTime::from_chrono(Utc::now()) } },
+            None,
+        )
+        .await;
+    Ok((share, root_path))
+}
+
+fn render_chat_workspace_share_page(
+    share: &ChatWorkspaceShareDoc,
+    content_type: &str,
+) -> Html<String> {
+    let title = escape_html(&share.label);
+    let preview_url = escape_html(&chat_workspace_share_content_path(&share.share_id));
+    let download_url = escape_html(&chat_workspace_share_download_path(&share.share_id));
+    let path = escape_html(&share.path);
+    let content_type_label = escape_html(content_type);
+    let body = match share_preview_embed_kind(content_type) {
+        SharePreviewEmbedKind::Image => format!(
+            "<div class=\"preview preview-image\"><img src=\"{preview_url}\" alt=\"{title}\" loading=\"lazy\" /></div>"
+        ),
+        SharePreviewEmbedKind::Audio => format!(
+            "<div class=\"preview preview-media\"><audio controls preload=\"metadata\" src=\"{preview_url}\"></audio></div>"
+        ),
+        SharePreviewEmbedKind::Video => format!(
+            "<div class=\"preview preview-media\"><video controls preload=\"metadata\" src=\"{preview_url}\"></video></div>"
+        ),
+        SharePreviewEmbedKind::Iframe => format!(
+            "<div class=\"preview preview-frame\"><iframe src=\"{preview_url}\" sandbox=\"allow-downloads allow-scripts\"></iframe></div>"
+        ),
+        SharePreviewEmbedKind::Unsupported => {
+            "<div class=\"preview preview-fallback\"><p>This file can be shared publicly, but the browser cannot preview this format inline.</p><p>Use download to open it locally.</p></div>".to_string()
+        }
+    };
+    Html(format!(
+        "<!doctype html>\
+<html lang=\"en\">\
+<head>\
+  <meta charset=\"utf-8\" />\
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\
+  <title>{title}</title>\
+  <style>\
+    :root {{ color-scheme: light; font-family: 'Noto Sans SC', 'Segoe UI', sans-serif; }}\
+    * {{ box-sizing: border-box; }}\
+    body {{ margin: 0; background: #f6f2ea; color: #1f2937; }}\
+    .shell {{ min-height: 100vh; padding: 24px; }}\
+    .card {{ max-width: 1200px; margin: 0 auto; background: rgba(255,255,255,0.86); border: 1px solid rgba(148, 163, 184, 0.28); border-radius: 24px; box-shadow: 0 18px 44px rgba(15, 23, 42, 0.08); overflow: hidden; }}\
+    .header {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; border-bottom: 1px solid rgba(148, 163, 184, 0.2); background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.92)); }}\
+    .meta {{ min-width: 0; }}\
+    .title {{ margin: 0; font-size: 20px; line-height: 1.3; font-weight: 700; }}\
+    .sub {{ margin: 6px 0 0; font-size: 13px; line-height: 1.5; color: #64748b; word-break: break-all; }}\
+    .actions {{ display: flex; flex-wrap: wrap; gap: 10px; }}\
+    .btn {{ appearance: none; display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid rgba(148, 163, 184, 0.36); background: #fff; color: #111827; font-size: 14px; font-weight: 600; text-decoration: none; }}\
+    .btn.primary {{ background: #2563eb; border-color: #2563eb; color: #fff; }}\
+    .content {{ padding: 20px 24px 24px; }}\
+    .preview {{ min-height: 70vh; border: 1px solid rgba(148, 163, 184, 0.24); border-radius: 18px; background: #fff; overflow: hidden; }}\
+    .preview-frame iframe, .preview-media video {{ width: 100%; min-height: 70vh; border: 0; background: #fff; }}\
+    .preview-media, .preview-fallback {{ display: flex; align-items: center; justify-content: center; padding: 24px; }}\
+    .preview-media audio {{ width: min(720px, 100%); }}\
+    .preview-image {{ display: flex; align-items: flex-start; justify-content: center; padding: 16px; background: #f8fafc; }}\
+    .preview-image img {{ max-width: 100%; height: auto; border-radius: 14px; box-shadow: 0 10px 24px rgba(15,23,42,0.08); }}\
+    .preview-fallback {{ flex-direction: column; gap: 8px; color: #475569; text-align: center; }}\
+    @media (max-width: 720px) {{ .shell {{ padding: 12px; }} .header, .content {{ padding: 16px; }} .title {{ font-size: 18px; }} .preview {{ min-height: 58vh; }} .preview-frame iframe, .preview-media video {{ min-height: 58vh; }} }}\
+  </style>\
+</head>\
+<body>\
+  <div class=\"shell\">\
+    <main class=\"card\">\
+      <header class=\"header\">\
+        <div class=\"meta\">\
+          <h1 class=\"title\">{title}</h1>\
+          <p class=\"sub\">{path}<br />{content_type_label}</p>\
+        </div>\
+        <div class=\"actions\">\
+          <a class=\"btn\" href=\"{preview_url}\" target=\"_blank\" rel=\"noreferrer\">Open raw preview</a>\
+          <a class=\"btn primary\" href=\"{download_url}\">Download</a>\
+        </div>\
+      </header>\
+      <section class=\"content\">{body}</section>\
+    </main>\
+  </div>\
+</body>\
+</html>"
+    ))
+}
+
+async fn resolve_workspace_preview_root(
+    service: &AgentService,
+    channel: &super::chat_channels::ChatChannelDoc,
+    channel_id: &str,
+    thread_root_id: Option<&str>,
+) -> Result<String, StatusCode> {
+    let thread_runtime = if let Some(thread_root_id) = thread_root_id {
+        let runtime_session = service
+            .find_latest_channel_session(channel_id, thread_root_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        build_thread_runtime_response(channel, runtime_session.as_ref(), thread_root_id)
+    } else {
+        None
+    };
+    preferred_code_root_path(channel, thread_runtime.as_ref()).ok_or(StatusCode::NOT_FOUND)
 }
 
 async fn load_runtime_tasks_snapshot(
@@ -103,6 +929,312 @@ async fn load_runtime_tasks_snapshot(
     }
 
     None
+}
+
+async fn load_task_ledger_snapshot(
+    session_id: &str,
+    runtime_session_id: Option<&str>,
+) -> Option<HarnessTaskLedgerState> {
+    for candidate in std::iter::once(session_id).chain(runtime_session_id.into_iter()) {
+        let ledger = match load_task_ledger_state(candidate).await {
+            Ok(state) => state,
+            Err(_) => continue,
+        };
+        if !ledger.tasks.is_empty() {
+            return Some(ledger);
+        }
+    }
+
+    None
+}
+
+async fn load_persisted_child_evidence_snapshot(
+    session_id: &str,
+    runtime_session_id: Option<&str>,
+) -> Option<Vec<agime::agents::harness::PersistedChildEvidenceItem>> {
+    for candidate in std::iter::once(session_id).chain(runtime_session_id.into_iter()) {
+        let evidence = match load_task_ledger_evidence_view(candidate).await {
+            Ok(items) => items,
+            Err(_) => continue,
+        };
+        if !evidence.is_empty() {
+            return Some(evidence);
+        }
+    }
+
+    None
+}
+
+async fn load_persisted_child_transcript_resume_snapshot(
+    session_id: &str,
+    runtime_session_id: Option<&str>,
+) -> Option<Vec<PersistedChildTranscriptView>> {
+    for candidate in std::iter::once(session_id).chain(runtime_session_id.into_iter()) {
+        let views = match load_task_ledger_transcript_resume_view(candidate).await {
+            Ok(items) => items,
+            Err(_) => continue,
+        };
+        if !views.is_empty() {
+            return Some(
+                select_replayable_child_transcript_resume(&views)
+                    .into_iter()
+                    .map(|(item, selection)| {
+                        let mut item = item.clone();
+                        item.transcript_source = match selection {
+                            ChildTranscriptResumeSelection::Active => {
+                                format!("active:{}", item.transcript_source)
+                            }
+                            ChildTranscriptResumeSelection::RecentTerminal => {
+                                format!("recent_terminal:{}", item.transcript_source)
+                            }
+                        };
+                        item
+                    })
+                    .collect(),
+            );
+        }
+    }
+
+    None
+}
+
+fn build_session_delegation_runtime_snapshot(
+    agent_name: Option<&str>,
+    execution_status: Option<&str>,
+    preferred_summary: Option<&str>,
+    runtime_diagnostics: Option<&serde_json::Value>,
+    task_ledger: Option<&HarnessTaskLedgerState>,
+    persisted_child_evidence: Option<&[PersistedChildEvidenceItem]>,
+) -> Option<DelegationRuntimeResponse> {
+    build_delegation_runtime(
+        agent_name,
+        execution_status,
+        preferred_summary.or_else(|| {
+            runtime_diagnostics
+                .and_then(|value| value.get("summary"))
+                .and_then(|value| value.as_str())
+        }),
+        runtime_diagnostics
+            .and_then(|value| value.get("blocking_reason"))
+            .and_then(|value| value.as_str()),
+        task_ledger,
+        persisted_child_evidence,
+    )
+}
+
+fn preferred_cached_delegation_summary<'a>(
+    cached_runtime: Option<&'a DelegationRuntimeResponse>,
+    fallback: Option<&'a str>,
+) -> Option<&'a str> {
+    cached_runtime
+        .and_then(|runtime| {
+            runtime
+                .leader
+                .as_ref()
+                .and_then(|leader| {
+                    leader
+                        .result_summary
+                        .as_deref()
+                        .or(leader.summary.as_deref())
+                })
+                .or(runtime.summary.as_deref())
+        })
+        .or(fallback)
+}
+
+fn build_delegation_sse_event(
+    event: &super::task_manager::StreamEvent,
+    thread_root_id: Option<&str>,
+    root_message_id: Option<&str>,
+) -> Option<Event> {
+    let payload = delegation_event_from_worker_stream(event, thread_root_id, root_message_id)?;
+    let json = serde_json::to_string(&payload).ok()?;
+    Some(Event::default().event("delegation").data(json))
+}
+
+fn build_child_evidence_next_steps(
+    persisted_child_evidence: &[PersistedChildEvidenceItem],
+) -> Vec<String> {
+    let mut next_steps = Vec::new();
+    let mut child_session_ids = persisted_child_evidence
+        .iter()
+        .filter_map(|item| item.child_session_id.clone())
+        .collect::<Vec<_>>();
+    child_session_ids.sort();
+    child_session_ids.dedup();
+    if !child_session_ids.is_empty() {
+        next_steps.push(format!(
+            "Inspect child session(s): {}",
+            child_session_ids.join(", ")
+        ));
+    }
+    next_steps.extend(
+        select_replayable_child_evidence(persisted_child_evidence)
+            .into_iter()
+            .map(|(item, recent_terminal)| render_child_evidence_line(item, recent_terminal)),
+    );
+    next_steps
+}
+
+fn latest_thread_agent_summary(thread: &ChatChannelThreadResponse) -> Option<&str> {
+    thread
+        .messages
+        .iter()
+        .rev()
+        .find(|item| item.author_type == ChatChannelAuthorType::Agent)
+        .map(|item| item.content_text.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+async fn load_runtime_diagnostics_snapshot(
+    execution_status: Option<&str>,
+    execution_error: Option<&str>,
+    runtime_session_id: Option<&str>,
+    persisted_child_evidence: Option<&[PersistedChildEvidenceItem]>,
+    persisted_child_transcript_resume: Option<&[PersistedChildTranscriptView]>,
+    workspace_path: Option<&str>,
+) -> Option<serde_json::Value> {
+    let execution_status = execution_status
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let execution_error = execution_error
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let persisted_child_evidence = persisted_child_evidence.unwrap_or(&[]);
+    let persisted_child_transcript_resume = persisted_child_transcript_resume.unwrap_or(&[]);
+    let host_state = if let Some(runtime_session_id) = runtime_session_id {
+        load_host_session_state(runtime_session_id)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    let completion_outcome = host_state
+        .as_ref()
+        .and_then(|state| state.last_completion_outcome.clone());
+    let transition_trace = host_state
+        .as_ref()
+        .and_then(|state| state.last_transition_trace.clone());
+    let artifact_resolution = host_state.as_ref().and_then(|state| {
+        build_workspace_artifact_resolution_snapshot(
+            workspace_path,
+            state.last_signal_summary.as_ref(),
+        )
+    });
+
+    let status = execution_status.or_else(|| {
+        completion_outcome
+            .as_ref()
+            .map(|outcome| outcome.status.as_str())
+    })?;
+    let use_completion_outcome_text = completion_outcome
+        .as_ref()
+        .is_some_and(|outcome| outcome.status.eq_ignore_ascii_case(status));
+    let summary = if use_completion_outcome_text {
+        completion_outcome
+            .as_ref()
+            .and_then(|outcome| non_empty_text(outcome.summary.clone()))
+    } else {
+        None
+    }
+    .or_else(|| execution_error.clone())
+    .or_else(|| {
+        if status.eq_ignore_ascii_case("completed") {
+            Some("Direct chat run completed.".to_string())
+        } else if status.eq_ignore_ascii_case("blocked") {
+            Some("Direct chat run is blocked.".to_string())
+        } else if status.eq_ignore_ascii_case("cancelled") {
+            Some("Direct chat run cancelled.".to_string())
+        } else {
+            Some(format!("Direct chat run {}.", status))
+        }
+    })?;
+    let blocking_reason = if use_completion_outcome_text {
+        completion_outcome
+            .as_ref()
+            .and_then(|outcome| non_empty_text(outcome.blocking_reason.clone()))
+    } else {
+        None
+    }
+    .or_else(|| execution_error.clone());
+    let next_steps = if status.eq_ignore_ascii_case("cancelled") {
+        Vec::new()
+    } else {
+        build_child_evidence_next_steps(persisted_child_evidence)
+    };
+    Some(serde_json::json!({
+        "diagnostic_source": "runtime_session",
+        "runtime_session_id": runtime_session_id,
+        "status": status,
+        "summary": summary,
+        "blocking_reason": blocking_reason,
+        "next_steps": next_steps,
+        "persisted_child_transcript_resume": persisted_child_transcript_resume,
+        "transition_trace": transition_trace,
+        "artifact_resolution": artifact_resolution,
+    }))
+}
+
+fn build_workspace_artifact_resolution_snapshot(
+    workspace_path: Option<&str>,
+    signal_summary: Option<&agime::agents::CoordinatorSignalSummary>,
+) -> Option<serde_json::Value> {
+    let workspace_path = workspace_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let workspace_service = WorkspaceService::new(String::new());
+    let workspace = workspace_service
+        .load_workspace(workspace_path)
+        .ok()
+        .flatten()?;
+    let manifest_materialized_targets = || {
+        let manifest_path = std::path::Path::new(&workspace.root_path).join("workspace.json");
+        let bytes = std::fs::read(manifest_path).ok()?;
+        let manifest: super::workspace_types::WorkspaceManifest =
+            serde_json::from_slice(&bytes).ok()?;
+        let mut materialized_targets = manifest
+            .artifact_index
+            .into_iter()
+            .map(|record| record.path)
+            .collect::<Vec<_>>();
+        materialized_targets.sort();
+        materialized_targets.dedup();
+        Some(serde_json::json!({
+            "logical_targets": [],
+            "missing_targets": [],
+            "materialized_targets": materialized_targets,
+        }))
+    };
+    let Some(signal_summary) = signal_summary else {
+        return manifest_materialized_targets();
+    };
+    let produced =
+        workspace_service.resolve_workspace_outputs(&workspace, &signal_summary.produced_targets);
+    let accepted =
+        workspace_service.resolve_workspace_outputs(&workspace, &signal_summary.accepted_targets);
+    let mut logical_targets = produced.logical_targets;
+    logical_targets.extend(accepted.logical_targets);
+    logical_targets.sort();
+    logical_targets.dedup();
+    let mut missing_targets = produced.missing_paths;
+    missing_targets.extend(accepted.missing_paths);
+    missing_targets.sort();
+    missing_targets.dedup();
+    let mut materialized_targets = produced.materialized_paths;
+    materialized_targets.extend(accepted.materialized_paths);
+    materialized_targets.sort();
+    materialized_targets.dedup();
+    if logical_targets.is_empty() && missing_targets.is_empty() && materialized_targets.is_empty() {
+        return manifest_materialized_targets();
+    }
+    Some(serde_json::json!({
+        "logical_targets": logical_targets,
+        "missing_targets": missing_targets,
+        "materialized_targets": materialized_targets,
+    }))
 }
 
 async fn resolve_runtime_snapshot_for_session(
@@ -258,96 +1390,108 @@ fn build_team_context_overlay(
 fn build_personal_document_scope_overlay(attached_document_count: usize) -> String {
     let lines = vec![
         "<document_scope>".to_string(),
-        "当前是普通个人对话。文档不是默认上下文。".to_string(),
+        "当前是团队成员的普通内部对话。你拥有团队文档库权限，但文档不是每轮自动展开的默认上下文。".to_string(),
         format!("本会话当前明确附加的文档数：{}", attached_document_count),
-        "默认不要主动搜索、读取或引用团队文档库；只有当前明确附加的文档，才属于本轮默认文档上下文。".to_string(),
-        "如果用户没有附加文档，也没有明确要求查资料/看文档/读团队资料，就不要主动调用 document_tools。".to_string(),
-        "如果用户需要使用其他团队资料，应先让用户附加相应文档，再基于这些文档继续。".to_string(),
+        "如果用户明确要求查资料、看团队文档、核对知识库或引用既有资料，可以直接使用 document_tools，不需要先要求用户附加文档。".to_string(),
+        "当前明确附加的文档仍然是最优先的起点；如果没有文档相关需求，就不要无目的地遍历整个文档库。".to_string(),
+        "需要补充团队资料时，应带着明确目标去读取相关文档，而不是把全部团队文档当成本轮默认上下文。".to_string(),
         "</document_scope>".to_string(),
     ];
     lines.join("\n")
 }
 
+fn message_mentions_file_delivery(text: &str) -> bool {
+    let lowered = text.trim().to_lowercase();
+    if lowered.is_empty() {
+        return false;
+    }
+    [
+        "下载",
+        "导出",
+        "文件",
+        "附件",
+        "预览",
+        "download",
+        "export",
+        "attachment",
+        "file",
+        "preview",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+}
+
+fn build_chat_file_delivery_overlay(current_request: &str) -> Option<String> {
+    if !message_mentions_file_delivery(current_request) {
+        return None;
+    }
+    Some(
+        [
+            "<chat_file_delivery_contract>",
+            "当前是普通 agent 对话。如果用户要求下载、导出、附件或预览文件，优先在当前会话工作区中生成或导出目标文件。",
+            "如果用户要的是现有团队文档本身，优先直接使用 attach_document_to_message，不要先停在 export_document_to_workspace 的中间态。",
+            "文件准备好后，调用 attach_workspace_file_to_message，把文件直接附加到当前 assistant 回复。",
+            "不要只说“我已保存到工作区”。如果文件已经可交付，应把它附加到这条回复里。",
+            "可预览类型应优先让用户获得预览入口；不可预览类型至少提供下载入口。",
+            "</chat_file_delivery_contract>",
+        ]
+        .join("\n"),
+    )
+}
+
+fn build_chat_tool_gate_overlay(current_request: &str) -> Option<String> {
+    if !manager_message_mentions_skill_inventory(current_request) {
+        return None;
+    }
+    Some(
+        [
+            "<turn_tool_gate mode=\"allow_only\">",
+            "team_skills__search",
+            "</turn_tool_gate>",
+        ]
+        .join("\n"),
+    )
+}
+
 fn build_channel_document_scope_overlay(attached_document_count: usize) -> String {
     [
         "<document_scope>".to_string(),
-        "当前是团队共享频道。频道资料和团队文档库都不是每轮自动展开的默认上下文。".to_string(),
+        "当前是团队共享频道。你拥有团队文档库权限，但频道资料和团队文档库都不是每轮自动展开的默认上下文。".to_string(),
         format!("本轮当前明确附加的文档数：{}", attached_document_count),
-        "默认只使用当前明确附加到这条消息或这次线程回复里的文档，不要主动搜索团队文档库。".to_string(),
-        "即使频道已经绑定了资料目录，也不要因为目录存在就自动读取全部资料；需要用哪份资料，就先附加哪份资料。".to_string(),
-        "如果用户想引用频道资料或团队文档，应先通过附件或频道资料入口明确加入当前消息上下文，再继续处理。".to_string(),
+        "如果频道讨论明确要求查资料、核对团队文档或引用频道资料，可以直接使用 document_tools，不需要先要求重新附加文档。".to_string(),
+        "当前明确附加到这条消息或这次线程回复里的文档仍然优先，但不要因为权限更高就自动读取频道绑定目录或整个团队文档库。".to_string(),
+        "应按当前协作问题选择相关资料，定向读取，而不是默认展开全部可访问文档。".to_string(),
         "</document_scope>".to_string(),
     ]
     .join("\n")
 }
 
 fn channel_surface_requires_final_report(
-    surface: ChatChannelMessageSurface,
-    interaction_mode: ChatChannelInteractionMode,
+    _surface: ChatChannelMessageSurface,
+    _interaction_mode: ChatChannelInteractionMode,
 ) -> bool {
-    matches!(
-        (surface, interaction_mode),
-        (
-            ChatChannelMessageSurface::Issue,
-            ChatChannelInteractionMode::Execution
-        )
-    )
+    false
 }
 
-fn channel_session_source_for_mode(interaction_mode: ChatChannelInteractionMode) -> &'static str {
-    match interaction_mode {
-        ChatChannelInteractionMode::Conversation => "channel_conversation",
-        ChatChannelInteractionMode::Execution => "channel_runtime",
-    }
+fn channel_session_source_for_mode(_interaction_mode: ChatChannelInteractionMode) -> &'static str {
+    "channel_conversation"
 }
 
 fn build_channel_surface_execution_overlay(
     surface: ChatChannelMessageSurface,
     thread_state: ChatChannelThreadState,
-    interaction_mode: ChatChannelInteractionMode,
+    _interaction_mode: ChatChannelInteractionMode,
 ) -> Option<String> {
-    if matches!(interaction_mode, ChatChannelInteractionMode::Conversation) {
-        return match surface {
-            ChatChannelMessageSurface::Issue => Some(
-                [
-                    "<channel_conversation_contract>".to_string(),
-                    "当前消息 surface=issue。这是一条正式协作线程。".to_string(),
-                    "默认按持续对话推进：围绕问题澄清、补充判断、逐步修改文档、同步阶段进展，而不是把每一轮都当成立即收尾的任务。"
-                        .to_string(),
-                    "如果用户在探讨方案、来回调整、补上下文或持续协作，请自然继续对话，不要强行输出 blocked、final_output 或任务完成结论。"
-                        .to_string(),
-                    "</channel_conversation_contract>".to_string(),
-                ]
-                .join("\n"),
-            ),
-            ChatChannelMessageSurface::Temporary
-                if matches!(thread_state, ChatChannelThreadState::Active) =>
-            {
-                Some(
-                    [
-                        "<channel_conversation_contract>".to_string(),
-                        "当前消息 surface=temporary，表示临时协作线程。".to_string(),
-                        "这里的目标是先聊明白、澄清问题、试探方向，默认按持续对话处理，不要把它理解成必须立刻完成的任务。"
-                            .to_string(),
-                        "如果上下文还不充分，就继续追问、收束和讨论；不要为了凑结果而硬性给出 blocked 或任务完成结论。"
-                            .to_string(),
-                        "</channel_conversation_contract>".to_string(),
-                    ]
-                    .join("\n"),
-                )
-            }
-            _ => None,
-        };
-    }
-
     match surface {
         ChatChannelMessageSurface::Issue => Some(
             [
-                "<channel_execution_contract>".to_string(),
-                "当前消息 surface=issue。这是一条正式协作线程里的显式执行回合。".to_string(),
-                "本轮应集中执行当前这一步，并给出清晰的执行结果、阻塞点或下一步。".to_string(),
-                "不要复用频道 onboarding 话术，也不要输出未来时废话。".to_string(),
-                "</channel_execution_contract>".to_string(),
+                "<channel_conversation_contract>".to_string(),
+                "当前消息 surface=issue。这是一条正式协作线程。".to_string(),
+                "默认按持续对话推进：围绕问题澄清、补充判断、逐步修改文档、同步阶段进展，而不是把每一轮都当成立即收尾的任务。"
+                    .to_string(),
+                "如果用户在探讨方案、来回调整、补上下文或持续协作，请自然继续对话，不要强行输出 blocked、final_output 或任务完成结论。"
+                    .to_string(),
+                "</channel_conversation_contract>".to_string(),
             ]
             .join("\n"),
         ),
@@ -356,12 +1500,13 @@ fn build_channel_surface_execution_overlay(
         {
             Some(
                 [
-                    "<channel_execution_contract>".to_string(),
-                    "当前消息 surface=temporary，表示临时协作线程里的显式执行回合。".to_string(),
-                    "只执行用户当前明确要求的这一步；如果还缺上下文，就用简短中文说明阻塞点和下一步。"
+                    "<channel_conversation_contract>".to_string(),
+                    "当前消息 surface=temporary，表示临时协作线程。".to_string(),
+                    "这里的目标是先聊明白、澄清问题、试探方向，默认按持续对话处理，不要把它理解成必须立刻完成的任务。"
                         .to_string(),
-                    "不要退回成频道欢迎语或泛泛的协作开场白。".to_string(),
-                    "</channel_execution_contract>".to_string(),
+                    "如果上下文还不充分，就继续追问、收束和讨论；不要为了凑结果而硬性给出 blocked 或任务完成结论。"
+                        .to_string(),
+                    "</channel_conversation_contract>".to_string(),
                 ]
                 .join("\n"),
             )
@@ -423,6 +1568,20 @@ async fn maybe_emit_manager_agent_follow_up(
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
+    let suggestion_revision = format!(
+        "discussion_follow_up:{}:{}",
+        user_message.message_id, fingerprint
+    );
+    if state
+        .card_emission_registry
+        .suggestion_revisions
+        .get(&ChatChannelCardEmissionRegistry::normalized_key(
+            "discussion_follow_up",
+        ))
+        .is_some_and(|value| value == &suggestion_revision)
+    {
+        return Ok(());
+    }
     if state
         .recent_suggestion_fingerprints
         .iter()
@@ -467,11 +1626,19 @@ async fn maybe_emit_manager_agent_follow_up(
                 Some(agent.id.clone()),
                 collaboration_text.clone(),
                 serde_json::json!([{ "type": "text", "text": collaboration_text }]),
-                serde_json::json!({
-                    "discussion_card_kind": "suggestion",
-                    "card_purpose": "auto_started_collaboration",
-                    "source_message_id": user_message.message_id,
-                }),
+                attach_card_domain_metadata(
+                    channel,
+                    serde_json::json!({
+                        "discussion_card_kind": "suggestion",
+                        "card_purpose": "auto_started_collaboration",
+                        "source_message_id": user_message.message_id,
+                    }),
+                    build_channel_coding_payload(
+                        channel,
+                        Some("围绕这条协作项继续整理方案、代码范围和下一步。"),
+                        Vec::new(),
+                    ),
+                ),
             )
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -493,12 +1660,21 @@ async fn maybe_emit_manager_agent_follow_up(
                 Some(agent.id.clone()),
                 note.clone(),
                 serde_json::json!([{ "type": "text", "text": note }]),
-                serde_json::json!({
-                    "discussion_card_kind": "suggestion",
-                    "card_purpose": "auto_started_notice",
-                    "source_message_id": user_message.message_id,
-                    "linked_collaboration_id": collaboration.message_id,
-                }),
+                attach_card_domain_metadata(
+                    channel,
+                    serde_json::json!({
+                        "discussion_card_kind": "suggestion",
+                        "card_purpose": "auto_started_notice",
+                        "source_message_id": user_message.message_id,
+                        "source_revision": suggestion_revision,
+                        "linked_collaboration_id": collaboration.message_id,
+                    }),
+                    build_channel_coding_payload(
+                        channel,
+                        Some("在线程里继续推进这项协作。"),
+                        Vec::new(),
+                    ),
+                ),
             )
             .await;
     } else {
@@ -521,17 +1697,33 @@ async fn maybe_emit_manager_agent_follow_up(
                 Some(agent.id.clone()),
                 suggestion.clone(),
                 serde_json::json!([{ "type": "text", "text": suggestion }]),
-                serde_json::json!({
-                    "discussion_card_kind": "suggestion",
-                    "card_purpose": "manager_suggestion",
-                    "source_message_id": user_message.message_id,
-                    "next_actions": ["开始协作", "先忽略"]
-                }),
+                attach_card_domain_metadata(
+                    channel,
+                    serde_json::json!({
+                        "discussion_card_kind": "suggestion",
+                        "card_purpose": "manager_suggestion",
+                        "source_message_id": user_message.message_id,
+                        "source_revision": suggestion_revision,
+                        "next_actions": ["开始协作", "先忽略"]
+                    }),
+                    build_channel_coding_payload(
+                        channel,
+                        Some("开始一条协作线程，围绕代码改动继续推进。"),
+                        Vec::new(),
+                    ),
+                ),
             )
             .await;
     }
     let _ = channel_service
-        .record_orchestrator_heartbeat(channel, "discussion_follow_up", Some(fingerprint))
+        .record_orchestrator_card_emission(
+            channel,
+            "discussion_follow_up",
+            ChatChannelCardEmissionFamily::Suggestion,
+            "discussion_follow_up",
+            &suggestion_revision,
+            Some(fingerprint),
+        )
         .await;
     Ok(())
 }
@@ -567,6 +1759,59 @@ fn build_channel_context_overlay(
     }
     lines.push("</channel_context>".to_string());
     lines.join("\n")
+}
+
+fn coding_thread_mentions_explicit_planning(content: &str) -> bool {
+    let lowered = content.to_ascii_lowercase();
+    [
+        "先做方案",
+        "先规划",
+        "先拆任务",
+        "先拆解",
+        "先分析",
+        "给我方案",
+        "给我计划",
+        "做个计划",
+        "做个方案",
+        "how should we plan",
+        "first plan",
+        "implementation plan",
+        "make a plan",
+        "design first",
+        "task breakdown",
+        "todo list first",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+}
+
+fn classify_coding_thread_intent(content: &str) -> ChannelCodingIntent {
+    if coding_thread_mentions_explicit_planning(content) {
+        ChannelCodingIntent::Planning
+    } else {
+        ChannelCodingIntent::DirectBuild
+    }
+}
+
+fn classify_chat_delegation_intent(content: &str) -> Option<ChatDelegationIntent> {
+    let lowered = content.to_ascii_lowercase();
+    if lowered.contains("swarm")
+        || lowered.contains("multiple workers")
+        || lowered.contains("multiple worker")
+        || content.contains("群体代理")
+        || content.contains("多 worker")
+        || content.contains("多代理")
+    {
+        Some(ChatDelegationIntent::Swarm)
+    } else if lowered.contains("subagent")
+        || lowered.contains("one worker")
+        || lowered.contains("single worker")
+        || content.contains("子代理")
+    {
+        Some(ChatDelegationIntent::Subagent)
+    } else {
+        None
+    }
 }
 
 async fn build_agent_name_map_for_team(
@@ -709,6 +1954,7 @@ async fn build_channel_extra_instructions(
     channel: &super::chat_channels::ChatChannelDoc,
     default_agent_name: &str,
     thread_summary: Option<&str>,
+    current_request: &str,
     attached_document_count: usize,
     surface: ChatChannelMessageSurface,
     thread_state: ChatChannelThreadState,
@@ -718,6 +1964,24 @@ async fn build_channel_extra_instructions(
         .get_settings(team_id)
         .await
         .ok();
+    let coding_overlay = matches!(channel.channel_type, ChatChannelType::Coding).then(|| {
+        build_channel_coding_overlay(ChannelCodingProfileInput {
+            channel_name: &channel.name,
+            workspace_display_name: channel.workspace_display_name.as_deref(),
+            workspace_path: channel.workspace_path.as_deref(),
+            repo_path: channel.repo_path.as_deref(),
+            main_checkout_path: channel.main_checkout_path.as_deref(),
+            thread_summary,
+            current_request,
+            intent: classify_coding_thread_intent(current_request),
+        })
+    });
+    let delegation_overlay = classify_chat_delegation_intent(current_request).map(|intent| {
+        build_chat_delegation_overlay(ChatDelegationProfileInput {
+            current_request,
+            intent,
+        })
+    });
     merge_chat_extra_instructions(
         std::iter::once(build_assistant_identity_overlay())
             .chain(std::iter::once(build_assistant_persona_overlay(user)))
@@ -732,6 +1996,8 @@ async fn build_channel_extra_instructions(
                 default_agent_name,
                 thread_summary,
             )))
+            .chain(coding_overlay.into_iter())
+            .chain(delegation_overlay.into_iter())
             .chain(std::iter::once(build_channel_document_scope_overlay(
                 attached_document_count,
             )))
@@ -747,6 +2013,7 @@ async fn build_channel_extra_instructions(
 async fn find_or_create_channel_runtime_session(
     service: &AgentService,
     channel: &super::chat_channels::ChatChannelDoc,
+    workspace_root: &str,
     user_id: &str,
     agent_id: &str,
     thread_root_id: &str,
@@ -755,6 +2022,7 @@ async fn find_or_create_channel_runtime_session(
     require_final_report: bool,
     session_source: &str,
 ) -> Result<super::session_mongo::AgentSessionDoc, StatusCode> {
+    let uses_project_workspace = matches!(channel.channel_type, ChatChannelType::Coding);
     if let Some(existing) = service
         .find_active_channel_session(
             &channel.channel_id,
@@ -783,7 +2051,31 @@ async fn find_or_create_channel_runtime_session(
             )
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        return Ok(existing);
+        if uses_project_workspace {
+            let _ = ensure_channel_thread_worktree(
+                service,
+                workspace_root,
+                channel,
+                &existing,
+                thread_root_id,
+            )
+            .await?;
+        } else {
+            service
+                .clear_session_thread_repo_context(&existing.session_id)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            service
+                .clear_session_workspace_binding(&existing.session_id)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        let refreshed = service
+            .get_session(&existing.session_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        return Ok(refreshed);
     }
 
     let internal_session = service
@@ -801,7 +2093,7 @@ async fn find_or_create_channel_runtime_session(
             None,
             require_final_report,
             false,
-            Some("attached_only".to_string()),
+            Some("full".to_string()),
             None,
             Some(session_source.to_string()),
             Some(true),
@@ -817,7 +2109,21 @@ async fn find_or_create_channel_runtime_session(
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(internal_session)
+    if uses_project_workspace {
+        let _ = ensure_channel_thread_worktree(
+            service,
+            workspace_root,
+            channel,
+            &internal_session,
+            thread_root_id,
+        )
+        .await?;
+    }
+    service
+        .get_session(&internal_session.session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 #[derive(serde::Deserialize)]
@@ -879,6 +2185,54 @@ struct ChatChannelsEnvelope {
 #[derive(serde::Serialize)]
 struct ChatChannelEnvelope {
     channel: ChatChannelDetail,
+}
+
+#[derive(serde::Serialize)]
+struct ChannelWorkspaceListEnvelope {
+    workspaces: Vec<ChannelProjectWorkspaceDoc>,
+}
+
+#[derive(serde::Serialize)]
+struct ChannelWorkspaceFilesEnvelope {
+    root_path: Option<String>,
+    code_files: Vec<String>,
+    truncated: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ChannelWorkspaceFilesQuery {
+    #[serde(default)]
+    thread_root_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ChannelWorkspaceFileContentQuery {
+    path: String,
+    #[serde(default)]
+    thread_root_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SessionWorkspaceFileContentQuery {
+    path: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ChannelWorkspacesQuery {
+    team_id: String,
+    #[serde(default)]
+    lifecycle_state: Option<ChannelProjectWorkspaceLifecycleState>,
+}
+
+async fn attach_workspace_governance(
+    governance_service: &ChannelWorkspaceGovernanceService,
+    detail: &mut ChatChannelDetail,
+) -> Result<(), StatusCode> {
+    detail.workspace_governance = governance_service
+        .summarize_for_channel(&detail.summary.channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -1850,13 +3204,17 @@ fn manager_message_mentions_registry(user_content: &str) -> bool {
     let lowered = user_content.to_ascii_lowercase();
     lowered.contains("skills.sh")
         || lowered.contains("skill_registry")
-        || lowered.contains("registry")
+        || lowered.contains("registry skill")
+        || lowered.contains("search registry")
+        || lowered.contains("skills leaderboard")
         || lowered.contains("trending")
         || lowered.contains("all_time")
         || lowered.contains("all time")
         || lowered.contains("hot")
-        || user_content.contains("热门")
-        || user_content.contains("技能")
+        || user_content.contains("热门技能")
+        || user_content.contains("技能榜")
+        || user_content.contains("榜单技能")
+        || user_content.contains("registry 技能")
 }
 
 fn manager_message_mentions_extension_inventory(user_content: &str) -> bool {
@@ -1922,18 +3280,58 @@ fn message_mentions_mcp_install(user_content: &str) -> bool {
         || user_content.contains("streamable")
 }
 
+fn message_mentions_skill_import(user_content: &str) -> bool {
+    let lowered = user_content.to_ascii_lowercase();
+    let wants_import = lowered.contains("import skill")
+        || lowered.contains("install skill")
+        || lowered.contains("add skill")
+        || lowered.contains("load skill")
+        || user_content.contains("导入技能")
+        || user_content.contains("导入这个技能")
+        || user_content.contains("把这个技能导入")
+        || user_content.contains("安装技能")
+        || user_content.contains("安装这个技能")
+        || user_content.contains("把这个skill导入")
+        || user_content.contains("导入这个skill")
+        || user_content.contains("安装这个skill");
+    let mentions_skill_or_source = lowered.contains("skill")
+        || lowered.contains("skills.sh")
+        || lowered.contains("skill_registry")
+        || lowered.contains("github.com")
+        || lowered.contains("file://")
+        || lowered.contains("skill.md")
+        || lowered.contains(".zip")
+        || lowered.contains(".rar")
+        || lowered.contains(".7z")
+        || lowered.contains(".tar")
+        || lowered.contains("workspace")
+        || user_content.contains("技能")
+        || user_content.contains("附件")
+        || user_content.contains("压缩包")
+        || user_content.contains("归档包")
+        || user_content.contains("目录")
+        || user_content.contains("工作区");
+    wants_import && mentions_skill_or_source
+}
+
 async fn build_portal_manager_turn_notice(
     db: &MongoDb,
     team_id: &str,
     portal_id: Option<&str>,
     user_content: &str,
 ) -> Option<String> {
+    let mentions_skill_inventory = manager_message_mentions_skill_inventory(user_content);
     let mentions_registry = manager_message_mentions_registry(user_content);
     let mentions_extension_inventory = manager_message_mentions_extension_inventory(user_content);
-
     let mentions_mcp_install = message_mentions_mcp_install(user_content);
+    let mentions_skill_import = message_mentions_skill_import(user_content);
 
-    if !mentions_registry && !mentions_extension_inventory && !mentions_mcp_install {
+    if !mentions_skill_inventory
+        && !mentions_registry
+        && !mentions_extension_inventory
+        && !mentions_mcp_install
+        && !mentions_skill_import
+    {
         return None;
     }
 
@@ -1951,6 +3349,12 @@ async fn build_portal_manager_turn_notice(
     }
 
     let mut parts = Vec::new();
+    if mentions_skill_inventory {
+        parts.push(
+            "特别提醒：当前用户正在询问当前会话“有哪些技能 / 当前可用 skills / 已安装并启用的 skills”。这类问题默认只指当前真正可用的团队技能，本轮的正确做法是：只调用一次 `team_skills__search` 并直接基于该结果回答。把普通“技能”问题误导成远程 registry 查询属于错误；把 `skill_registry__list_imported_registry_skills` 当成补充核对也属于错误，因为 imported registry 列表不等于当前真正可用技能。本轮禁止调用任何 `skill_registry__*` 工具，包括 `skill_registry__list_popular_skills`、`skill_registry__search_skills`、`skill_registry__list_imported_registry_skills`、`skill_registry__preview_skill`、`skill_registry__import_skill_to_team`。如果已经误调了 `skill_registry__*`，必须立即停止继续调 registry，并回到 `team_skills__search` 结果重新作答。只有当用户明确提到 `skills.sh`、registry、热门榜单、trending / hot / all_time，或明确要求导入 skill 时，才转入 `skill_registry` 场景。".to_string(),
+        );
+    }
+
     if mentions_registry {
         if skill_registry_allowed {
             parts.push(
@@ -1977,6 +3381,18 @@ async fn build_portal_manager_turn_notice(
         );
     }
 
+    if mentions_skill_import {
+        if skill_registry_allowed {
+            parts.push(
+                "特别提醒：当前用户正在明确要求导入/安装 skill。附件、上传文档和压缩包默认都属于文档资料，不得因为看到附件就自动当作 skill 导入。只有在用户显式提出“导入/安装这个 skill”时，才允许走 skill 导入链路：先用现有文档/工作区能力把附件导入 workspace；若来源是 zip/rar/7z/tar.gz 等 archive，先在 workspace 解压；然后只对解压后的目录或 `SKILL.md` 路径调用 `skill_registry__preview_skill` / `skill_registry__import_skill_to_team`。若给的是 `skills.sh` / GitHub / `file://` 链接，也必须先 preview，再 import。禁止对普通附件做自动 skill 扫描或自动导入。".to_string(),
+            );
+        } else {
+            parts.push(
+                "特别提醒：当前用户正在明确要求导入/安装 skill，但当前会话未开放 `skill_registry`。附件仍应默认视为文档资料；不得擅自把附件当作 skill 安装。若要继续，应明确说明需要在具备 `skill_registry` 能力的会话中执行，或先把文件整理到 workspace 后再切换会话完成导入。".to_string(),
+            );
+        }
+    }
+
     Some(parts.join(" "))
 }
 
@@ -1986,14 +3402,26 @@ async fn build_general_turn_notice(
     agent_id: &str,
     user_content: &str,
 ) -> Option<String> {
+    let mentions_skill_inventory = manager_message_mentions_skill_inventory(user_content);
     let mentions_extension_inventory = manager_message_mentions_extension_inventory(user_content);
     let mentions_mcp_install = message_mentions_mcp_install(user_content);
+    let mentions_skill_import = message_mentions_skill_import(user_content);
 
-    if !mentions_mcp_install && !mentions_extension_inventory {
+    if !mentions_mcp_install
+        && !mentions_extension_inventory
+        && !mentions_skill_import
+        && !mentions_skill_inventory
+    {
         return None;
     }
 
     let mut notices = Vec::new();
+
+    if mentions_skill_inventory {
+        notices.push(
+            "特别提醒：当前用户正在询问当前会话“有哪些技能 / 当前可用 skills / 已安装并启用的 skills”。这类问题默认只指当前真正可用的团队技能，本轮的正确做法是：只调用一次 `team_skills__search` 并直接基于该结果回答。把普通“技能”问题误导成远程 registry 查询属于错误；把 `skill_registry__list_imported_registry_skills` 当成补充核对也属于错误，因为 imported registry 列表不等于当前真正可用技能。本轮禁止调用任何 `skill_registry__*` 工具，包括 `skill_registry__list_popular_skills`、`skill_registry__search_skills`、`skill_registry__list_imported_registry_skills`、`skill_registry__preview_skill`、`skill_registry__import_skill_to_team`。如果已经误调了 `skill_registry__*`，必须立即停止继续调 registry，并回到 `team_skills__search` 结果重新作答。只有当用户明确提到 `skills.sh`、registry、热门榜单、trending / hot / all_time，或明确要求导入 skill 时，才转入 `skill_registry` 场景。".to_string(),
+        );
+    }
 
     if mentions_extension_inventory {
         notices.push(
@@ -2014,11 +3442,32 @@ async fn build_general_turn_notice(
         }
     };
 
+    let skill_registry_enabled = {
+        let runtime_snapshot = AgentRuntimePolicyResolver::resolve(&agent, None, None);
+        runtime_snapshot
+            .extensions
+            .effective_allowed_extension_names
+            .iter()
+            .any(|name| name == "skill_registry")
+    };
+
     if mentions_mcp_install && has_manager_tooling(&agent) {
         notices.push(
             "特别提醒：当前用户正在要求正式管理 MCP/自定义扩展。禁止把 clone 仓库、npm install、把代码放进 workspace、或临时跑通 server 当成“系统已经安装”或“已经卸载”。正式安装必须优先走 `team_mcp__install_team_mcp` 写入团队扩展库；若需要立即给某个 Agent/分身可用，再调用 `team_mcp__attach_team_mcp`。更新走 `team_mcp__update_team_mcp`，卸载走 `team_mcp__remove_team_mcp`。如果用户给的是网页、README、仓库或教程链接，应先使用当前会话已有的网页阅读能力（如 developer / playwright）提取真实安装命令、服务地址和必要 envs，再调用 `team_mcp__plan_install_team_mcp` 归一化并校验安装计划；只有在 `ready_to_install=true` 时才能执行正式安装。若用户要求卸载/删除/移除某个 MCP，必须先调用 `team_mcp__list_installed` 确认精确目标，再用 `team_mcp__remove_team_mcp` 正式卸载，并默认保持 `detach_attached=true`，确保所有已挂载 Agent 一并摘除。如果当前会话明确绑定了数字分身/服务 Agent，则在挂载后再调用 `portal_tools__get_portal_service_capability_profile` 回读确认；若用户只是想通过 UI 完成安装，则引导使用 MCP 工作区 `/teams/{teamId}/mcp/workspace`。".to_string(),
         );
         return Some(notices.join(" "));
+    }
+
+    if mentions_skill_import {
+        if skill_registry_enabled {
+            notices.push(
+                "特别提醒：当前用户正在明确要求导入/安装 skill。附件、上传文档和压缩包默认属于文档资料，不得因为看到了附件就自动当作 skill 导入。只有在用户明确要求导入 skill 时，才允许走这条链路：先使用现有文档/工作区能力把文件放到 workspace；如果来源是 zip/rar/7z/tar.gz 等 archive，先在 workspace 解压；然后仅对解压后的目录或 `SKILL.md` 路径调用 `skill_registry__preview_skill` / `skill_registry__import_skill_to_team`。如果给的是 `skills.sh` / GitHub / `file://` 链接，也必须先 preview，再 import。禁止对普通附件做自动 skill 扫描或自动导入。".to_string(),
+            );
+        } else {
+            notices.push(
+                "特别提醒：当前用户正在明确要求导入/安装 skill，但当前 Agent 会话未开放 `skill_registry`。附件仍默认视为文档资料；不得擅自把附件当作 skill 安装。若要继续，应明确说明需要切换到具备 `skill_registry` 能力的会话，或先把文件放到 workspace 后在支持该能力的会话里导入。".to_string(),
+            );
+        }
     }
 
     if mentions_mcp_install {
@@ -2033,14 +3482,22 @@ async fn build_general_turn_notice(
 pub fn chat_router(
     db: Arc<MongoDb>,
     chat_manager: Arc<ChatManager>,
+    channel_manager: Arc<ChatChannelManager>,
     workspace_root: String,
 ) -> Router {
     let service = Arc::new(AgentService::new(db.clone()));
-    let channel_manager = Arc::new(ChatChannelManager::new_with_event_persistence(db.clone()));
     {
         let db = db.clone();
         tokio::spawn(async move {
             let _ = ChatChannelService::new(db).ensure_indexes().await;
+        });
+    }
+    {
+        let db = db.clone();
+        tokio::spawn(async move {
+            let _ = ChannelWorkspaceGovernanceService::new(db)
+                .ensure_indexes()
+                .await;
         });
     }
 
@@ -2063,6 +3520,35 @@ pub fn chat_router(
             post(dismiss_chat_memory_suggestion),
         )
         .route("/channels", get(list_channels).post(create_channel))
+        .route("/channels/workspaces", get(list_channel_workspaces))
+        .route(
+            "/channels/workspaces/{workspace_id}/restore",
+            post(restore_channel_workspace),
+        )
+        .route(
+            "/channels/workspaces/{workspace_id}/archive",
+            post(archive_channel_workspace),
+        )
+        .route(
+            "/channels/workspaces/{workspace_id}/delete",
+            post(delete_channel_workspace),
+        )
+        .route(
+            "/channels/{channel_id}/workspace/files",
+            get(list_channel_workspace_files),
+        )
+        .route(
+            "/channels/{channel_id}/workspace/files/content",
+            get(get_channel_workspace_file_content),
+        )
+        .route(
+            "/channels/{channel_id}/workspace/preview/main/{*path}",
+            get(preview_channel_workspace_main_file),
+        )
+        .route(
+            "/channels/{channel_id}/workspace/preview/thread/{thread_root_id}/{*path}",
+            get(preview_channel_workspace_thread_file),
+        )
         .route(
             "/channels/{channel_id}",
             get(get_channel_detail)
@@ -2130,6 +3616,18 @@ pub fn chat_router(
         .route("/sessions/{id}/messages", post(send_message))
         .route("/sessions/{id}/stream", get(stream_chat))
         .route("/sessions/{id}/events", get(list_session_events))
+        .route(
+            "/sessions/{id}/workspace/files/content",
+            get(get_session_workspace_file_content),
+        )
+        .route(
+            "/sessions/{id}/workspace/preview/{*path}",
+            get(preview_session_workspace_file),
+        )
+        .route(
+            "/sessions/{id}/workspace/shares",
+            post(create_session_workspace_share),
+        )
         .route("/sessions/{id}/cancel", post(cancel_chat))
         .route("/sessions/{id}/archive", post(archive_session))
         // Phase 2: Document attachment
@@ -2140,6 +3638,24 @@ pub fn chat_router(
                 .delete(detach_documents),
         )
         .with_state((service, db, chat_manager, channel_manager, workspace_root))
+}
+
+pub fn chat_public_router(db: Arc<MongoDb>) -> Router {
+    let service = Arc::new(AgentService::new(db.clone()));
+    Router::new()
+        .route(
+            "/public/workspace-shares/{share_id}",
+            get(preview_shared_session_workspace_file),
+        )
+        .route(
+            "/public/workspace-shares/{share_id}/content",
+            get(get_shared_session_workspace_file_content),
+        )
+        .route(
+            "/public/workspace-shares/{share_id}/download",
+            get(download_shared_session_workspace_file),
+        )
+        .with_state((service, db))
 }
 
 async fn ensure_team_member_for_chat_memory(
@@ -2309,16 +3825,37 @@ async fn list_channels(
         .list_channels_for_user(&query.team_id, &user.user_id, is_admin, &agent_names)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let channels = channels
+        .into_iter()
+        .filter(|channel| !matches!(channel.channel_type, ChatChannelType::ScheduledTask))
+        .collect();
     Ok(Json(ChatChannelsEnvelope { channels }))
 }
 
-async fn create_channel(
+async fn list_channel_workspaces(
     State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Query(query): Query<ChannelWorkspacesQuery>,
+) -> Result<Json<ChannelWorkspaceListEnvelope>, StatusCode> {
+    ensure_team_member_for_chat_memory(service.as_ref(), &user, &query.team_id).await?;
+    let governance_service = ChannelWorkspaceGovernanceService::new(db);
+    let workspaces = governance_service
+        .list_team_workspaces(&query.team_id, query.lifecycle_state)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(ChannelWorkspaceListEnvelope { workspaces }))
+}
+
+async fn create_channel(
+    State((service, db, _, _, workspace_root)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Query(query): Query<ChannelQuery>,
     Json(mut request): Json<CreateChatChannelRequest>,
 ) -> Result<Json<ChatChannelEnvelope>, StatusCode> {
     ensure_team_member_for_chat_memory(service.as_ref(), &user, &query.team_id).await?;
+    if matches!(request.channel_type, Some(ChatChannelType::ScheduledTask)) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let agent = service
         .get_agent(&request.default_agent_id)
         .await
@@ -2347,11 +3884,19 @@ async fn create_channel(
         }
     }
 
-    let channel_service = ChatChannelService::new(db);
+    let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
     let channel = channel_service
         .create_channel(&query.team_id, &user.user_id, request)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let channel = sync_channel_type_and_workspace(
+        &channel_service,
+        &governance_service,
+        &workspace_root,
+        channel,
+    )
+    .await?;
     let onboarding_text = "频道启动卡\n请先告诉我四件事：1. 这个频道主要目标是什么；2. 主要谁会参与协作、谁是关键判断人；3. 最终希望产出什么；4. 这里更偏讨论、方案、执行还是评审。";
     let _ = channel_service
         .create_message(
@@ -2370,16 +3915,35 @@ async fn create_channel(
             serde_json::json!([
                 { "type": "text", "text": onboarding_text }
             ]),
-            serde_json::json!({
-                "discussion_card_kind": "suggestion",
-                "card_purpose": "channel_onboarding",
-                "prompts": [
-                    "频道目标",
-                    "参与人",
-                    "产出物",
-                    "协作方式"
-                ]
-            }),
+            attach_card_domain_metadata(
+                &channel,
+                serde_json::json!({
+                    "discussion_card_kind": "onboarding",
+                    "card_purpose": "channel_onboarding",
+                    "source_revision": "channel_onboarding_v1",
+                    "prompts": [
+                        "频道目标",
+                        "参与人",
+                        "产出物",
+                        "协作方式"
+                    ]
+                }),
+                build_channel_coding_payload(
+                    &channel,
+                    Some("明确目标后开始一条协作线程推进代码工作。"),
+                    Vec::new(),
+                ),
+            ),
+        )
+        .await;
+    let _ = channel_service
+        .record_orchestrator_card_emission(
+            &channel,
+            "channel_onboarding",
+            ChatChannelCardEmissionFamily::Onboarding,
+            "channel_onboarding",
+            "channel_onboarding_v1",
+            None,
         )
         .await;
     let pref = channel_service
@@ -2396,7 +3960,7 @@ async fn create_channel(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .len() as i32;
-    let detail = channel_service
+    let mut detail = channel_service
         .build_detail(
             channel,
             ChatChannelMemberRole::Owner,
@@ -2406,17 +3970,26 @@ async fn create_channel(
             Some(&pref),
         )
         .await;
+    attach_workspace_governance(&governance_service, &mut detail).await?;
     Ok(Json(ChatChannelEnvelope { channel: detail }))
 }
 
 async fn get_channel_detail(
-    State((service, db, _, _, _)): State<ChatState>,
+    State((service, db, _, _, workspace_root)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(channel_id): Path<String>,
 ) -> Result<Json<ChatChannelEnvelope>, StatusCode> {
     let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
     let (channel, role, is_admin) =
         ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let channel = sync_channel_type_and_workspace(
+        &channel_service,
+        &governance_service,
+        &workspace_root,
+        channel,
+    )
+    .await?;
     let pref = channel_service
         .touch_last_visited(&channel, &user.user_id)
         .await
@@ -2439,7 +4012,7 @@ async fn get_channel_detail(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .len() as i32
     };
-    let detail = channel_service
+    let mut detail = channel_service
         .build_detail(
             channel,
             role,
@@ -2449,16 +4022,329 @@ async fn get_channel_detail(
             Some(&pref),
         )
         .await;
+    attach_workspace_governance(&governance_service, &mut detail).await?;
     Ok(Json(ChatChannelEnvelope { channel: detail }))
 }
 
-async fn update_channel(
+async fn list_channel_workspace_files(
+    State((service, db, _, _, workspace_root)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+    Query(query): Query<ChannelWorkspaceFilesQuery>,
+) -> Result<Json<ChannelWorkspaceFilesEnvelope>, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
+    let (channel, _, _) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let channel = sync_channel_type_and_workspace(
+        &channel_service,
+        &governance_service,
+        &workspace_root,
+        channel,
+    )
+    .await?;
+    if !matches!(channel.channel_type, ChatChannelType::Coding) {
+        return Ok(Json(ChannelWorkspaceFilesEnvelope {
+            root_path: None,
+            code_files: Vec::new(),
+            truncated: false,
+        }));
+    }
+    let thread_runtime = if let Some(thread_root_id) = query.thread_root_id.as_deref() {
+        let runtime_session = service
+            .find_latest_channel_session(&channel_id, thread_root_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        build_thread_runtime_response(&channel, runtime_session.as_ref(), thread_root_id)
+    } else {
+        None
+    };
+    let Some(mut root_path) = preferred_code_root_path(&channel, thread_runtime.as_ref()) else {
+        return Ok(Json(ChannelWorkspaceFilesEnvelope {
+            root_path: None,
+            code_files: Vec::new(),
+            truncated: false,
+        }));
+    };
+    let (mut code_files, mut truncated) = list_code_files_for_root(root_path.clone()).await?;
+    if code_files.is_empty() {
+        if let Some(main_checkout_path) = channel.main_checkout_path.clone() {
+            if main_checkout_path != root_path {
+                let fallback = list_code_files_for_root(main_checkout_path.clone()).await?;
+                if !fallback.0.is_empty() {
+                    root_path = main_checkout_path;
+                    code_files = fallback.0;
+                    truncated = fallback.1;
+                }
+            }
+        }
+    }
+    Ok(Json(ChannelWorkspaceFilesEnvelope {
+        root_path: Some(root_path),
+        code_files,
+        truncated,
+    }))
+}
+
+async fn get_channel_workspace_file_content(
+    State((service, db, _, _, workspace_root)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(channel_id): Path<String>,
+    Query(query): Query<ChannelWorkspaceFileContentQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
+    let (channel, _, _) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let channel = sync_channel_type_and_workspace(
+        &channel_service,
+        &governance_service,
+        &workspace_root,
+        channel,
+    )
+    .await?;
+    if !matches!(channel.channel_type, ChatChannelType::Coding) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let relative_path =
+        sanitize_workspace_relative_path(&query.path).ok_or(StatusCode::BAD_REQUEST)?;
+    let thread_runtime = if let Some(thread_root_id) = query.thread_root_id.as_deref() {
+        let runtime_session = service
+            .find_latest_channel_session(&channel_id, thread_root_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        build_thread_runtime_response(&channel, runtime_session.as_ref(), thread_root_id)
+    } else {
+        None
+    };
+    let root_path =
+        preferred_code_root_path(&channel, thread_runtime.as_ref()).ok_or(StatusCode::NOT_FOUND)?;
+    let (content, mime) = read_workspace_file_content(root_path, relative_path).await?;
+    Ok(([(CONTENT_TYPE, mime)], content))
+}
+
+async fn get_session_workspace_file_content(
+    State((service, _, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(session_id): Path<String>,
+    Query(query): Query<SessionWorkspaceFileContentQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let session = service
+        .get_session(&session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if session.user_id != user.user_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if !session.session_source.eq_ignore_ascii_case("chat") {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let relative_path =
+        sanitize_workspace_relative_path(&query.path).ok_or(StatusCode::BAD_REQUEST)?;
+    let root_path = session.workspace_path.ok_or(StatusCode::NOT_FOUND)?;
+    let (content, mime) = read_workspace_file_content(root_path, relative_path).await?;
+    Ok(([(CONTENT_TYPE, mime)], content))
+}
+
+async fn preview_session_workspace_file(
+    State((service, _, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path((session_id, path)): Path<(String, String)>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let session = service
+        .get_session(&session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if session.user_id != user.user_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if !session.session_source.eq_ignore_ascii_case("chat") {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let relative_path = sanitize_workspace_relative_path(&path).ok_or(StatusCode::BAD_REQUEST)?;
+    let root_path = session.workspace_path.ok_or(StatusCode::NOT_FOUND)?;
+    let (content, mime) = read_workspace_file_content(root_path, relative_path).await?;
+    Ok(([(CONTENT_TYPE, mime)], content))
+}
+
+async fn create_session_workspace_share(
     State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(session_id): Path<String>,
+    Json(request): Json<CreateSessionWorkspaceShareRequest>,
+) -> Result<Json<SessionWorkspaceShareResponse>, StatusCode> {
+    let session = service
+        .get_session(&session_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if session.user_id != user.user_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if !session.session_source.eq_ignore_ascii_case("chat") {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let relative_path =
+        sanitize_workspace_relative_path(&request.path).ok_or(StatusCode::BAD_REQUEST)?;
+    let root_path = session.workspace_path.ok_or(StatusCode::NOT_FOUND)?;
+    let (content_type, _) = inspect_workspace_file(root_path, relative_path.clone()).await?;
+    let label = derive_workspace_share_label(&relative_path, request.label.as_deref());
+    let coll = chat_workspace_shares_collection(db.as_ref());
+
+    if let Some(existing) = coll
+        .find_one(
+            doc! {
+                "session_id": &session_id,
+                "user_id": &user.user_id,
+                "path": &relative_path,
+            },
+            None,
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Ok(Json(build_session_workspace_share_response(&existing)));
+    }
+
+    let share = ChatWorkspaceShareDoc {
+        id: None,
+        share_id: Uuid::new_v4().to_string(),
+        session_id,
+        team_id: session.team_id,
+        user_id: user.user_id,
+        path: relative_path.clone(),
+        label,
+        content_type: content_type.clone(),
+        preview_supported: workspace_share_preview_supported(&relative_path, &content_type),
+        created_at: mongodb::bson::DateTime::from_chrono(Utc::now()),
+        last_accessed_at: None,
+    };
+    coll.insert_one(&share, None)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(build_session_workspace_share_response(&share)))
+}
+
+async fn preview_shared_session_workspace_file(
+    State((service, db)): State<ChatPublicState>,
+    Path(share_id): Path<String>,
+) -> Result<Html<String>, StatusCode> {
+    let (share, root_path) =
+        resolve_chat_workspace_share(service.as_ref(), db.as_ref(), &share_id).await?;
+    let (content_type, _) = inspect_workspace_file(root_path, share.path.clone()).await?;
+    Ok(render_chat_workspace_share_page(&share, &content_type))
+}
+
+async fn get_shared_session_workspace_file_content(
+    State((service, db)): State<ChatPublicState>,
+    Path(share_id): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let (share, root_path) =
+        resolve_chat_workspace_share(service.as_ref(), db.as_ref(), &share_id).await?;
+    let (content, mime) = read_workspace_file_content(root_path, share.path).await?;
+    Ok((
+        [
+            (CONTENT_TYPE, mime),
+            (
+                CONTENT_DISPOSITION,
+                content_disposition_value(&share.label, false),
+            ),
+        ],
+        content,
+    ))
+}
+
+async fn download_shared_session_workspace_file(
+    State((service, db)): State<ChatPublicState>,
+    Path(share_id): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let (share, root_path) =
+        resolve_chat_workspace_share(service.as_ref(), db.as_ref(), &share_id).await?;
+    let (content, mime) = read_workspace_file_content(root_path, share.path).await?;
+    Ok((
+        [
+            (CONTENT_TYPE, mime),
+            (
+                CONTENT_DISPOSITION,
+                content_disposition_value(&share.label, true),
+            ),
+        ],
+        content,
+    ))
+}
+
+async fn preview_channel_workspace_main_file(
+    State((service, db, _, _, workspace_root)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path((channel_id, path)): Path<(String, String)>,
+) -> Result<impl IntoResponse, StatusCode> {
+    preview_channel_workspace_file_inner(service, db, workspace_root, user, channel_id, None, path)
+        .await
+}
+
+async fn preview_channel_workspace_thread_file(
+    State((service, db, _, _, workspace_root)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path((channel_id, thread_root_id, path)): Path<(String, String, String)>,
+) -> Result<impl IntoResponse, StatusCode> {
+    preview_channel_workspace_file_inner(
+        service,
+        db,
+        workspace_root,
+        user,
+        channel_id,
+        Some(thread_root_id),
+        path,
+    )
+    .await
+}
+
+async fn preview_channel_workspace_file_inner(
+    service: Arc<AgentService>,
+    db: Arc<MongoDb>,
+    workspace_root: String,
+    user: UserContext,
+    channel_id: String,
+    thread_root_id: Option<String>,
+    path: String,
+) -> Result<impl IntoResponse, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
+    let (channel, _, _) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let channel = sync_channel_type_and_workspace(
+        &channel_service,
+        &governance_service,
+        &workspace_root,
+        channel,
+    )
+    .await?;
+    if !matches!(channel.channel_type, ChatChannelType::Coding) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let relative_path = sanitize_workspace_relative_path(&path).ok_or(StatusCode::BAD_REQUEST)?;
+    let root_path = resolve_workspace_preview_root(
+        service.as_ref(),
+        &channel,
+        &channel_id,
+        thread_root_id.as_deref(),
+    )
+    .await?;
+    let (content, mime) = read_workspace_file_content(root_path, relative_path).await?;
+    Ok(([(CONTENT_TYPE, mime)], content))
+}
+
+async fn update_channel(
+    State((service, db, _, _, workspace_root)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(channel_id): Path<String>,
     Json(request): Json<UpdateChatChannelRequest>,
 ) -> Result<Json<ChatChannelEnvelope>, StatusCode> {
     let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
     let (channel, role, is_admin) =
         ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
     if !can_manage_channel(role, is_admin) {
@@ -2486,6 +4372,13 @@ async fn update_channel(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    let updated = sync_channel_type_and_workspace(
+        &channel_service,
+        &governance_service,
+        &workspace_root,
+        updated,
+    )
+    .await?;
     if orchestrator_update_requested {
         channel_service
             .update_orchestrator_profile(&updated, &request_for_orchestrator)
@@ -2506,7 +4399,7 @@ async fn update_channel(
         .get_pref_for_user(&updated.channel_id, &user.user_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let detail = channel_service
+    let mut detail = channel_service
         .build_detail(
             updated,
             role,
@@ -2516,6 +4409,7 @@ async fn update_channel(
             pref.as_ref(),
         )
         .await;
+    attach_workspace_governance(&governance_service, &mut detail).await?;
     Ok(Json(ChatChannelEnvelope { channel: detail }))
 }
 
@@ -2576,17 +4470,160 @@ async fn archive_channel(
     }
 }
 
+async fn restore_channel_workspace(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(workspace_id): Path<String>,
+) -> Result<Json<ChatChannelEnvelope>, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
+    let workspace = governance_service
+        .get_workspace(&workspace_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let (_channel, role, is_admin) = ensure_channel_access(
+        service.as_ref(),
+        &channel_service,
+        &user,
+        &workspace.channel_id,
+    )
+    .await?;
+    if !is_channel_manager(role, is_admin) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let updated = channel_service
+        .update_channel_type(&workspace.channel_id, ChatChannelType::Coding)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let updated = restore_registered_workspace_binding(
+        &channel_service,
+        &governance_service,
+        &updated,
+        &workspace,
+    )
+    .await?;
+    let pref = channel_service
+        .get_pref_for_user(&updated.channel_id, &user.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let agent_names = build_agent_name_map_for_team(service.as_ref(), &updated.team_id).await?;
+    let unread_count = channel_service
+        .unread_count(&updated.channel_id, &user.user_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let member_count = channel_service
+        .list_members(&updated.channel_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .len() as i32;
+    let mut detail = channel_service
+        .build_detail(
+            updated,
+            role,
+            &agent_names,
+            unread_count,
+            member_count,
+            pref.as_ref(),
+        )
+        .await;
+    attach_workspace_governance(&governance_service, &mut detail).await?;
+    Ok(Json(ChatChannelEnvelope { channel: detail }))
+}
+
+async fn archive_channel_workspace(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(workspace_id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
+    let workspace = governance_service
+        .get_workspace(&workspace_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let (_channel, role, is_admin) = ensure_channel_access(
+        service.as_ref(),
+        &channel_service,
+        &user,
+        &workspace.channel_id,
+    )
+    .await?;
+    if !is_channel_manager(role, is_admin) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let archived = governance_service
+        .archive_workspace(&workspace_id, &workspace.team_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if archived.is_some() {
+        Ok(StatusCode::OK)
+    } else {
+        Err(StatusCode::CONFLICT)
+    }
+}
+
+async fn delete_channel_workspace(
+    State((service, db, _, _, _)): State<ChatState>,
+    Extension(user): Extension<UserContext>,
+    Path(workspace_id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
+    let workspace = governance_service
+        .get_workspace(&workspace_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let (_channel, role, is_admin) = ensure_channel_access(
+        service.as_ref(),
+        &channel_service,
+        &user,
+        &workspace.channel_id,
+    )
+    .await?;
+    if !is_channel_manager(role, is_admin) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let deleted = governance_service
+        .delete_workspace(&workspace_id, &workspace.team_id)
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                "Failed to delete detached workspace {} for channel {}: {:?}",
+                workspace_id,
+                workspace.channel_id,
+                error
+            );
+            StatusCode::CONFLICT
+        })?;
+    if deleted.is_some() {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(StatusCode::CONFLICT)
+    }
+}
+
 async fn delete_channel(
     State((service, db, _, _, _)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path(channel_id): Path<String>,
     Query(query): Query<DeleteChannelQuery>,
 ) -> Result<StatusCode, StatusCode> {
-    let channel_service = ChatChannelService::new(db);
-    let (_, role, is_admin) =
+    let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
+    let (channel, role, is_admin) =
         ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
     if !(is_admin || role == ChatChannelMemberRole::Owner) {
         return Err(StatusCode::FORBIDDEN);
+    }
+    if channel_has_project_binding(&channel) {
+        governance_service
+            .detach_workspace(&channel, Some("channel_deleted"))
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
     let deleted = channel_service
         .delete_channel(
@@ -2768,17 +4805,94 @@ async fn list_channel_messages(
 }
 
 async fn get_channel_thread(
-    State((service, db, _, _, _)): State<ChatState>,
+    State((service, db, _, _, workspace_root)): State<ChatState>,
     Extension(user): Extension<UserContext>,
     Path((channel_id, thread_root_id)): Path<(String, String)>,
 ) -> Result<Json<ChatChannelThreadResponse>, StatusCode> {
-    let channel_service = ChatChannelService::new(db);
-    let _ = ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
-    let thread = channel_service
+    let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
+    let (channel, _, _) =
+        ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let channel = sync_channel_type_and_workspace(
+        &channel_service,
+        &governance_service,
+        &workspace_root,
+        channel,
+    )
+    .await?;
+    let mut thread = channel_service
         .list_thread_messages(&channel_id, &thread_root_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    let runtime_session = service
+        .find_latest_channel_session(&channel_id, &thread_root_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    thread.thread_runtime =
+        build_thread_runtime_response(&channel, runtime_session.as_ref(), &thread_root_id);
+    let task_ledger = if let Some(session) = runtime_session.as_ref() {
+        load_task_ledger_snapshot(
+            &session.session_id,
+            session.last_runtime_session_id.as_deref(),
+        )
+        .await
+    } else {
+        None
+    };
+    let persisted_child_evidence = if let Some(session) = runtime_session.as_ref() {
+        load_persisted_child_evidence_snapshot(
+            &session.session_id,
+            session.last_runtime_session_id.as_deref(),
+        )
+        .await
+    } else {
+        None
+    };
+    let persisted_child_transcript_resume = if let Some(session) = runtime_session.as_ref() {
+        load_persisted_child_transcript_resume_snapshot(
+            &session.session_id,
+            session.last_runtime_session_id.as_deref(),
+        )
+        .await
+    } else {
+        None
+    };
+    let runtime_diagnostics = if let Some(session) = runtime_session.as_ref() {
+        load_runtime_diagnostics_snapshot(
+            session.last_execution_status.as_deref(),
+            session.last_execution_error.as_deref(),
+            session.last_runtime_session_id.as_deref(),
+            persisted_child_evidence.as_deref(),
+            persisted_child_transcript_resume.as_deref(),
+            session.workspace_path.as_deref(),
+        )
+        .await
+    } else {
+        None
+    };
+    thread.runtime_diagnostics = runtime_diagnostics.clone();
+    let cached_delegation_runtime = runtime_session
+        .as_ref()
+        .and_then(|item| item.last_delegation_runtime.as_ref());
+    thread.delegation_runtime = build_session_delegation_runtime_snapshot(
+        Some("Channel Leader"),
+        runtime_session
+            .as_ref()
+            .and_then(|item| item.last_execution_status.as_deref()),
+        preferred_cached_delegation_summary(
+            cached_delegation_runtime,
+            latest_thread_agent_summary(&thread),
+        ),
+        runtime_diagnostics.as_ref(),
+        task_ledger.as_ref(),
+        persisted_child_evidence.as_deref(),
+    )
+    .or_else(|| {
+        runtime_session
+            .as_ref()
+            .and_then(|item| item.last_delegation_runtime.clone())
+    });
     Ok(Json(thread))
 }
 
@@ -2793,8 +4907,16 @@ async fn send_channel_message_internal(
     forced_thread_root_id: Option<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let channel_service = ChatChannelService::new(db.clone());
+    let governance_service = ChannelWorkspaceGovernanceService::new(db.clone());
     let (channel, _, _) =
         ensure_channel_access(service.as_ref(), &channel_service, &user, &channel_id).await?;
+    let channel = sync_channel_type_and_workspace(
+        &channel_service,
+        &governance_service,
+        &workspace_root,
+        channel,
+    )
+    .await?;
     let content = request.content.trim().to_string();
     if content.is_empty() || content.len() > 100_000 {
         return Err(StatusCode::BAD_REQUEST);
@@ -2834,9 +4956,7 @@ async fn send_channel_message_internal(
         .as_ref()
         .map(|root| root.surface)
         .unwrap_or(requested_surface);
-    let interaction_mode = request
-        .interaction_mode
-        .unwrap_or(ChatChannelInteractionMode::Conversation);
+    let interaction_mode = ChatChannelInteractionMode::Conversation;
     let effective_thread_state = thread_root
         .as_ref()
         .map(|root| root.thread_state)
@@ -2964,6 +5084,7 @@ async fn send_channel_message_internal(
         &channel,
         &agent.name,
         thread_root.as_ref().map(|item| item.content_text.as_str()),
+        &content,
         attached_document_ids.len(),
         effective_surface,
         effective_thread_state,
@@ -3022,6 +5143,7 @@ async fn send_channel_message_internal(
     let internal_session = find_or_create_channel_runtime_session(
         service.as_ref(),
         &channel,
+        &workspace_root,
         &user.user_id,
         &agent_id,
         &effective_root_message_id,
@@ -3044,21 +5166,6 @@ async fn send_channel_message_internal(
             .await
             .ok_or(StatusCode::CONFLICT)?
     };
-    if matches!(interaction_mode, ChatChannelInteractionMode::Execution) {
-        let claimed = channel_service
-            .try_start_processing(&channel.channel_id, &run_id)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        if !claimed {
-            channel_manager
-                .unregister(&channel.channel_id, Some(&effective_root_message_id))
-                .await;
-            let _ = service
-                .delete_session_if_idle(&internal_session.session_id)
-                .await;
-            return Err(StatusCode::CONFLICT);
-        }
-    }
     channel_service
         .mark_read(
             &channel,
@@ -3270,6 +5377,10 @@ async fn sync_channel_collaboration_result(
         _ => "推进中",
     };
     let latest_actor = root.author_name.clone();
+    let thread = channel_service
+        .list_thread_messages(&channel_id, &message_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let text = format!(
         "协作结果同步\n{}\n当前状态：{}\n最近推进者：{}",
         summary, status_label, latest_actor
@@ -3300,14 +5411,24 @@ async fn sync_channel_collaboration_result(
             root.agent_id.clone(),
             text.clone(),
             serde_json::json!([{ "type": "text", "text": text }]),
-            serde_json::json!({
-                "discussion_card_kind": "result",
-                "card_purpose": "collaboration_result_sync",
-                "linked_collaboration_id": message_id,
-                "summary_text": summary,
-                "status_label": status_label,
-                "latest_actor": latest_actor,
-            }),
+            attach_card_domain_metadata(
+                &channel,
+                serde_json::json!({
+                    "discussion_card_kind": "result",
+                    "card_purpose": "collaboration_result_sync",
+                    "linked_collaboration_id": message_id,
+                    "summary_text": summary,
+                    "status_label": status_label,
+                    "latest_actor": latest_actor,
+                }),
+                build_thread_coding_payload(
+                    service.as_ref(),
+                    &channel,
+                    &message_id,
+                    thread.as_ref(),
+                )
+                .await,
+            ),
         )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -3433,6 +5554,13 @@ async fn stream_channel(
                 sse = sse.id(event.id.to_string());
             }
             yield Ok(sse);
+            if let Some(delegation) = build_delegation_sse_event(
+                &event.event,
+                event.thread_root_id.as_deref(),
+                event.root_message_id.as_deref(),
+            ) {
+                yield Ok(delegation);
+            }
             if is_done {
                 return;
             }
@@ -3449,6 +5577,13 @@ async fn stream_channel(
                         sse = sse.id(event.id.to_string());
                     }
                     yield Ok(sse);
+                    if let Some(delegation) = build_delegation_sse_event(
+                        &event.event,
+                        event.thread_root_id.as_deref(),
+                        event.root_message_id.as_deref(),
+                    ) {
+                        yield Ok(delegation);
+                    }
                     if is_done {
                         break;
                     }
@@ -3620,7 +5755,7 @@ async fn create_session(
     let effective_document_access_mode = req
         .document_access_mode
         .clone()
-        .or_else(|| Some("attached_only".to_string()));
+        .or_else(|| Some("full".to_string()));
 
     let session = service
         .create_chat_session(
@@ -4140,7 +6275,7 @@ async fn create_portal_manager_session(
             req.require_final_report.unwrap_or(false),
             false,
             Some("full".to_string()),
-            None,
+            source_delegation_override_for_session_source("portal_manager"),
             Some("portal_manager".to_string()),
             Some(true),
         )
@@ -4219,7 +6354,6 @@ async fn get_session(
         "total_tokens": session.total_tokens,
         "input_tokens": session.input_tokens,
         "output_tokens": session.output_tokens,
-        "compaction_count": session.compaction_count,
         "disabled_extensions": session.disabled_extensions,
         "enabled_extensions": session.enabled_extensions,
         "created_at": session.created_at.to_chrono().to_rfc3339(),
@@ -4257,6 +6391,18 @@ async fn get_session(
         json["last_execution_finished_at"] =
             serde_json::Value::String(finished_at.to_chrono().to_rfc3339());
     }
+    let default_context_runtime_state;
+    let context_runtime_state = if let Some(state) = session.context_runtime_state.as_ref() {
+        state
+    } else {
+        default_context_runtime_state = ContextRuntimeState::default();
+        &default_context_runtime_state
+    };
+    json["context_runtime_state"] =
+        serde_json::to_value(context_runtime_state).unwrap_or(serde_json::Value::Null);
+    json["context_runtime_summary"] =
+        serde_json::to_value(summarize_context_runtime_state(context_runtime_state))
+            .unwrap_or(serde_json::Value::Null);
     let agent = service
         .get_agent(&session.agent_id)
         .await
@@ -4273,6 +6419,11 @@ async fn get_session(
         })
         .unwrap_or(false);
     json["tasks_enabled"] = serde_json::Value::Bool(tasks_enabled);
+    let task_ledger = load_task_ledger_snapshot(
+        &session.session_id,
+        session.last_runtime_session_id.as_deref(),
+    )
+    .await;
     if let Some(snapshot) = runtime_snapshot.as_ref() {
         if let Some(agent) = agent.as_ref() {
             let prompt_introspection = build_prompt_introspection_snapshot(
@@ -4324,6 +6475,55 @@ async fn get_session(
                 "completed_count": 0,
             });
         }
+    }
+
+    let persisted_child_evidence = load_persisted_child_evidence_snapshot(
+        &session.session_id,
+        session.last_runtime_session_id.as_deref(),
+    )
+    .await;
+    let persisted_child_transcript_resume = load_persisted_child_transcript_resume_snapshot(
+        &session.session_id,
+        session.last_runtime_session_id.as_deref(),
+    )
+    .await;
+    if let Some(persisted_child_evidence) = persisted_child_evidence.as_ref() {
+        json["persisted_child_evidence"] = serde_json::to_value(persisted_child_evidence)
+            .unwrap_or(serde_json::Value::Array(vec![]));
+    }
+    if let Some(persisted_child_transcript_resume) = persisted_child_transcript_resume.as_ref() {
+        json["persisted_child_transcript_resume"] =
+            serde_json::to_value(persisted_child_transcript_resume)
+                .unwrap_or(serde_json::Value::Array(vec![]));
+    }
+    if let Some(runtime_diagnostics) = load_runtime_diagnostics_snapshot(
+        session.last_execution_status.as_deref(),
+        session.last_execution_error.as_deref(),
+        session.last_runtime_session_id.as_deref(),
+        persisted_child_evidence.as_deref(),
+        persisted_child_transcript_resume.as_deref(),
+        session.workspace_path.as_deref(),
+    )
+    .await
+    {
+        json["runtime_diagnostics"] = runtime_diagnostics;
+    }
+    if let Some(delegation_runtime) = build_session_delegation_runtime_snapshot(
+        agent.as_ref().map(|item| item.name.as_str()),
+        session.last_execution_status.as_deref(),
+        preferred_cached_delegation_summary(
+            session.last_delegation_runtime.as_ref(),
+            session.last_message_preview.as_deref(),
+        ),
+        json.get("runtime_diagnostics"),
+        task_ledger.as_ref(),
+        persisted_child_evidence.as_deref(),
+    ) {
+        json["delegation_runtime"] =
+            serde_json::to_value(&delegation_runtime).unwrap_or(serde_json::Value::Null);
+    } else if let Some(delegation_runtime) = session.last_delegation_runtime.as_ref() {
+        json["delegation_runtime"] =
+            serde_json::to_value(delegation_runtime).unwrap_or(serde_json::Value::Null);
     }
 
     Ok(Json(json))
@@ -4463,10 +6663,30 @@ async fn send_message(
     let executor = ChatExecutor::new(db.clone(), chat_manager.clone(), workspace_root.clone());
     let sid = session_id.clone();
     let agent_id = session.agent_id.clone();
+    let mut turn_instruction_parts = Vec::new();
+    if let Some(overlay) = build_chat_file_delivery_overlay(&content) {
+        turn_instruction_parts.push(overlay);
+    }
+    if let Some(overlay) = build_chat_tool_gate_overlay(&content) {
+        turn_instruction_parts.push(overlay);
+    }
+    if let Some(intent) = classify_chat_delegation_intent(&content) {
+        turn_instruction_parts.push(build_chat_delegation_overlay(ChatDelegationProfileInput {
+            current_request: &content,
+            intent,
+        }));
+    }
+    let turn_system_instruction = merge_chat_extra_instructions(turn_instruction_parts, None);
 
     tokio::spawn(async move {
         if let Err(e) = executor
-            .execute_chat(&sid, &agent_id, &content, cancel_token)
+            .execute_chat_with_turn_instruction(
+                &sid,
+                &agent_id,
+                &content,
+                turn_system_instruction.as_deref(),
+                cancel_token,
+            )
             .await
         {
             tracing::error!("Chat execution failed for session {}: {}", sid, e);
@@ -4527,6 +6747,13 @@ async fn stream_chat(
                 sse = sse.id(event.id.to_string());
             }
             yield Ok(sse);
+            if let Some(delegation) = build_delegation_sse_event(
+                &event.event,
+                None,
+                None,
+            ) {
+                yield Ok(delegation);
+            }
             if is_done {
                 return;
             }
@@ -4546,6 +6773,13 @@ async fn stream_chat(
                         sse = sse.id(event.id.to_string());
                     }
                     yield Ok(sse);
+                    if let Some(delegation) = build_delegation_sse_event(
+                        &event.event,
+                        None,
+                        None,
+                    ) {
+                        yield Ok(delegation);
+                    }
                     if is_done {
                         break;
                     }
@@ -4606,9 +6840,25 @@ fn fix_bson_dates(val: &mut serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
+        build_child_evidence_next_steps, build_workspace_artifact_resolution_snapshot,
+        classify_chat_delegation_intent, classify_coding_thread_intent,
+        coding_thread_mentions_explicit_planning, load_persisted_child_evidence_snapshot,
+        load_persisted_child_transcript_resume_snapshot, load_runtime_diagnostics_snapshot,
         manager_message_mentions_extension_inventory, manager_message_mentions_registry,
         manager_message_mentions_skill_inventory, message_mentions_mcp_install,
+        message_mentions_skill_import,
     };
+    use crate::agent::prompt_profiles::{ChannelCodingIntent, ChatDelegationIntent};
+    use crate::agent::session_mongo::AgentSessionDoc;
+    use crate::agent::workspace_service::WorkspaceService;
+    use agime::agents::harness::{
+        save_host_session_state, ExecuteCompletionState, HarnessHostSessionState,
+        HarnessTaskLedgerState, PersistedChildEvidenceItem, PersistedChildTranscriptView, TaskKind,
+        TaskSnapshot, TaskStatus,
+    };
+    use agime::agents::{CoordinatorSignalSummary, ExecuteCompletionOutcome};
+    use agime::session::{SessionManager, SessionType};
+    use std::collections::HashMap;
 
     #[test]
     fn manager_skill_inventory_detection_matches_cn_and_en_queries() {
@@ -4632,6 +6882,7 @@ mod tests {
         ));
         assert!(manager_message_mentions_registry("热门技能有哪些"));
         assert!(!manager_message_mentions_registry("查看当前分身权限"));
+        assert!(!manager_message_mentions_registry("有哪些技能"));
     }
 
     #[test]
@@ -4659,6 +6910,510 @@ mod tests {
         ));
         assert!(message_mentions_mcp_install("删掉这个扩展"));
         assert!(!message_mentions_mcp_install("帮我列出文档"));
+    }
+
+    #[test]
+    fn skill_import_detection_requires_explicit_import_intent() {
+        assert!(message_mentions_skill_import(
+            "请把这个 skills.sh skill 导入团队"
+        ));
+        assert!(message_mentions_skill_import("安装这个附件里的 skill"));
+        assert!(message_mentions_skill_import(
+            "把 file:///tmp/demo-skill 导入为 skill"
+        ));
+        assert!(!message_mentions_skill_import("这个附件里可能有技能"));
+        assert!(!message_mentions_skill_import("有哪些技能"));
+        assert!(!message_mentions_skill_import("帮我看一下这个压缩包"));
+    }
+
+    #[test]
+    fn coding_thread_planning_detection_requires_explicit_plan_language() {
+        assert!(coding_thread_mentions_explicit_planning(
+            "先做方案，再决定怎么改"
+        ));
+        assert!(coding_thread_mentions_explicit_planning(
+            "please make a plan before coding"
+        ));
+        assert!(!coding_thread_mentions_explicit_planning("做一个贪吃蛇"));
+        assert!(!coding_thread_mentions_explicit_planning("修掉这个 bug"));
+    }
+
+    #[test]
+    fn coding_thread_intent_defaults_to_direct_build() {
+        assert_eq!(
+            classify_coding_thread_intent("做一个贪吃蛇"),
+            ChannelCodingIntent::DirectBuild
+        );
+        assert_eq!(
+            classify_coding_thread_intent("直接改这个组件并跑测试"),
+            ChannelCodingIntent::DirectBuild
+        );
+        assert_eq!(
+            classify_coding_thread_intent("先做方案，再开始实现"),
+            ChannelCodingIntent::Planning
+        );
+    }
+
+    #[test]
+    fn digital_avatar_language_does_not_trigger_chat_delegation_overlay() {
+        assert_eq!(
+            classify_chat_delegation_intent("请创建一个新的数字分身，并绑定文档。"),
+            None
+        );
+        assert_eq!(
+            classify_chat_delegation_intent("这个分身 Agent 当前有哪些能力？"),
+            None
+        );
+        assert_eq!(
+            classify_chat_delegation_intent("请用一个子代理检查当前环境。"),
+            Some(ChatDelegationIntent::Subagent)
+        );
+    }
+
+    #[tokio::test]
+    async fn load_persisted_child_evidence_snapshot_prefers_runtime_session() {
+        let parent = SessionManager::create_session(
+            std::env::temp_dir(),
+            "chat-routes-parent".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create parent session");
+        let runtime = SessionManager::create_session(
+            std::env::temp_dir(),
+            "chat-routes-runtime".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create runtime session");
+
+        let ledger = HarnessTaskLedgerState {
+            tasks: vec![TaskSnapshot {
+                task_id: "task-1".to_string(),
+                parent_session_id: parent.id.clone(),
+                depth: 1,
+                kind: TaskKind::Subagent,
+                status: TaskStatus::Running,
+                description: Some("child task".to_string()),
+                write_scope: Vec::new(),
+                target_artifacts: Vec::new(),
+                result_contract: Vec::new(),
+                summary: Some("child summary".to_string()),
+                produced_delta: false,
+                accepted_targets: Vec::new(),
+                metadata: HashMap::from([
+                    ("child_session_id".to_string(), "child-1".to_string()),
+                    (
+                        "child_session_preview".to_string(),
+                        "preview from runtime ledger".to_string(),
+                    ),
+                    (
+                        "runtime_state".to_string(),
+                        "permission_requested".to_string(),
+                    ),
+                ]),
+                started_at: 1,
+                updated_at: 2,
+                finished_at: None,
+            }],
+        };
+        SessionManager::set_extension_state(&runtime.id, &ledger)
+            .await
+            .expect("persist task ledger");
+
+        let evidence =
+            load_persisted_child_evidence_snapshot(&parent.id, Some(runtime.id.as_str()))
+                .await
+                .expect("load child evidence");
+
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].child_session_id.as_deref(), Some("child-1"));
+        assert_eq!(
+            evidence[0].session_preview.as_deref(),
+            Some("preview from runtime ledger")
+        );
+
+        SessionManager::delete_session(&parent.id)
+            .await
+            .expect("delete parent session");
+        SessionManager::delete_session(&runtime.id)
+            .await
+            .expect("delete runtime session");
+    }
+
+    #[tokio::test]
+    async fn load_persisted_child_transcript_resume_snapshot_prefers_runtime_session() {
+        let parent = SessionManager::create_session(
+            std::env::temp_dir(),
+            "chat-routes-parent-resume".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create parent session");
+        let runtime = SessionManager::create_session(
+            std::env::temp_dir(),
+            "chat-routes-runtime-resume".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create runtime session");
+        let child = SessionManager::create_session(
+            std::env::temp_dir(),
+            "chat-routes-child-resume".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create child session");
+
+        SessionManager::add_message(
+            &child.id,
+            &agime::conversation::message::Message::user().with_text("inspect docs/a.md"),
+        )
+        .await
+        .expect("append user message");
+        SessionManager::add_message(
+            &child.id,
+            &agime::conversation::message::Message::assistant().with_text("found the issue"),
+        )
+        .await
+        .expect("append assistant message");
+
+        let ledger = HarnessTaskLedgerState {
+            tasks: vec![TaskSnapshot {
+                task_id: "task-1".to_string(),
+                parent_session_id: parent.id.clone(),
+                depth: 1,
+                kind: TaskKind::Subagent,
+                status: TaskStatus::Running,
+                description: Some("child task".to_string()),
+                write_scope: Vec::new(),
+                target_artifacts: Vec::new(),
+                result_contract: Vec::new(),
+                summary: Some("child summary".to_string()),
+                produced_delta: false,
+                accepted_targets: Vec::new(),
+                metadata: HashMap::from([("child_session_id".to_string(), child.id.clone())]),
+                started_at: 1,
+                updated_at: 2,
+                finished_at: None,
+            }],
+        };
+        SessionManager::set_extension_state(&runtime.id, &ledger)
+            .await
+            .expect("persist task ledger");
+
+        let views =
+            load_persisted_child_transcript_resume_snapshot(&parent.id, Some(runtime.id.as_str()))
+                .await
+                .expect("load child transcript resume");
+
+        assert_eq!(views.len(), 1);
+        assert_eq!(
+            views[0],
+            PersistedChildTranscriptView {
+                task_id: "task-1".to_string(),
+                status: "running".to_string(),
+                child_session_id: Some(child.id.clone()),
+                session_preview: Some("found the issue".to_string()),
+                transcript_lines: vec![
+                    "user: inspect docs/a.md".to_string(),
+                    "assistant: found the issue".to_string(),
+                ],
+                transcript_source: "active:live_child_session".to_string(),
+                message_count: 2,
+                runtime_state: None,
+                runtime_detail: None,
+                summary: Some("child summary".to_string()),
+            }
+        );
+
+        SessionManager::delete_session(&parent.id)
+            .await
+            .expect("delete parent session");
+        SessionManager::delete_session(&runtime.id)
+            .await
+            .expect("delete runtime session");
+        SessionManager::delete_session(&child.id)
+            .await
+            .expect("delete child session");
+    }
+
+    #[test]
+    fn build_child_evidence_next_steps_prefers_active_runtime_context() {
+        let steps = build_child_evidence_next_steps(&[
+            PersistedChildEvidenceItem {
+                task_id: "task-1".to_string(),
+                status: "running".to_string(),
+                logical_worker_id: None,
+                attempt_id: None,
+                recovered_terminal_summary: false,
+                child_session_id: Some("child-1".to_string()),
+                session_preview: Some("preview one".to_string()),
+                transcript_excerpt: Vec::new(),
+                runtime_state: Some("permission_requested".to_string()),
+                runtime_detail: Some("waiting for approval".to_string()),
+                summary: None,
+            },
+            PersistedChildEvidenceItem {
+                task_id: "task-2".to_string(),
+                status: "completed".to_string(),
+                logical_worker_id: None,
+                attempt_id: None,
+                recovered_terminal_summary: false,
+                child_session_id: Some("child-2".to_string()),
+                session_preview: Some("preview two".to_string()),
+                transcript_excerpt: Vec::new(),
+                runtime_state: None,
+                runtime_detail: None,
+                summary: None,
+            },
+        ]);
+        assert!(steps
+            .iter()
+            .any(|step| step.contains("Inspect child session(s): child-1, child-2")));
+        assert!(steps.iter().any(|step| {
+            step.contains("Child evidence [child-1] task task-1: permission_requested")
+                && step.contains("waiting for approval")
+        }));
+    }
+
+    #[test]
+    fn build_child_evidence_next_steps_uses_transcript_excerpt_when_preview_missing() {
+        let steps = build_child_evidence_next_steps(&[PersistedChildEvidenceItem {
+            task_id: "task-1".to_string(),
+            status: "running".to_string(),
+            logical_worker_id: None,
+            attempt_id: None,
+            recovered_terminal_summary: false,
+            child_session_id: Some("child-1".to_string()),
+            session_preview: None,
+            transcript_excerpt: vec![
+                "user: inspect docs/a.md".to_string(),
+                "assistant: checking the file".to_string(),
+            ],
+            runtime_state: Some("running".to_string()),
+            runtime_detail: None,
+            summary: None,
+        }]);
+        assert!(steps
+            .iter()
+            .any(|step| step.contains("assistant: checking the file")));
+    }
+
+    #[test]
+    fn build_child_evidence_next_steps_falls_back_to_recent_terminal_evidence() {
+        let steps = build_child_evidence_next_steps(&[PersistedChildEvidenceItem {
+            task_id: "task-1".to_string(),
+            status: "completed".to_string(),
+            logical_worker_id: None,
+            attempt_id: None,
+            recovered_terminal_summary: false,
+            child_session_id: Some("child-1".to_string()),
+            session_preview: None,
+            transcript_excerpt: vec!["assistant: child completed terminal excerpt".to_string()],
+            runtime_state: None,
+            runtime_detail: None,
+            summary: Some("done".to_string()),
+        }]);
+        assert!(steps
+            .iter()
+            .any(|step| step.contains("Recent child evidence [child-1] task task-1 (completed)")));
+        assert!(steps.iter().any(|step| step.contains("terminal excerpt")));
+    }
+
+    #[tokio::test]
+    async fn load_runtime_diagnostics_snapshot_uses_runtime_outcome_and_child_evidence() {
+        let runtime = SessionManager::create_session(
+            std::env::temp_dir(),
+            "chat-routes-runtime-diagnostics".to_string(),
+            SessionType::Hidden,
+        )
+        .await
+        .expect("create runtime session");
+
+        save_host_session_state(
+            &runtime.id,
+            &HarnessHostSessionState {
+                last_completion_outcome: Some(ExecuteCompletionOutcome {
+                    state: ExecuteCompletionState::Blocked,
+                    status: "blocked".to_string(),
+                    summary: Some("child worker is blocked".to_string()),
+                    blocking_reason: Some("waiting for child permission".to_string()),
+                    completion_ready: false,
+                    required_tools_satisfied: true,
+                    has_blocking_signals: true,
+                    active_child_tasks: true,
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("save host state");
+
+        let diagnostics = load_runtime_diagnostics_snapshot(
+            Some("failed"),
+            None,
+            Some(runtime.id.as_str()),
+            Some(&[PersistedChildEvidenceItem {
+                task_id: "task-1".to_string(),
+                status: "running".to_string(),
+                logical_worker_id: None,
+                attempt_id: None,
+                recovered_terminal_summary: false,
+                child_session_id: Some("child-1".to_string()),
+                session_preview: Some("preview".to_string()),
+                transcript_excerpt: Vec::new(),
+                runtime_state: Some("permission_requested".to_string()),
+                runtime_detail: Some("waiting for approval".to_string()),
+                summary: None,
+            }]),
+            Some(&[PersistedChildTranscriptView {
+                task_id: "task-1".to_string(),
+                status: "running".to_string(),
+                child_session_id: Some("child-1".to_string()),
+                session_preview: Some("preview".to_string()),
+                transcript_lines: vec!["assistant: waiting for approval".to_string()],
+                transcript_source: "active:live_child_session".to_string(),
+                message_count: 1,
+                runtime_state: Some("permission_requested".to_string()),
+                runtime_detail: Some("waiting for approval".to_string()),
+                summary: None,
+            }]),
+            None,
+        )
+        .await
+        .expect("runtime diagnostics");
+
+        assert_eq!(diagnostics["status"], "failed");
+        assert_eq!(diagnostics["summary"], "Direct chat run failed.");
+        assert!(diagnostics["blocking_reason"].is_null());
+        assert!(diagnostics["next_steps"]
+            .as_array()
+            .expect("next steps")
+            .iter()
+            .any(|step| step.as_str().is_some_and(|value| value.contains("child-1"))));
+        assert_eq!(
+            diagnostics["persisted_child_transcript_resume"][0]["transcript_source"],
+            "active:live_child_session"
+        );
+
+        SessionManager::delete_session(&runtime.id)
+            .await
+            .expect("delete runtime session");
+    }
+
+    #[tokio::test]
+    async fn load_runtime_diagnostics_snapshot_falls_back_to_execution_error() {
+        let diagnostics = load_runtime_diagnostics_snapshot(
+            Some("failed"),
+            Some("transport timeout"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("runtime diagnostics");
+
+        assert_eq!(diagnostics["status"], "failed");
+        assert_eq!(diagnostics["summary"], "transport timeout");
+        assert_eq!(diagnostics["blocking_reason"], "transport timeout");
+    }
+
+    #[tokio::test]
+    async fn build_workspace_artifact_resolution_snapshot_distinguishes_target_kinds() {
+        let workspace_root = std::env::temp_dir().join(format!(
+            "chat-routes-artifact-resolution-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let workspace_service = WorkspaceService::new(workspace_root.to_string_lossy().to_string());
+        let now = bson::DateTime::now();
+        let session = AgentSessionDoc {
+            id: None,
+            session_id: "detail-session".to_string(),
+            team_id: "team-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            user_id: "user-1".to_string(),
+            name: None,
+            status: "active".to_string(),
+            messages_json: "[]".to_string(),
+            message_count: 0,
+            total_tokens: None,
+            input_tokens: None,
+            output_tokens: None,
+            context_runtime_state: None,
+            disabled_extensions: Vec::new(),
+            enabled_extensions: Vec::new(),
+            created_at: now,
+            updated_at: now,
+            title: None,
+            pinned: false,
+            last_message_preview: None,
+            last_message_at: None,
+            is_processing: false,
+            last_execution_status: None,
+            last_execution_error: None,
+            last_execution_finished_at: None,
+            last_runtime_session_id: None,
+            last_delegation_runtime: None,
+            attached_document_ids: Vec::new(),
+            workspace_path: Some(workspace_root.to_string_lossy().to_string()),
+            workspace_id: None,
+            workspace_kind: None,
+            workspace_manifest_path: None,
+            extra_instructions: None,
+            allowed_extensions: None,
+            allowed_skill_ids: None,
+            retry_config: None,
+            max_turns: None,
+            tool_timeout_seconds: None,
+            max_portal_retry_rounds: None,
+            require_final_report: false,
+            portal_restricted: false,
+            document_access_mode: None,
+            document_scope_mode: None,
+            document_write_mode: None,
+            delegation_policy_override: None,
+            portal_id: None,
+            portal_slug: None,
+            visitor_id: None,
+            session_source: "chat".to_string(),
+            source_channel_id: None,
+            source_channel_name: None,
+            source_thread_root_id: None,
+            thread_branch: None,
+            thread_repo_ref: None,
+            hidden_from_chat_list: false,
+            pending_message_workspace_files: Vec::new(),
+        };
+        let workspace = workspace_service
+            .ensure_chat_workspace(&session)
+            .expect("workspace");
+        std::fs::write(
+            std::path::Path::new(&workspace.root_path).join("artifacts/final.md"),
+            "# final",
+        )
+        .expect("artifact");
+
+        let snapshot = build_workspace_artifact_resolution_snapshot(
+            Some(workspace.root_path.as_str()),
+            Some(&CoordinatorSignalSummary {
+                accepted_targets: vec![
+                    "artifacts/final.md".to_string(),
+                    "docs/out.md".to_string(),
+                    "document:doc-1".to_string(),
+                ],
+                produced_targets: vec!["artifacts/final.md".to_string()],
+                ..Default::default()
+            }),
+        )
+        .expect("artifact snapshot");
+
+        assert_eq!(snapshot["materialized_targets"][0], "artifacts/final.md");
+        assert_eq!(snapshot["missing_targets"][0], "docs/out.md");
+        assert_eq!(snapshot["logical_targets"][0], "document:doc-1");
+
+        let _ = std::fs::remove_dir_all(workspace_root);
     }
 }
 
@@ -4743,7 +7498,17 @@ async fn cancel_chat(
 
     let cancelled = chat_manager.cancel(&session_id).await;
     if cancelled {
-        let _ = service.set_session_processing(&session_id, false).await;
+        if let Err(error) = service
+            .update_session_execution_result(&session_id, "cancelled", None)
+            .await
+        {
+            tracing::error!(
+                session_id = %session_id,
+                "Failed to persist cancelled execution result: {}",
+                error
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
         Ok(StatusCode::OK)
     } else {
         Err(StatusCode::NOT_FOUND)

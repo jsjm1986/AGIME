@@ -11,6 +11,26 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::ops::Deref;
 
+fn clamp_openai_compatible_completion_limit(
+    payload: &mut Value,
+    max_completion_tokens: Option<usize>,
+) {
+    let Some(limit) = max_completion_tokens.and_then(|v| u64::try_from(v).ok()) else {
+        return;
+    };
+    let Some(obj) = payload.as_object_mut() else {
+        return;
+    };
+
+    for key in ["max_output_tokens", "max_completion_tokens", "max_tokens"] {
+        if let Some(current) = obj.get(key).and_then(|v| v.as_u64()) {
+            if current > limit {
+                obj.insert(key.to_string(), json!(limit));
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ResponsesApiResponse {
     pub id: String,
@@ -392,11 +412,7 @@ pub fn create_responses_request_with_tool_choice(
     tools: &[Tool],
     tool_choice_mode: Option<ToolChoiceMode>,
 ) -> anyhow::Result<Value, Error> {
-    let caps = crate::capabilities::resolve_with_thinking_override(
-        &model_config.model_name,
-        model_config.thinking_enabled,
-        model_config.thinking_budget,
-    );
+    let caps = crate::capabilities::resolve_with_model_config(model_config);
 
     let mut input_items = Vec::new();
 
@@ -462,6 +478,7 @@ pub fn create_responses_request_with_tool_choice(
     }
 
     ThinkingHandler::apply_request_params(&mut payload, &caps)?;
+    clamp_openai_compatible_completion_limit(&mut payload, caps.max_completion_tokens);
 
     Ok(payload)
 }
@@ -798,6 +815,11 @@ mod tests {
             max_tokens: Some(1024),
             thinking_enabled: None,
             thinking_budget: None,
+            reasoning_effort: None,
+            output_reserve_tokens: None,
+            auto_compact_threshold: None,
+            prompt_caching_mode: crate::model::PromptCachingMode::Auto,
+            cache_edit_mode: crate::model::CacheEditMode::Auto,
             toolshim: false,
             toolshim_model: None,
             fast_model: None,
@@ -823,6 +845,31 @@ mod tests {
         )?;
 
         assert_eq!(payload["tool_choice"], "required");
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_responses_request_clamps_max_output_tokens_to_capability_limit(
+    ) -> anyhow::Result<()> {
+        let model_config = ModelConfig {
+            model_name: "gpt-5.2-codex".to_string(),
+            context_limit: Some(272000),
+            temperature: None,
+            max_tokens: Some(999999),
+            thinking_enabled: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+            output_reserve_tokens: None,
+            auto_compact_threshold: None,
+            prompt_caching_mode: crate::model::PromptCachingMode::Auto,
+            cache_edit_mode: crate::model::CacheEditMode::Auto,
+            toolshim: false,
+            toolshim_model: None,
+            fast_model: None,
+        };
+
+        let payload = create_responses_request(&model_config, "system", &[], &[])?;
+        assert_eq!(payload["max_output_tokens"], json!(32768));
         Ok(())
     }
 

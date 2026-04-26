@@ -1,7 +1,9 @@
 use agime_team::models::mongo::DocumentAnalysisContext;
 use anyhow::Result;
 use chrono::Utc;
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -25,6 +27,24 @@ struct WorkspaceCreateSpec {
     source_thread_root_id: Option<String>,
     source_document_id: Option<String>,
     publication_targets: Vec<WorkspacePublicationTarget>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceArtifactResolution {
+    pub materialized_paths: Vec<String>,
+    pub missing_paths: Vec<String>,
+    pub logical_targets: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceExecutionContext {
+    pub workspace_root: String,
+    pub run_id: String,
+    pub run_dir: String,
+    pub allowed_read_roots: Vec<String>,
+    pub allowed_write_roots: Vec<String>,
+    pub artifact_dirs: Vec<String>,
+    pub workspace_kind: WorkspaceKind,
 }
 
 #[derive(Clone)]
@@ -151,9 +171,67 @@ impl WorkspaceService {
         self.ensure_workspace(spec)
     }
 
+    pub fn ensure_channel_project_workspace(
+        &self,
+        team_id: &str,
+        channel_id: &str,
+        workspace_display_name: &str,
+    ) -> Result<WorkspaceBinding> {
+        let spec = WorkspaceCreateSpec {
+            workspace_kind: WorkspaceKind::ChannelProject,
+            team_id: team_id.to_string(),
+            conversation_id: channel_id.to_string(),
+            root_path: None,
+            segments: vec![
+                (team_id.to_string(), "team_id"),
+                ("channels".to_string(), "category"),
+                (channel_id.to_string(), "channel_id"),
+                ("project".to_string(), "workspace_kind"),
+            ],
+            source_session_id: None,
+            source_channel_id: Some(channel_id.to_string()),
+            source_thread_root_id: None,
+            source_document_id: None,
+            publication_targets: vec![WorkspacePublicationTarget {
+                target_type: "channel_project".to_string(),
+                target_id: channel_id.to_string(),
+                label: Some(workspace_display_name.to_string()),
+                folder_path: None,
+            }],
+        };
+        self.ensure_workspace(spec)
+    }
+
     pub fn ensure_run(&self, workspace: &WorkspaceRef, run_id: &str) -> Result<WorkspaceRunRef> {
         self.store
             .ensure_run_dir(Path::new(&workspace.root_path), run_id)
+    }
+
+    pub fn execution_context(
+        &self,
+        workspace: &WorkspaceRef,
+        run_id: &str,
+    ) -> Result<WorkspaceExecutionContext> {
+        let run = self.ensure_run(workspace, run_id)?;
+        let root = PathBuf::from(&workspace.root_path);
+        let absolute = |rel: &str| root.join(rel).to_string_lossy().to_string();
+        Ok(WorkspaceExecutionContext {
+            workspace_root: workspace.root_path.clone(),
+            run_id: run.run_id,
+            run_dir: run.run_path,
+            allowed_read_roots: vec![workspace.root_path.clone()],
+            allowed_write_roots: vec![
+                absolute(WorkspaceArtifactArea::Artifacts.as_rel_dir()),
+                absolute(WorkspaceArtifactArea::Notes.as_rel_dir()),
+                absolute(&format!("runs/{}", run_id)),
+            ],
+            artifact_dirs: vec![
+                absolute(WorkspaceArtifactArea::Artifacts.as_rel_dir()),
+                absolute(WorkspaceArtifactArea::Notes.as_rel_dir()),
+                absolute(&format!("runs/{}", run_id)),
+            ],
+            workspace_kind: workspace.workspace_kind,
+        })
     }
 
     pub fn load_workspace(&self, root_path: &str) -> Result<Option<WorkspaceRef>> {
@@ -206,8 +284,7 @@ impl WorkspaceService {
         path: &str,
         content_type: Option<String>,
     ) -> Result<WorkspaceManifest> {
-        let normalized = path.trim().replace('\\', "/");
-        if normalized.is_empty() {
+        let Some(record_path) = self.normalize_workspace_output_record_path(workspace, path) else {
             return self
                 .store
                 .load_manifest(Path::new(&workspace.manifest_path))?
@@ -217,21 +294,8 @@ impl WorkspaceService {
                         workspace.manifest_path
                     )
                 });
-        }
-
-        let manifest_path = PathBuf::from(&workspace.manifest_path);
-        let record_path = if normalized.eq_ignore_ascii_case("attachments")
-            || normalized.eq_ignore_ascii_case("artifacts")
-            || normalized.eq_ignore_ascii_case("notes")
-            || normalized.starts_with("attachments/")
-            || normalized.starts_with("artifacts/")
-            || normalized.starts_with("notes/")
-            || normalized.starts_with("runs/")
-        {
-            normalized
-        } else {
-            format!("artifacts/{}", normalized)
         };
+        let manifest_path = PathBuf::from(&workspace.manifest_path);
         self.store.append_artifact_record(
             &manifest_path,
             super::workspace_types::WorkspaceArtifactRecord {
@@ -241,12 +305,34 @@ impl WorkspaceService {
         )
     }
 
+    pub fn normalize_workspace_output_record_path(
+        &self,
+        workspace: &WorkspaceRef,
+        path: &str,
+    ) -> Option<String> {
+        let trimmed = path.trim();
+        if trimmed.is_empty() || is_logical_artifact_target(trimmed) {
+            return None;
+        }
+        let candidate = PathBuf::from(trimmed);
+        let normalized = if candidate.is_absolute() {
+            let root = PathBuf::from(&workspace.root_path);
+            let relative = candidate.strip_prefix(root).ok()?;
+            relative.to_string_lossy().replace('\\', "/")
+        } else {
+            trimmed.replace('\\', "/")
+        };
+        normalized_workspace_record_path(&normalized)
+    }
+
     pub fn record_completion_artifacts(
         &self,
         workspace: &WorkspaceRef,
         produced_artifacts: &[String],
         accepted_artifacts: &[String],
     ) -> Result<WorkspaceManifest> {
+        let produced = self.resolve_workspace_outputs(workspace, produced_artifacts);
+        let accepted = self.resolve_workspace_outputs(workspace, accepted_artifacts);
         let mut last_manifest = self
             .store
             .load_manifest(Path::new(&workspace.manifest_path))?
@@ -257,11 +343,99 @@ impl WorkspaceService {
                 )
             })?;
 
-        for path in produced_artifacts.iter().chain(accepted_artifacts.iter()) {
+        for path in produced
+            .materialized_paths
+            .iter()
+            .chain(accepted.materialized_paths.iter())
+        {
             last_manifest = self.record_workspace_output(workspace, path, None)?;
         }
 
         Ok(last_manifest)
+    }
+
+    pub fn reconcile_manifest_artifacts(
+        &self,
+        workspace: &WorkspaceRef,
+    ) -> Result<WorkspaceManifest> {
+        let manifest_path = PathBuf::from(&workspace.manifest_path);
+        let mut manifest = self.store.load_manifest(&manifest_path)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Workspace manifest {:?} does not exist",
+                workspace.manifest_path
+            )
+        })?;
+        let mut existing_content_types = manifest
+            .artifact_index
+            .iter()
+            .map(|record| (record.path.clone(), record.content_type.clone()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let reconciled_paths = collect_workspace_materialized_paths(workspace);
+        manifest.artifact_index = reconciled_paths
+            .into_iter()
+            .map(|path| super::workspace_types::WorkspaceArtifactRecord {
+                content_type: existing_content_types.remove(&path).flatten(),
+                path,
+            })
+            .collect();
+        manifest.updated_at = Utc::now();
+        self.store.write_manifest(&manifest_path, &manifest)?;
+        Ok(manifest)
+    }
+
+    pub fn resolve_workspace_outputs(
+        &self,
+        workspace: &WorkspaceRef,
+        paths: &[String],
+    ) -> WorkspaceArtifactResolution {
+        let mut resolution = WorkspaceArtifactResolution::default();
+        let mut materialized_seen = HashSet::new();
+        let mut missing_seen = HashSet::new();
+        let mut logical_seen = HashSet::new();
+
+        for raw in paths {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if is_logical_artifact_target(trimmed) {
+                if logical_seen.insert(trimmed.to_string()) {
+                    resolution.logical_targets.push(trimmed.to_string());
+                }
+                continue;
+            }
+            let candidate = PathBuf::from(trimmed);
+            let normalized = if candidate.is_absolute() {
+                let root = PathBuf::from(&workspace.root_path);
+                let Ok(relative) = candidate.strip_prefix(&root) else {
+                    if logical_seen.insert(trimmed.to_string()) {
+                        resolution.logical_targets.push(trimmed.to_string());
+                    }
+                    continue;
+                };
+                relative.to_string_lossy().replace('\\', "/")
+            } else {
+                trimmed.replace('\\', "/")
+            };
+            let Some(record_path) = normalized_workspace_record_path(&normalized) else {
+                if logical_seen.insert(trimmed.to_string()) {
+                    resolution.logical_targets.push(trimmed.to_string());
+                }
+                continue;
+            };
+            let exists = workspace_artifact_candidate_paths(workspace, &normalized, &record_path)
+                .iter()
+                .any(|candidate| candidate.exists());
+            if exists {
+                if materialized_seen.insert(record_path.clone()) {
+                    resolution.materialized_paths.push(record_path);
+                }
+            } else if missing_seen.insert(trimmed.to_string()) {
+                resolution.missing_paths.push(trimmed.to_string());
+            }
+        }
+
+        resolution
     }
 
     fn record_workspace_file(
@@ -342,6 +516,92 @@ impl WorkspaceService {
     }
 }
 
+fn is_logical_artifact_target(target: &str) -> bool {
+    target.contains(':') && !Path::new(target).is_absolute()
+}
+
+fn normalized_workspace_record_path(normalized: &str) -> Option<String> {
+    let relative = Path::new(normalized);
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    }) {
+        return None;
+    }
+    Some(
+        if normalized.eq_ignore_ascii_case("attachments")
+            || normalized.eq_ignore_ascii_case("artifacts")
+            || normalized.eq_ignore_ascii_case("notes")
+            || normalized.starts_with("attachments/")
+            || normalized.starts_with("artifacts/")
+            || normalized.starts_with("notes/")
+            || normalized.starts_with("runs/")
+        {
+            normalized.to_string()
+        } else {
+            format!("artifacts/{}", normalized)
+        },
+    )
+}
+
+fn workspace_artifact_candidate_paths(
+    workspace: &WorkspaceRef,
+    normalized: &str,
+    record_path: &str,
+) -> Vec<PathBuf> {
+    let root = PathBuf::from(&workspace.root_path);
+    let candidate = PathBuf::from(normalized);
+    if candidate.is_absolute() {
+        return if candidate.starts_with(&root) {
+            vec![candidate]
+        } else {
+            Vec::new()
+        };
+    }
+
+    let mut paths = vec![root.join(&candidate)];
+    if record_path != normalized {
+        paths.push(root.join(record_path));
+    }
+    paths
+}
+
+fn collect_workspace_materialized_paths(workspace: &WorkspaceRef) -> Vec<String> {
+    let root = PathBuf::from(&workspace.root_path);
+    let mut collected = Vec::new();
+    for rel in ["attachments", "artifacts", "notes", "runs"] {
+        let base = root.join(rel);
+        if !base.exists() {
+            continue;
+        }
+        let mut stack = vec![base];
+        while let Some(path) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&path) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                if entry_path.is_dir() {
+                    stack.push(entry_path);
+                    continue;
+                }
+                let Ok(relative) = entry_path.strip_prefix(&root) else {
+                    continue;
+                };
+                let normalized = relative.to_string_lossy().replace('\\', "/");
+                if let Some(record_path) = normalized_workspace_record_path(&normalized) {
+                    collected.push(record_path);
+                }
+            }
+        }
+    }
+    collected.sort();
+    collected.dedup();
+    collected
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,7 +623,7 @@ mod tests {
             total_tokens: None,
             input_tokens: None,
             output_tokens: None,
-            compaction_count: 0,
+            context_runtime_state: None,
             disabled_extensions: Vec::new(),
             enabled_extensions: Vec::new(),
             created_at: now,
@@ -377,6 +637,7 @@ mod tests {
             last_execution_error: None,
             last_execution_finished_at: None,
             last_runtime_session_id: None,
+            last_delegation_runtime: None,
             attached_document_ids: Vec::new(),
             workspace_path: None,
             workspace_id: None,
@@ -402,7 +663,10 @@ mod tests {
             source_channel_id: None,
             source_channel_name: None,
             source_thread_root_id: None,
+            thread_branch: None,
+            thread_repo_ref: None,
             hidden_from_chat_list: false,
+            pending_message_workspace_files: Vec::new(),
         }
     }
 
@@ -510,6 +774,31 @@ mod tests {
     }
 
     #[test]
+    fn creates_channel_project_workspace_with_publication_target() {
+        let root =
+            std::env::temp_dir().join(format!("workspace-channel-project-{}", Uuid::new_v4()));
+        let service = WorkspaceService::new(root.to_string_lossy().to_string());
+
+        let binding = service
+            .ensure_channel_project_workspace("team-1", "channel-1", "Demo Project")
+            .expect("channel project workspace should be created");
+        let manifest: WorkspaceManifest = serde_json::from_slice(
+            &fs::read(Path::new(&binding.root_path).join("workspace.json"))
+                .expect("manifest should exist"),
+        )
+        .expect("manifest should deserialize");
+        assert_eq!(manifest.workspace_kind, WorkspaceKind::ChannelProject);
+        assert_eq!(manifest.conversation_id, "channel-1");
+        assert_eq!(manifest.publication_targets.len(), 1);
+        assert_eq!(
+            manifest.publication_targets[0].target_type,
+            "channel_project"
+        );
+        assert_eq!(manifest.publication_targets[0].target_id, "channel-1");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn ensures_run_dir_under_workspace() {
         let root = std::env::temp_dir().join(format!("workspace-run-{}", Uuid::new_v4()));
         let service = WorkspaceService::new(root.to_string_lossy().to_string());
@@ -522,6 +811,42 @@ mod tests {
             .expect("run dir should be created");
         assert!(Path::new(&run.run_path).exists());
         assert!(run.run_path.replace('\\', "/").ends_with("/runs/run-1"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn builds_execution_context_with_standard_boundaries() {
+        let root = std::env::temp_dir().join(format!("workspace-context-{}", Uuid::new_v4()));
+        let service = WorkspaceService::new(root.to_string_lossy().to_string());
+        let session = sample_session();
+        let workspace = service
+            .ensure_chat_workspace(&session)
+            .expect("workspace should be created");
+
+        let context = service
+            .execution_context(&workspace, "run-ctx")
+            .expect("context should be created");
+
+        assert_eq!(context.workspace_root, workspace.root_path);
+        assert_eq!(context.workspace_kind, WorkspaceKind::Conversation);
+        assert!(Path::new(&context.run_dir).exists());
+        assert!(context.allowed_read_roots.contains(&context.workspace_root));
+        assert!(context
+            .allowed_write_roots
+            .iter()
+            .any(|path| path.replace('\\', "/").ends_with("/artifacts")));
+        assert!(context
+            .allowed_write_roots
+            .iter()
+            .any(|path| path.replace('\\', "/").ends_with("/notes")));
+        assert!(context
+            .allowed_write_roots
+            .iter()
+            .any(|path| path.replace('\\', "/").ends_with("/runs/run-ctx")));
+        assert!(!context
+            .allowed_write_roots
+            .iter()
+            .any(|path| path.replace('\\', "/").ends_with("/attachments")));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -542,6 +867,26 @@ mod tests {
     }
 
     #[test]
+    fn record_workspace_output_skips_absolute_paths_outside_workspace() {
+        let root = std::env::temp_dir().join(format!("workspace-outside-{}", Uuid::new_v4()));
+        let service = WorkspaceService::new(root.to_string_lossy().to_string());
+        let session = sample_session();
+        let workspace = service
+            .ensure_chat_workspace(&session)
+            .expect("workspace should be created");
+        let outside = std::env::temp_dir()
+            .join(format!("outside-{}", Uuid::new_v4()))
+            .join("report.md");
+
+        let manifest = service
+            .record_workspace_output(&workspace, &outside.to_string_lossy(), None)
+            .expect("outside path should not fail");
+
+        assert!(manifest.artifact_index.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn records_completion_artifacts_in_manifest() {
         let root = std::env::temp_dir().join(format!("workspace-complete-{}", Uuid::new_v4()));
         let service = WorkspaceService::new(root.to_string_lossy().to_string());
@@ -549,6 +894,27 @@ mod tests {
         let workspace = service
             .ensure_chat_workspace(&session)
             .expect("workspace should be created");
+        fs::create_dir_all(Path::new(&workspace.root_path).join("reports"))
+            .expect("reports dir should exist");
+        fs::create_dir_all(Path::new(&workspace.root_path).join("artifacts"))
+            .expect("artifacts dir should exist");
+        fs::create_dir_all(Path::new(&workspace.root_path).join("runs/run-1"))
+            .expect("run dir should exist");
+        fs::write(
+            Path::new(&workspace.root_path).join("reports/summary.md"),
+            "# summary",
+        )
+        .expect("summary file should exist");
+        fs::write(
+            Path::new(&workspace.root_path).join("artifacts/final.md"),
+            "# final",
+        )
+        .expect("final file should exist");
+        fs::write(
+            Path::new(&workspace.root_path).join("runs/run-1/tmp.json"),
+            "{}",
+        )
+        .expect("tmp file should exist");
         let manifest = service
             .record_completion_artifacts(
                 &workspace,
@@ -567,6 +933,95 @@ mod tests {
         assert!(paths.contains(&"artifacts/reports/summary.md".to_string()));
         assert!(paths.contains(&"artifacts/final.md".to_string()));
         assert!(paths.contains(&"runs/run-1/tmp.json".to_string()));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_workspace_outputs_distinguishes_materialized_missing_and_logical_targets() {
+        let root = std::env::temp_dir().join(format!("workspace-resolution-{}", Uuid::new_v4()));
+        let service = WorkspaceService::new(root.to_string_lossy().to_string());
+        let session = sample_session();
+        let workspace = service
+            .ensure_chat_workspace(&session)
+            .expect("workspace should be created");
+        fs::create_dir_all(Path::new(&workspace.root_path).join("artifacts"))
+            .expect("artifacts dir should exist");
+        fs::write(
+            Path::new(&workspace.root_path).join("artifacts/final.md"),
+            "# final",
+        )
+        .expect("artifact file should exist");
+
+        let resolution = service.resolve_workspace_outputs(
+            &workspace,
+            &[
+                "artifacts/final.md".to_string(),
+                "docs/out.md".to_string(),
+                "document:doc-1".to_string(),
+            ],
+        );
+        assert_eq!(resolution.materialized_paths, vec!["artifacts/final.md"]);
+        assert_eq!(resolution.missing_paths, vec!["docs/out.md"]);
+        assert_eq!(resolution.logical_targets, vec!["document:doc-1"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn record_completion_artifacts_skips_missing_and_logical_targets() {
+        let root =
+            std::env::temp_dir().join(format!("workspace-complete-filter-{}", Uuid::new_v4()));
+        let service = WorkspaceService::new(root.to_string_lossy().to_string());
+        let session = sample_session();
+        let workspace = service
+            .ensure_chat_workspace(&session)
+            .expect("workspace should be created");
+        fs::create_dir_all(Path::new(&workspace.root_path).join("artifacts"))
+            .expect("artifacts dir should exist");
+        fs::write(
+            Path::new(&workspace.root_path).join("artifacts/final.md"),
+            "# final",
+        )
+        .expect("artifact file should exist");
+
+        let manifest = service
+            .record_completion_artifacts(
+                &workspace,
+                &[
+                    "artifacts/final.md".to_string(),
+                    "docs/out.md".to_string(),
+                    "document:doc-1".to_string(),
+                ],
+                &[],
+            )
+            .expect("completion artifacts should be recorded");
+        let paths = manifest
+            .artifact_index
+            .iter()
+            .map(|item| item.path.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, vec!["artifacts/final.md"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_workspace_outputs_accepts_absolute_paths_inside_workspace() {
+        let root =
+            std::env::temp_dir().join(format!("workspace-resolution-absolute-{}", Uuid::new_v4()));
+        let service = WorkspaceService::new(root.to_string_lossy().to_string());
+        let session = sample_session();
+        let workspace = service
+            .ensure_chat_workspace(&session)
+            .expect("workspace should be created");
+        fs::create_dir_all(Path::new(&workspace.root_path).join("artifacts"))
+            .expect("artifacts dir should exist");
+        let artifact_path = Path::new(&workspace.root_path).join("artifacts/final.md");
+        fs::write(&artifact_path, "# final").expect("artifact file should exist");
+
+        let resolution = service
+            .resolve_workspace_outputs(&workspace, &[artifact_path.to_string_lossy().to_string()]);
+        assert_eq!(resolution.materialized_paths, vec!["artifacts/final.md"]);
+        assert!(resolution.missing_paths.is_empty());
+        assert!(resolution.logical_targets.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 }

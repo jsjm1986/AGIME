@@ -91,6 +91,14 @@ export interface AgentAppDraft {
     ready: boolean;
     state: DraftStatus;
     label: string;
+    issues?: string[];
+    warnings?: string[];
+    verification?: {
+      total_actions: number;
+      valid_actions: number;
+      structured_actions: number;
+      shell_fallback_actions: number;
+    };
   };
   summary?: {
     integration_count: number;
@@ -98,6 +106,8 @@ export interface AgentAppDraft {
     has_candidate_plan: boolean;
     has_probe_report: boolean;
     verified_http_actions?: number;
+    structured_verified_http_actions?: number;
+    shell_fallback_verified_http_actions?: number;
   };
   created_by: string;
   created_at: string;
@@ -124,6 +134,8 @@ export interface AgentApp {
     has_execution_contract: boolean;
     native_execution_ready?: boolean;
     verified_http_actions?: number;
+    structured_verified_http_actions?: number;
+    shell_fallback_verified_http_actions?: number;
   };
   created_by: string;
   created_at: string;
@@ -385,6 +397,12 @@ export const automationApi = {
   listApps(teamId: string, projectId: string) {
     return fetchApi<{ apps: AgentApp[] }>(
       `${API_BASE}/projects/${projectId}/apps?team_id=${teamId}`,
+    );
+  },
+  deleteApp(teamId: string, appId: string) {
+    return fetchApi<{ deleted: boolean }>(
+      `${API_BASE}/apps/${appId}?team_id=${teamId}`,
+      { method: "DELETE" },
     );
   },
   startModuleRun(teamId: string, moduleId: string, mode: RunMode) {

@@ -3,19 +3,21 @@
 //! Maps TeamAgent's (api_format, api_url, api_key, model) to the appropriate
 //! Provider implementation (AnthropicProvider or OpenAiProvider).
 
-use agime::model::ModelConfig;
+use agime::model::{CacheEditMode, ModelConfig, PromptCachingMode};
 use agime::providers::anthropic::AnthropicProvider;
 use agime::providers::api_client::{ApiClient, AuthMethod};
 use agime::providers::base::Provider;
+use agime::providers::litellm::LiteLLMProvider;
 use agime::providers::openai::OpenAiProvider;
-use agime_team::models::{ApiFormat, TeamAgent};
+use agime_team::models::{ApiFormat, RuntimeOptimizationMode, TeamAgent};
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
 
 /// Create a Provider instance from a TeamAgent's configuration.
 ///
 /// - `ApiFormat::Anthropic` → `AnthropicProvider::new()`
-/// - `ApiFormat::OpenAI` → `OpenAiProvider::new()`
+/// - `ApiFormat::OpenAI` → `OpenAiProvider::new()` or `LiteLLMProvider::from_env()` in compat mode
+/// - `ApiFormat::LiteLLM` → `LiteLLMProvider::from_env()`
 /// - `ApiFormat::Local` → returns error (Local uses direct HTTP, not Provider)
 pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>> {
     let api_key = agent
@@ -26,6 +28,7 @@ pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>>
     let model_name = agent.model.as_deref().unwrap_or(match agent.api_format {
         ApiFormat::Anthropic => "claude-sonnet-4-5",
         ApiFormat::OpenAI => "gpt-4o",
+        ApiFormat::LiteLLM => "gpt-4o-mini",
         ApiFormat::Local => "llama2",
     });
 
@@ -34,7 +37,12 @@ pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>>
         .with_temperature(agent.temperature)
         .with_max_tokens(agent.max_tokens)
         .with_context_limit(agent.context_limit)
-        .with_thinking(Some(agent.thinking_enabled), None);
+        .with_thinking(Some(agent.thinking_enabled), agent.thinking_budget)
+        .with_reasoning_effort(agent.reasoning_effort.clone())
+        .with_output_reserve_tokens(agent.output_reserve_tokens)
+        .with_auto_compact_threshold(agent.auto_compact_threshold)
+        .with_prompt_caching_mode(map_prompt_caching_mode(agent.prompt_caching_mode))
+        .with_cache_edit_mode(map_cache_edit_mode(agent.cache_edit_mode));
 
     match agent.api_format {
         ApiFormat::Anthropic => {
@@ -42,12 +50,51 @@ pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>>
             Ok(Arc::new(provider))
         }
         ApiFormat::OpenAI => {
-            let provider = create_openai_provider(agent, api_key, model)?;
+            if should_use_litellm_provider(agent) {
+                let provider = create_litellm_provider(agent, model)?;
+                Ok(Arc::new(provider))
+            } else {
+                let provider = create_openai_provider(agent, api_key, model)?;
+                Ok(Arc::new(provider))
+            }
+        }
+        ApiFormat::LiteLLM => {
+            let provider = create_litellm_provider(agent, model)?;
             Ok(Arc::new(provider))
         }
         ApiFormat::Local => Err(anyhow!(
             "Local API format does not use Provider abstraction"
         )),
+    }
+}
+
+fn should_use_litellm_provider(agent: &TeamAgent) -> bool {
+    if matches!(agent.api_format, ApiFormat::LiteLLM) {
+        return true;
+    }
+    let Some(url) = agent.api_url.as_deref() else {
+        return false;
+    };
+    let normalized = url.trim().to_ascii_lowercase();
+    normalized.contains("litellm")
+        || normalized.contains("api.litellm.ai")
+        || normalized.contains("localhost:4000")
+        || normalized.contains("127.0.0.1:4000")
+}
+
+fn map_prompt_caching_mode(mode: RuntimeOptimizationMode) -> PromptCachingMode {
+    match mode {
+        RuntimeOptimizationMode::Auto => PromptCachingMode::Auto,
+        RuntimeOptimizationMode::Off => PromptCachingMode::Off,
+        RuntimeOptimizationMode::Prefer => PromptCachingMode::Prefer,
+    }
+}
+
+fn map_cache_edit_mode(mode: RuntimeOptimizationMode) -> CacheEditMode {
+    match mode {
+        RuntimeOptimizationMode::Auto => CacheEditMode::Auto,
+        RuntimeOptimizationMode::Off => CacheEditMode::Off,
+        RuntimeOptimizationMode::Prefer => CacheEditMode::Prefer,
     }
 }
 
@@ -93,4 +140,20 @@ fn create_openai_provider(
     let api_client = ApiClient::new(base_url.to_string(), auth)?;
 
     Ok(OpenAiProvider::new(api_client, model))
+}
+
+fn create_litellm_provider(agent: &TeamAgent, model: ModelConfig) -> Result<LiteLLMProvider> {
+    if let Some(base_url) = agent
+        .api_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return LiteLLMProvider::from_custom_endpoint(
+            model,
+            base_url,
+            agent.api_key.as_deref(),
+            None,
+        );
+    }
+    futures::executor::block_on(LiteLLMProvider::from_env(model))
 }

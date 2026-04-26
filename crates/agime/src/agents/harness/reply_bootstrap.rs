@@ -9,19 +9,20 @@ use crate::agents::agent::{
     TurnStartHandling,
 };
 use crate::agents::types::SessionConfig;
-use crate::context_mgmt::{
-    check_if_compaction_needed, compact_messages_with_active_strategy, current_compaction_strategy,
-    DEFAULT_COMPACTION_THRESHOLD,
+use crate::context_runtime::{
+    load_context_runtime_state, maybe_advance_runtime_state, project_prepared_view,
+    refresh_projection_only, save_context_runtime_state,
 };
 use crate::conversation::message::{Message, SystemNotificationType};
 use crate::prompt_template::render_global_file;
+use crate::runtime_profile::resolve_from_model_config;
 use crate::session::SessionManager;
 
 use super::{
-    auto_compaction_inline_message, compaction_checkpoint, compaction_strategy_label,
-    maybe_plan_swarm_upgrade, mode_system_prompt, snapshot_final_output_state,
-    DelegationRuntimeState, HarnessCheckpointStore, HarnessMode, HarnessTranscriptStore,
-    RuntimeNotificationInput, SessionHarnessStore,
+    auto_compaction_inline_message, compaction_checkpoint, maybe_plan_swarm_upgrade,
+    mode_system_prompt, record_transition, snapshot_final_output_state, DelegationRuntimeState,
+    HarnessCheckpointStore, HarnessMode, HarnessTranscriptStore, RuntimeNotificationInput,
+    SessionHarnessStore, SharedTransitionTrace, TransitionKind,
 };
 
 impl Agent {
@@ -115,6 +116,7 @@ impl Agent {
         session_config: &SessionConfig,
         is_manual_compact: bool,
         reply_start: Instant,
+        transition_trace: &SharedTransitionTrace,
     ) -> Result<ReplyBootstrap> {
         let session = SessionManager::get_session(&session_config.id, true).await?;
         let conversation = session
@@ -126,14 +128,44 @@ impl Agent {
             "[PERF] check_compaction start, elapsed: {:?}",
             reply_start.elapsed()
         );
+        let context_runtime_state = load_context_runtime_state(&session_config.id).await?;
+        let runtime_profile = resolve_from_model_config(&self.provider().await?.get_model_config());
         let needs_auto_compact = !is_manual_compact
-            && check_if_compaction_needed(
+            && crate::context_runtime::should_auto_compact(
                 self.provider().await?.as_ref(),
                 &conversation,
-                None,
-                &session,
+                &context_runtime_state,
+                Some(runtime_profile.auto_compact_threshold),
             )
             .await?;
+        if is_manual_compact {
+            let mut metadata = std::collections::BTreeMap::new();
+            metadata.insert("session_id".to_string(), session_config.id.clone());
+            record_transition(
+                transition_trace,
+                0,
+                transcript_store.load_mode(&session_config.id).await?,
+                TransitionKind::ReplyBootstrap,
+                "manual_compact_requested",
+                metadata,
+            )
+            .await;
+        } else if needs_auto_compact {
+            let mut metadata = std::collections::BTreeMap::new();
+            metadata.insert(
+                "threshold".to_string(),
+                runtime_profile.auto_compact_threshold.to_string(),
+            );
+            record_transition(
+                transition_trace,
+                0,
+                transcript_store.load_mode(&session_config.id).await?,
+                TransitionKind::ReplyBootstrap,
+                "auto_compact_pre_turn",
+                metadata,
+            )
+            .await;
+        }
         tracing::info!(
             "[PERF] check_compaction done, elapsed: {:?}",
             reply_start.elapsed()
@@ -141,11 +173,11 @@ impl Agent {
 
         Ok(ReplyBootstrap {
             current_mode: transcript_store.load_mode(&session_config.id).await?,
-            active_compaction_strategy: current_compaction_strategy(),
             needs_auto_compact,
             is_manual_compact,
             session,
             conversation,
+            context_runtime_state,
         })
     }
 
@@ -154,105 +186,152 @@ impl Agent {
         transcript_store: &SessionHarnessStore,
         session_config: &SessionConfig,
         bootstrap: &ReplyBootstrap,
+        transition_trace: &SharedTransitionTrace,
     ) -> Result<PreparedReplyConversation> {
-        if !bootstrap.needs_auto_compact && !bootstrap.is_manual_compact {
-            return Ok(PreparedReplyConversation {
-                events: Vec::new(),
-                conversation: Some(bootstrap.conversation.clone()),
-                should_enter_reply_loop: true,
-            });
-        }
-
         let mut events = Vec::new();
+        let runtime_profile = resolve_from_model_config(&self.provider().await?.get_model_config());
         if !bootstrap.is_manual_compact {
-            let config = crate::config::Config::global();
-            let threshold = config
-                .get_param::<f64>("AGIME_AUTO_COMPACT_THRESHOLD")
-                .unwrap_or(DEFAULT_COMPACTION_THRESHOLD);
-            let threshold_percentage = (threshold * 100.0) as u32;
-
-            events.push(AgentEvent::Message(
-                Message::assistant().with_system_notification(
-                    SystemNotificationType::InlineMessage,
-                    auto_compaction_inline_message(threshold_percentage),
-                ),
-            ));
-        }
-
-        events.push(AgentEvent::Message(
-            Message::assistant().with_system_notification(
-                SystemNotificationType::ThinkingMessage,
-                "AGIME is compacting the conversation...",
-            ),
-        ));
-
-        match compact_messages_with_active_strategy(
-            self.provider().await?.as_ref(),
-            &bootstrap.conversation,
-            bootstrap.is_manual_compact,
-        )
-        .await
-        {
-            Ok((compacted_conversation, summarization_usage)) => {
-                transcript_store
-                    .replace_conversation(&session_config.id, &compacted_conversation)
-                    .await?;
-                if bootstrap.active_compaction_strategy.is_cfpm() {
-                    let reason = if bootstrap.is_manual_compact {
-                        "manual_compaction"
-                    } else if bootstrap.needs_auto_compact {
-                        "auto_compaction"
-                    } else {
-                        "compaction"
-                    };
-                    if let Err(err) = SessionManager::replace_cfpm_memory_facts_from_conversation(
-                        &session_config.id,
-                        &compacted_conversation,
-                        reason,
-                    )
-                    .await
-                    {
-                        tracing::warn!("Failed to refresh CFPM memory facts: {}", err);
-                    }
-                }
-                Self::update_session_metrics(session_config, &summarization_usage, true).await?;
-
-                events.push(AgentEvent::HistoryReplaced(compacted_conversation.clone()));
-                let _ = transcript_store
-                    .record_checkpoint(
-                        &session_config.id,
-                        compaction_checkpoint(
-                            0,
-                            bootstrap.current_mode,
-                            bootstrap.active_compaction_strategy,
-                            "pre_loop_compaction",
-                        ),
-                    )
-                    .await;
+            if bootstrap.needs_auto_compact {
+                let threshold = runtime_profile.auto_compact_threshold;
+                let threshold_percentage = (threshold * 100.0) as u32;
 
                 events.push(AgentEvent::Message(
                     Message::assistant().with_system_notification(
                         SystemNotificationType::InlineMessage,
-                        format!(
-                            "Compaction complete (strategy: {})",
-                            compaction_strategy_label(bootstrap.active_compaction_strategy)
-                        ),
+                        auto_compaction_inline_message(threshold_percentage),
                     ),
                 ));
+            }
+        }
+
+        let mut context_runtime_state = bootstrap.context_runtime_state.clone();
+        match maybe_advance_runtime_state(
+            self.provider().await?.as_ref(),
+            &bootstrap.conversation,
+            &mut context_runtime_state,
+            bootstrap.is_manual_compact,
+            Some(runtime_profile.auto_compact_threshold),
+        )
+        .await
+        {
+            Ok(outcome) => {
+                if !matches!(
+                    outcome.kind,
+                    crate::context_runtime::ContextRuntimeAdvanceKind::Noop
+                ) {
+                    events.push(AgentEvent::Message(
+                        Message::assistant().with_system_notification(
+                            SystemNotificationType::ThinkingMessage,
+                            "AGIME is updating runtime context...",
+                        ),
+                    ));
+                }
+
+                crate::context_runtime::save_context_runtime_state(
+                    &session_config.id,
+                    &context_runtime_state,
+                )
+                .await?;
+
+                let detail = match outcome.kind {
+                    crate::context_runtime::ContextRuntimeAdvanceKind::Noop => "noop",
+                    crate::context_runtime::ContextRuntimeAdvanceKind::ProjectionRefresh => {
+                        "projection_refresh"
+                    }
+                    crate::context_runtime::ContextRuntimeAdvanceKind::StagedCollapse => {
+                        "staged_collapse"
+                    }
+                    crate::context_runtime::ContextRuntimeAdvanceKind::CommittedCollapse => {
+                        "committed_collapse"
+                    }
+                    crate::context_runtime::ContextRuntimeAdvanceKind::SessionMemoryCompaction => {
+                        "session_memory_compaction"
+                    }
+                };
+                let _ = transcript_store
+                    .record_checkpoint(
+                        &session_config.id,
+                        compaction_checkpoint(0, bootstrap.current_mode, detail),
+                    )
+                    .await;
+
+                let reason = match outcome.kind {
+                    crate::context_runtime::ContextRuntimeAdvanceKind::Noop => None,
+                    crate::context_runtime::ContextRuntimeAdvanceKind::ProjectionRefresh => {
+                        Some("runtime_projection_refresh")
+                    }
+                    crate::context_runtime::ContextRuntimeAdvanceKind::StagedCollapse => {
+                        Some("staged_collapse_applied")
+                    }
+                    crate::context_runtime::ContextRuntimeAdvanceKind::CommittedCollapse => {
+                        Some("committed_collapse_applied")
+                    }
+                    crate::context_runtime::ContextRuntimeAdvanceKind::SessionMemoryCompaction => {
+                        Some("session_memory_compaction_applied")
+                    }
+                };
+                if let Some(reason) = reason {
+                    let mut metadata = std::collections::BTreeMap::new();
+                    metadata.insert("detail".to_string(), detail.to_string());
+                    metadata.insert(
+                        "freed_token_estimate".to_string(),
+                        context_runtime_state
+                            .last_projection_stats
+                            .as_ref()
+                            .map(|stats| stats.freed_token_estimate)
+                            .unwrap_or_default()
+                            .to_string(),
+                    );
+                    record_transition(
+                        transition_trace,
+                        0,
+                        bootstrap.current_mode,
+                        TransitionKind::ReplyBootstrap,
+                        reason,
+                        metadata,
+                    )
+                    .await;
+                }
+
+                if !matches!(
+                    outcome.kind,
+                    crate::context_runtime::ContextRuntimeAdvanceKind::Noop
+                ) {
+                    let freed_tokens = context_runtime_state
+                        .last_projection_stats
+                        .as_ref()
+                        .map(|stats| stats.freed_token_estimate)
+                        .unwrap_or_default();
+                    events.push(AgentEvent::Message(
+                        Message::assistant().with_system_notification(
+                            SystemNotificationType::InlineMessage,
+                            format!(
+                                "Context runtime updated ({}, freed ~{} tokens)",
+                                detail.replace('_', " "),
+                                freed_tokens
+                            ),
+                        ),
+                    ));
+                }
 
                 Ok(PreparedReplyConversation {
                     events,
-                    conversation: Some(compacted_conversation),
+                    conversation: Some(bootstrap.conversation.clone()),
                     should_enter_reply_loop: !bootstrap.is_manual_compact,
                 })
             }
-            Err(e) => Ok(PreparedReplyConversation {
-                events: vec![AgentEvent::Message(Message::assistant().with_text(format!(
-                    "Ran into this error trying to compact: {e}.\n\nPlease try again or create a new session"
-                )))],
-                conversation: None,
-                should_enter_reply_loop: false,
-            }),
+            Err(e) => {
+                tracing::warn!(
+                    session_id = %session_config.id,
+                    error = %e,
+                    "Context runtime update failed during reply preparation; continuing without a refreshed runtime projection"
+                );
+                Ok(PreparedReplyConversation {
+                    events,
+                    conversation: Some(bootstrap.conversation.clone()),
+                    should_enter_reply_loop: true,
+                })
+            }
         }
     }
 
@@ -296,15 +375,25 @@ impl Agent {
         session_id: &str,
         conversation: &crate::conversation::Conversation,
         runtime_notifications: Option<&RuntimeNotificationInput>,
-        compaction_count: u32,
+        runtime_compactions: u32,
         system_prompt: &str,
         current_mode: HarnessMode,
         coordinator_execution_mode: super::CoordinatorExecutionMode,
         delegation: &DelegationRuntimeState,
     ) -> Result<PreparedTurnInput> {
         let turn_conversation = conversation.clone();
+        let mut context_runtime_state = load_context_runtime_state(session_id)
+            .await
+            .unwrap_or_default();
+        let projection_changed =
+            refresh_projection_only(&turn_conversation, &mut context_runtime_state);
+        if projection_changed {
+            let _ = save_context_runtime_state(session_id, &context_runtime_state).await;
+        }
+        let projected_conversation =
+            project_prepared_view(&turn_conversation, &context_runtime_state);
         let (conversation_with_memory, memory_system_extra) = self
-            .inject_runtime_memory_context(session_id, &turn_conversation, compaction_count)
+            .inject_runtime_memory_context(&projected_conversation, runtime_compactions)
             .await;
 
         let mut conversation_for_model =

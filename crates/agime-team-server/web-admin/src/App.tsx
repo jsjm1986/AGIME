@@ -53,6 +53,16 @@ const SkillRegistryPage = React.lazy(
 const McpRegistryPage = React.lazy(
   () => import("./pages/McpRegistryPage"),
 );
+const ChatWorkspacePreviewPage = React.lazy(
+  () => import("./pages/ChatWorkspacePreviewPage").then((module) => ({
+    default: module.ChatWorkspacePreviewPage,
+  })),
+);
+const PublicChatWorkspacePreviewPage = React.lazy(
+  () => import("./pages/PublicChatWorkspacePreviewPage").then((module) => ({
+    default: module.PublicChatWorkspacePreviewPage,
+  })),
+);
 const CommandPalette = React.lazy(() =>
   import("./components/ui/command-palette").then((module) => ({
     default: module.CommandPalette,
@@ -347,6 +357,18 @@ function AppRoutes() {
               <TeamSectionRedirect section="chat" />
             </ProtectedRoute>
           }
+        />
+        <Route
+          path="/chat/workspace-preview"
+          element={
+            <ProtectedRoute>
+              <ChatWorkspacePreviewPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/chat/public-workspace-preview"
+          element={<PublicChatWorkspacePreviewPage />}
         />
         <Route
           path="/settings"

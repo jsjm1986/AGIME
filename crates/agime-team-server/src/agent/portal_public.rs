@@ -3,6 +3,7 @@
 //! Mounted BEFORE auth middleware so external visitors can access published pages.
 //! Phase 3: Real Agent chat via SSE + Markdown page rendering.
 
+use agime::context_runtime::{summarize_context_runtime_state, ContextRuntimeState};
 use agime_team::db::MongoDb;
 use agime_team::models::mongo::{
     ExternalUser, InteractionType, Portal, PortalEffectivePublicConfig, PortalInteraction,
@@ -1945,7 +1946,10 @@ async fn create_visitor_session(
     {
         let os = std::env::consts::OS;
         let (shell, shell_syntax_hint) = if cfg!(target_os = "windows") {
-            ("cmd.exe", "使用 cmd.exe 语法（如 dir, type, copy）。不要使用 PowerShell 语法（如 Get-Content, ls）或 bash 语法（如 cat, grep）。文件路径可用正斜杠或反斜杠。注意：cmd.exe 默认编码可能不是 UTF-8，写入文件时优先使用 text_editor 而非 echo 重定向。")
+            (
+                "cmd.exe",
+                "使用 cmd.exe 语法（如 dir, type, copy）。不要使用 PowerShell 语法（如 Get-Content, ls）或 bash 语法（如 cat, grep）。文件路径可用正斜杠或反斜杠。注意：cmd.exe 默认编码可能不是 UTF-8，写入文件时优先使用 text_editor 而非 echo 重定向。",
+            )
         } else {
             ("sh", "使用标准 POSIX shell 语法。")
         };
@@ -2097,9 +2101,28 @@ async fn create_visitor_session(
                 );
             }
         }
+        let context_runtime_state = session
+            .context_runtime_state
+            .clone()
+            .unwrap_or_else(ContextRuntimeState::default);
+        if session.context_runtime_state.is_none() {
+            if let Err(e) = agent_svc
+                .set_session_context_runtime_state(&session.session_id, &context_runtime_state)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to persist default context runtime state for existing portal session {}: {}",
+                    session.session_id,
+                    e
+                );
+            }
+        }
+        let context_runtime_summary = summarize_context_runtime_state(&context_runtime_state);
         return Ok(Json(serde_json::json!({
             "session_id": session.session_id,
             "existing": true,
+            "context_runtime_state": context_runtime_state,
+            "context_runtime_summary": context_runtime_summary,
         })));
     }
 
@@ -2144,9 +2167,26 @@ async fn create_visitor_session(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
 
+    let context_runtime_state = session
+        .context_runtime_state
+        .clone()
+        .unwrap_or_else(ContextRuntimeState::default);
+    if let Err(e) = agent_svc
+        .set_session_context_runtime_state(&session.session_id, &context_runtime_state)
+        .await
+    {
+        tracing::warn!(
+            "Failed to persist default context runtime state for new portal session {}: {}",
+            session.session_id,
+            e
+        );
+    }
+    let context_runtime_summary = summarize_context_runtime_state(&context_runtime_state);
     Ok(Json(serde_json::json!({
         "session_id": session.session_id,
         "existing": false,
+        "context_runtime_state": context_runtime_state,
+        "context_runtime_summary": context_runtime_summary,
     })))
 }
 
@@ -2967,12 +3007,20 @@ async fn list_visitor_sessions(
     let items: Vec<_> = sessions
         .into_iter()
         .map(|s| {
+            let context_runtime_state = s
+                .context_runtime_state
+                .clone()
+                .unwrap_or_else(ContextRuntimeState::default);
+            let context_runtime_summary = summarize_context_runtime_state(&context_runtime_state);
             serde_json::json!({
                 "session_id": s.session_id,
                 "title": s.title,
                 "created_at": s.created_at,
                 "last_message_at": s.last_message_at,
                 "message_count": s.message_count,
+                "last_execution_status": s.last_execution_status,
+                "context_runtime_state": context_runtime_state,
+                "context_runtime_summary": context_runtime_summary,
             })
         })
         .collect();

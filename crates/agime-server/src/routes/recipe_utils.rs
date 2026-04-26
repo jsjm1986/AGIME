@@ -32,7 +32,6 @@ pub struct RecipeManifest {
     #[schema(value_type = String)]
     pub file_path: PathBuf,
     pub last_modified: String,
-    pub schedule_cron: Option<String>,
     pub slash_command: Option<String>,
 }
 
@@ -58,7 +57,6 @@ pub fn get_all_recipes_manifests() -> Result<Vec<RecipeManifest>> {
             recipe,
             file_path,
             last_modified,
-            schedule_cron: None,
             slash_command: None,
         };
         recipe_manifests_with_path.push(manifest_with_path);

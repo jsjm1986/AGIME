@@ -13,16 +13,10 @@ use crate::commands::configure::handle_configure;
 use crate::commands::info::handle_info;
 use crate::commands::project::{handle_project_default, handle_projects_interactive};
 use crate::commands::recipe::{handle_deeplink, handle_list, handle_open, handle_validate};
+use crate::commands::session::{handle_session_list, handle_session_remove};
 use crate::commands::term::{
     handle_term_info, handle_term_init, handle_term_log, handle_term_run, Shell,
 };
-
-use crate::commands::schedule::{
-    handle_schedule_add, handle_schedule_cron_help, handle_schedule_list, handle_schedule_remove,
-    handle_schedule_run_now, handle_schedule_services_status, handle_schedule_services_stop,
-    handle_schedule_sessions,
-};
-use crate::commands::session::{handle_session_list, handle_session_remove};
 use crate::recipes::extract_from_cli::extract_recipe_info_from_cli;
 use crate::recipes::recipe::{explain_recipe, render_recipe_as_yaml};
 use crate::session::{build_session, SessionBuilderConfig, SessionSettings};
@@ -246,65 +240,6 @@ enum SessionCommand {
         #[arg(short = 'o', long)]
         output: Option<PathBuf>,
     },
-}
-
-#[derive(Subcommand, Debug)]
-enum SchedulerCommand {
-    #[command(about = "Add a new scheduled job")]
-    Add {
-        #[arg(
-            long = "schedule-id",
-            alias = "id",
-            help = "Unique ID for the recurring scheduled job"
-        )]
-        schedule_id: String,
-        #[arg(
-            long,
-            help = "Cron expression for the schedule",
-            long_help = "Cron expression for when to run the job. Examples:\n  '0 * * * *'     - Every hour at minute 0\n  '0 */2 * * *'   - Every 2 hours\n  '@hourly'       - Every hour (shorthand)\n  '0 9 * * *'     - Every day at 9:00 AM\n  '0 9 * * 1'     - Every Monday at 9:00 AM\n  '0 0 1 * *'     - First day of every month at midnight"
-        )]
-        cron: String,
-        #[arg(
-            long,
-            help = "Recipe source (path to file, or base64 encoded recipe string)"
-        )]
-        recipe_source: String,
-    },
-    #[command(about = "List all scheduled jobs")]
-    List {},
-    #[command(about = "Remove a scheduled job by ID")]
-    Remove {
-        #[arg(
-            long = "schedule-id",
-            alias = "id",
-            help = "ID of the scheduled job to remove (removes the recurring schedule)"
-        )]
-        schedule_id: String,
-    },
-    /// List sessions created by a specific schedule
-    #[command(about = "List sessions created by a specific schedule")]
-    Sessions {
-        /// ID of the schedule
-        #[arg(long = "schedule-id", alias = "id", help = "ID of the schedule")]
-        schedule_id: String,
-        #[arg(short = 'l', long, help = "Maximum number of sessions to return")]
-        limit: Option<usize>,
-    },
-    #[command(about = "Run a scheduled job immediately")]
-    RunNow {
-        /// ID of the schedule to run
-        #[arg(long = "schedule-id", alias = "id", help = "ID of the schedule to run")]
-        schedule_id: String,
-    },
-    /// Check status of scheduler services (deprecated - no external services needed)
-    #[command(about = "[Deprecated] Check status of scheduler services")]
-    ServicesStatus {},
-    /// Stop scheduler services (deprecated - no external services needed)
-    #[command(about = "[Deprecated] Stop scheduler services")]
-    ServicesStop {},
-    /// Show cron expression examples and help
-    #[command(about = "Show cron expression examples and help")]
-    CronHelp {},
 }
 
 #[derive(Subcommand)]
@@ -789,13 +724,6 @@ enum Command {
         command: RecipeCommand,
     },
 
-    /// Manage scheduled jobs
-    #[command(about = "Manage scheduled jobs", visible_alias = "sched")]
-    Schedule {
-        #[command(subcommand)]
-        command: SchedulerCommand,
-    },
-
     /// Update the AGIME CLI version
     #[command(about = "Update the AGIME CLI version")]
     Update {
@@ -966,7 +894,6 @@ pub async fn cli() -> anyhow::Result<()> {
         Some(Command::Project {}) => "project",
         Some(Command::Projects) => "projects",
         Some(Command::Run { .. }) => "run",
-        Some(Command::Schedule { .. }) => "schedule",
         Some(Command::Update { .. }) => "update",
         Some(Command::Bench { .. }) => "bench",
         Some(Command::Recipe { .. }) => "recipe",
@@ -1395,41 +1322,6 @@ pub async fn cli() -> anyhow::Result<()> {
                 ));
             }
 
-            return Ok(());
-        }
-        Some(Command::Schedule { command }) => {
-            match command {
-                SchedulerCommand::Add {
-                    schedule_id,
-                    cron,
-                    recipe_source,
-                } => {
-                    handle_schedule_add(schedule_id, cron, recipe_source).await?;
-                }
-                SchedulerCommand::List {} => {
-                    handle_schedule_list().await?;
-                }
-                SchedulerCommand::Remove { schedule_id } => {
-                    handle_schedule_remove(schedule_id).await?;
-                }
-                SchedulerCommand::Sessions { schedule_id, limit } => {
-                    // New arm
-                    handle_schedule_sessions(schedule_id, limit).await?;
-                }
-                SchedulerCommand::RunNow { schedule_id } => {
-                    // New arm
-                    handle_schedule_run_now(schedule_id).await?;
-                }
-                SchedulerCommand::ServicesStatus {} => {
-                    handle_schedule_services_status().await?;
-                }
-                SchedulerCommand::ServicesStop {} => {
-                    handle_schedule_services_stop().await?;
-                }
-                SchedulerCommand::CronHelp {} => {
-                    handle_schedule_cron_help().await?;
-                }
-            }
             return Ok(());
         }
         Some(Command::Update {

@@ -1334,11 +1334,11 @@ pub fn configure_tool_output_dialog() -> anyhow::Result<()> {
 pub fn configure_keyring_dialog() -> anyhow::Result<()> {
     let config = Config::global();
 
-    if env_compat_exists("DISABLE_KEYRING") {
+    if std::env::var_os("AGIME_DISABLE_KEYRING").is_some() {
         let _ = cliclack::log::info("Notice: AGIME_DISABLE_KEYRING environment variable is set and will override the configuration here.");
     }
 
-    let currently_disabled = config.get_param::<String>("AGIME_DISABLE_KEYRING").is_ok();
+    let currently_disabled = config.uses_file_secrets();
 
     let current_status = if currently_disabled {
         "Disabled (using file-based storage)"

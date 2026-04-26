@@ -162,6 +162,11 @@ export function TeamAgentPage() {
     });
   };
 
+  const getAttachedTeamExtensionNames = (agent: TeamAgent) =>
+    (agent.attached_team_extensions || [])
+      .filter((entry) => entry.enabled)
+      .map((entry) => entry.display_name || entry.runtime_name || entry.extension_id);
+
   const getEnabledSkillNames = (agent: TeamAgent) =>
     (agent.assigned_skills || [])
       .filter(skill => skill.enabled)
@@ -202,9 +207,14 @@ export function TeamAgentPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {agents.map((agent) => {
               const extNames = getEnabledExtensionNames(agent);
+              const attachedTeamExtNames = getAttachedTeamExtensionNames(agent);
               const skillNames = getEnabledSkillNames(agent);
               const customExts = agent.custom_extensions?.filter(e => e.enabled) || [];
-              const totalCapabilities = extNames.length + customExts.length + skillNames.length;
+              const totalCapabilities =
+                extNames.length +
+                attachedTeamExtNames.length +
+                customExts.length +
+                skillNames.length;
 
               return (
                 <div
@@ -246,6 +256,9 @@ export function TeamAgentPage() {
                     <div className="flex flex-wrap justify-center gap-1">
                       {extNames.slice(0, 4).map((name) => (
                         <span key={name} className="text-micro px-1.5 py-0.5 rounded bg-muted/80 text-muted-foreground">{name}</span>
+                      ))}
+                      {attachedTeamExtNames.slice(0, 3).map((name) => (
+                        <span key={`team-${name}`} className="text-micro px-1.5 py-0.5 rounded border border-border text-muted-foreground">{name}</span>
                       ))}
                       {customExts.slice(0, 2).map((ext) => (
                         <span key={ext.name} className="text-micro px-1.5 py-0.5 rounded border border-border text-muted-foreground">{ext.name}</span>
@@ -318,6 +331,7 @@ export function TeamAgentPage() {
                   <SelectItem value="all">{t('agent.filter.all')}</SelectItem>
                   <SelectItem value="pending">{t('agent.status.pending')}</SelectItem>
                   <SelectItem value="approved">{t('agent.status.approved')}</SelectItem>
+                  <SelectItem value="queued">{t('agent.status.queued', 'Queued')}</SelectItem>
                   <SelectItem value="running">{t('agent.status.running')}</SelectItem>
                   <SelectItem value="completed">{t('agent.status.completed')}</SelectItem>
                   <SelectItem value="failed">{t('agent.status.failed')}</SelectItem>
@@ -343,7 +357,11 @@ export function TeamAgentPage() {
                         #{task.id.slice(0, 8)}
                       </span>
                       <span className="font-medium">{task.task_type}</span>
-                      <StatusBadge status={TASK_STATUS_MAP[task.status]}>{t(`agent.status.${task.status}`)}</StatusBadge>
+                      <StatusBadge status={TASK_STATUS_MAP[task.status]}>
+                        {task.status === 'queued'
+                          ? t('agent.status.queued', 'Queued')
+                          : t(`agent.status.${task.status}`)}
+                      </StatusBadge>
                       <span className="text-xs text-muted-foreground">
                         {formatDateTime(task.submitted_at)}
                       </span>
@@ -366,7 +384,7 @@ export function TeamAgentPage() {
                           </Button>
                         </>
                       )}
-                      {(task.status === 'approved' || task.status === 'running') && (
+                      {(task.status === 'approved' || task.status === 'queued' || task.status === 'running') && (
                         <Button
                           size="sm"
                           variant="destructive"

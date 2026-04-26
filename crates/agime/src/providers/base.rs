@@ -486,6 +486,10 @@ pub trait Provider: Send + Sync {
         false
     }
 
+    async fn supports_cache_edit(&self) -> bool {
+        false
+    }
+
     /// Create embeddings if supported. Default implementation returns an error.
     async fn create_embeddings(&self, _texts: Vec<String>) -> Result<Vec<Vec<f32>>, ProviderError> {
         Err(ProviderError::ExecutionError(

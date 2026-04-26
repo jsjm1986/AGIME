@@ -1299,11 +1299,11 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     () => selectedAvatarHasPortalRestriction
       ? t(
           'digitalAvatar.workspace.capabilityScopeRestricted',
-          '当前已按门户白名单收敛，只开放这里列出的扩展与技能。',
+          'Capability scope is currently narrowed by the portal allowlist. Only the extensions and skills listed here are exposed.',
         )
       : t(
           'digitalAvatar.workspace.capabilityScopeInherited',
-          '当前未额外收敛，按服务分身已启用的扩展与技能对外开放。',
+          'No extra narrowing is applied right now. Exposure follows the extensions and skills already enabled on the service avatar.',
         ),
     [selectedAvatarHasPortalRestriction, t],
   );
@@ -1321,11 +1321,11 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
   );
   const selectedAvatarChatWidgetEffectLabel = useMemo(() => {
     if (!selectedAvatarEffectivePublicConfig?.chatEnabled) {
-      return t('digitalAvatar.workspace.chatUnavailable', '聊天未启用');
+      return t('digitalAvatar.workspace.chatUnavailable', 'Chat is disabled');
     }
     return selectedAvatarEffectivePublicConfig.showChatWidget
-      ? t('digitalAvatar.workspace.chatWidgetVisible', '显示默认聊天挂件')
-      : t('digitalAvatar.workspace.chatWidgetHidden', '聊天可用，但默认挂件已关闭');
+      ? t('digitalAvatar.workspace.chatWidgetVisible', 'Show default chat widget')
+      : t('digitalAvatar.workspace.chatWidgetHidden', 'Chat is available, but the default widget is hidden');
   }, [selectedAvatarEffectivePublicConfig, t]);
   const permissionPreviewDraft = useMemo(
     () => buildPermissionPreview(permissionDocumentAccessMode, t),
@@ -1337,11 +1337,11 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     return extensionRestricted || skillRestricted
       ? t(
           'digitalAvatar.workspace.capabilityScopeRestricted',
-          '当前已按门户白名单收敛，只开放这里列出的扩展与技能。',
+          'Capability scope is currently narrowed by the portal allowlist. Only the extensions and skills listed here are exposed.',
         )
       : t(
           'digitalAvatar.workspace.capabilityScopeInherited',
-          '当前未额外收敛，按服务分身已启用的扩展与技能对外开放。',
+          'No extra narrowing is applied right now. Exposure follows the extensions and skills already enabled on the service avatar.',
         );
   }, [
     permissionSelectedExtensions.length,
@@ -1869,31 +1869,31 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
   );
 
   const runtimeSuggestionText = useMemo<RuntimeSuggestionText>(() => ({
-    unknownTool: t('digitalAvatar.governance.runtimeUnknownTool', '未知工具'),
+    unknownTool: t('digitalAvatar.governance.runtimeUnknownTool', 'Unknown tool'),
     toolFailureTitle: (tool: string) =>
-      t('digitalAvatar.governance.runtimeToolFailureTitle', '工具执行失败：{{tool}}', { tool }),
+      t('digitalAvatar.governance.runtimeToolFailureTitle', 'Tool execution failed: {{tool}}', { tool }),
     toolFailureEvidenceFallback: t(
       'digitalAvatar.governance.runtimeToolFailureEvidenceFallback',
-      '工具执行失败，未返回详细预览。'
+      'Tool execution failed and did not return a detailed preview.'
     ),
     toolFailureProposal: (tool: string) =>
       t(
         'digitalAvatar.governance.runtimeToolFailureProposal',
-        '检查 {{tool}} 的权限边界、输入契约与回退路径，并补充有停止条件的受控重试策略。',
+        'Check the permission boundary, input contract, and fallback path for {{tool}}, then add a controlled retry strategy with a stop condition.',
         { tool }
       ),
     toolFailureGain: t(
       'digitalAvatar.governance.runtimeToolFailureGain',
-      '降低重复工具失败率，提升任务完成稳定性。'
+      'Reduce repeated tool failures and improve task completion stability.'
     ),
-    sessionFailedTitle: t('digitalAvatar.governance.runtimeSessionFailedTitle', '会话终止失败'),
+    sessionFailedTitle: t('digitalAvatar.governance.runtimeSessionFailedTitle', 'Session termination failed'),
     sessionFailedProposal: t(
       'digitalAvatar.governance.runtimeSessionFailedProposal',
-      '复核任务提示词与策略约束，补充最小失败恢复流程。'
+      'Review the task prompt and policy constraints, then add a minimal failure-recovery flow.'
     ),
     sessionFailedGain: t(
       'digitalAvatar.governance.runtimeSessionFailedGain',
-      '降低硬失败中断，提升成功交付率。'
+      'Reduce hard-failure interruptions and improve successful delivery rate.'
     ),
   }), [t]);
 
@@ -2420,53 +2420,53 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     if (kind === 'createExternalSupport') {
       text = `${t(
         'digitalAvatar.workspace.quickPromptCreateExternalSupport',
-        '请为我创建一个新的对外数字分身，定位为客服答疑/售后分流助手：先明确服务对象、知识边界和升级到人工的规则，再调用 create_digital_avatar 创建，并回读 profile 做校验，最后给我结果与风险清单。'
+        'Create a new external digital avatar for customer support and after-sales triage. First define the service audience, knowledge boundaries, and escalation rules to humans, then call create_digital_avatar, read back the profile for validation, and finally return the result with a risk checklist.'
       )}\n${t(
         'digitalAvatar.workspace.quickPromptManagerPinned',
-        '管理 Agent 固定为 {{managerId}}，新分身必须继续归属这个管理组。',
+        'The managing agent is fixed as {{managerId}}. The new avatar must remain in this management group.',
         { managerId: effectiveManagerAgentId }
       )}`;
     } else if (kind === 'createExternalPartner') {
       text = `${t(
         'digitalAvatar.workspace.quickPromptCreateExternalPartner',
-        '请为我创建一个新的对外数字分身，定位为客户/合作伙伴协同入口：先梳理可开放的文档范围、协作边界和常见问题，再调用 create_digital_avatar 创建，并回读 profile 校验，最后给我发布建议。'
+        'Create a new external digital avatar for customer and partner collaboration. First define which documents can be exposed, the collaboration boundary, and common questions, then call create_digital_avatar, validate through profile readback, and finally give release recommendations.'
       )}\n${t(
         'digitalAvatar.workspace.quickPromptManagerPinned',
-        '管理 Agent 固定为 {{managerId}}，新分身必须继续归属这个管理组。',
+        'The managing agent is fixed as {{managerId}}. The new avatar must remain in this management group.',
         { managerId: effectiveManagerAgentId }
       )}`;
     } else if (kind === 'createInternalKnowledge') {
       text = `${t(
         'digitalAvatar.workspace.quickPromptCreateInternalKnowledge',
-        '请为我创建一个新的对内数字分身，定位为知识问答/制度检索助手：先定义内部使用场景、文档边界和回答风格，再调用 create_digital_avatar 创建，并回读 profile 校验，最后输出上线建议。'
+        'Create a new internal digital avatar for knowledge Q&A and policy retrieval. First define internal use cases, document boundaries, and answer style, then call create_digital_avatar, validate through profile readback, and finally output launch recommendations.'
       )}\n${t(
         'digitalAvatar.workspace.quickPromptManagerPinned',
-        '管理 Agent 固定为 {{managerId}}，新分身必须继续归属这个管理组。',
+        'The managing agent is fixed as {{managerId}}. The new avatar must remain in this management group.',
         { managerId: effectiveManagerAgentId }
       )}`;
     } else if (kind === 'createInternalOps') {
       text = `${t(
         'digitalAvatar.workspace.quickPromptCreateInternalOps',
-        '请为我创建一个新的对内数字分身，定位为流程执行/任务跟进助手：先定义任务目标、触发方式和审批边界，再调用 create_digital_avatar 创建，并回读 profile 校验，最后输出执行建议。'
+        'Create a new internal digital avatar for process execution and task follow-up. First define the task goal, trigger method, and approval boundary, then call create_digital_avatar, validate through profile readback, and finally output execution recommendations.'
       )}\n${t(
         'digitalAvatar.workspace.quickPromptManagerPinned',
-        '管理 Agent 固定为 {{managerId}}，新分身必须继续归属这个管理组。',
+        'The managing agent is fixed as {{managerId}}. The new avatar must remain in this management group.',
         { managerId: effectiveManagerAgentId }
       )}`;
     } else if (kind === 'audit') {
       text = t(
         'digitalAvatar.workspace.quickPromptAudit',
-        '请检查“{{name}}”当前能力边界（文档权限、扩展、技能、提示词），给出三项最小改进建议并标注风险。',
+        'Audit the current capability boundary of "{{name}}" (document permissions, extensions, skills, prompts). Give three minimal improvement suggestions and mark the risks.',
         { name: currentName }
       );
     } else if (kind === 'optimize') {
       if (!selectedAvatar || !currentPortalId) {
-        addToast('error', t('digitalAvatar.workspace.quickNeedAvatar', '请先在左侧选择一个分身，再设置治理阈值档位。'));
+        addToast('error', t('digitalAvatar.workspace.quickNeedAvatar', 'Select an avatar on the left before adjusting the governance threshold preset.'));
         return;
       }
       text = t(
         'digitalAvatar.workspace.quickPromptOptimize',
-        '请基于“{{name}}”最近运行情况，产出一份可执行优化工单（问题证据、修复方案、验证标准、回滚条件）。',
+        'Based on recent runs of "{{name}}", generate an executable optimization ticket with evidence, fix proposal, validation standard, and rollback conditions.',
         { name: currentName }
       );
     } else if (kind === 'releaseChecklist') {
@@ -2476,7 +2476,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
       }
       text = t(
         'digitalAvatar.workspace.quickPromptReleaseChecklist',
-        '请为“{{name}}”生成一份发布前检查清单，重点覆盖文档权限、提示词、扩展/技能、升级到人工机制、访客视角说明和回滚方案，并标注必须人工确认的项。',
+        'Generate a pre-release checklist for "{{name}}" focused on document permissions, prompts, extensions/skills, escalation-to-human rules, visitor-facing explanation, and rollback plan. Mark items that require human approval.',
         { name: currentName }
       );
     } else if (kind === 'optimizePrompt') {
@@ -2486,7 +2486,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
       }
       text = t(
         'digitalAvatar.workspace.quickPromptOptimizePrompt',
-        '请针对“{{name}}”输出一份最小可执行的优化方案，重点是提示词、技能组合、工具边界和回答风格，并按低/中/高风险分层说明。',
+        'Output a minimal executable optimization plan for "{{name}}", focused on prompt design, skill combination, tool boundaries, and response style, layered by low/medium/high risk.',
         { name: currentName }
       );
     } else {
@@ -2498,7 +2498,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
         kind === 'setAggressive' ? 3 : kind === 'setBalanced' ? 5 : 7;
       text = t(
         'digitalAvatar.workspace.quickPromptSetThreshold',
-        '请把分身“{{name}}”(portal_id={{portalId}}) 的自动治理阈值设置为 {{count}}。请调用 portal_tools__configure_portal_service_agent 并通过 settings_patch 写入 digitalAvatarGovernanceConfig.autoProposalTriggerCount={{count}}，然后调用 portal_tools__get_portal_service_capability_profile 回读校验并汇报结果与风险。',
+        'Set the automatic governance threshold of avatar "{{name}}" (portal_id={{portalId}}) to {{count}}. Call portal_tools__configure_portal_service_agent and write digitalAvatarGovernanceConfig.autoProposalTriggerCount={{count}} through settings_patch, then call portal_tools__get_portal_service_capability_profile for readback validation and report the result and risks.',
         {
           name: currentName,
           portalId: currentPortalId,
@@ -2645,7 +2645,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
         'warning',
         t(
           'digitalAvatar.governance.executionBusy',
-          '管理 Agent 正在执行上一条治理任务，请等待完成后再提交下一项。'
+          'The managing agent is still executing the previous governance task. Wait until it finishes before submitting the next one.'
         )
       );
       return;
@@ -2654,8 +2654,8 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     handledGovernanceActionIdsRef.current.delete(requestId);
     const structuredPrompt = `${prompt}\n\n${t(
       'digitalAvatar.governance.structuredReceiptInstruction',
-      '请在最终回复末尾严格追加下面这个结构化回执（不要解释，也不要省略）：'
-    )}\n<governance_action_result>{\"action_id\":\"${requestId}\",\"outcome\":\"success|partial|failed\",\"summary\":\"一句话结果摘要\",\"reason\":\"失败/部分成功原因；成功可留空\"}</governance_action_result>`;
+      'Append the following structured receipt exactly at the end of the final reply (do not explain it and do not omit it):'
+    )}\n<governance_action_result>{\"action_id\":\"${requestId}\",\"outcome\":\"success|partial|failed\",\"summary\":\"One-line result summary\",\"reason\":\"Reason for failure or partial success; leave empty on success\"}</governance_action_result>`;
     setManagerComposeRequest({
       id: requestId,
       text: structuredPrompt,
@@ -2808,7 +2808,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
 
     const proposalTitle = t(
       'digitalAvatar.governance.autoProposalTitle',
-      '新增分身提案：{{problem}}能力长期缺口',
+      'New avatar proposal: long-term capability gap in {{problem}}',
       { problem: item.problemType },
     );
     const hasOpenProposal = current.gapProposals.some(
@@ -2825,11 +2825,11 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
       title: proposalTitle,
       description: t(
         'digitalAvatar.governance.autoProposalDescription',
-        '近阶段该类型能力缺口多次重复出现，建议新增专用分身并进入人工审批。',
+        'This type of capability gap has repeated recently. A dedicated new avatar is recommended and should enter manual approval.',
       ),
       expectedGain: t(
         'digitalAvatar.governance.autoProposalGain',
-        '通过能力隔离减少重复提权与失败重试，提升交付稳定性。',
+        'Use capability isolation to reduce repeated privilege escalation and failure retries, improving delivery stability.',
       ),
       status: 'pending_approval',
       proposedBy: 'manager',
@@ -2987,7 +2987,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
       const mode = decision === 'approve_sandbox' ? 'sandbox' : 'direct';
       const executionPrompt = t(
         'digitalAvatar.governance.capabilityExecutionPrompt',
-        '请执行能力缺口请求并完成回读校验。portal_id={{portalId}}，模式={{mode}}。\n请求标题：{{title}}\n请求说明：{{detail}}\n要求：\n1) 优先调用 portal_tools__configure_portal_service_agent 完成最小权限变更；\n2) 必须调用 portal_tools__get_portal_service_capability_profile 回读验证；\n3) 输出变更摘要、风险与回滚建议。',
+        'Execute the capability-gap request and complete readback validation. portal_id={{portalId}}, mode={{mode}}.\nRequest title: {{title}}\nRequest detail: {{detail}}\nRequirements:\n1) Prefer portal_tools__configure_portal_service_agent to apply the minimum permission change;\n2) You must call portal_tools__get_portal_service_capability_profile for readback validation;\n3) Output a change summary, risks, and rollback recommendations.',
         {
           portalId,
           mode,
@@ -3018,7 +3018,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     if (item && ['approved', 'pilot', 'active'].includes(status)) {
       const executionPrompt = t(
         'digitalAvatar.governance.proposalExecutionPrompt',
-        '请根据已通过提案进入执行闭环：\n提案：{{title}}\n说明：{{desc}}\n目标状态：{{status}}\n要求：产出执行计划（能力/权限/文档范围）、实施步骤、验证标准与回滚策略。',
+        'Enter execution based on the approved proposal:\nProposal: {{title}}\nDescription: {{desc}}\nTarget status: {{status}}\nRequirements: produce the execution plan (capabilities/permissions/document scope), implementation steps, validation criteria, and rollback strategy.',
         {
           title: item.title,
           desc: item.description,
@@ -3048,7 +3048,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
     if (item && ['approved', 'experimenting', 'deployed'].includes(status)) {
       const executionPrompt = t(
         'digitalAvatar.governance.ticketExecutionPrompt',
-        '请执行优化工单并回传结果：\n工单：{{title}}\n问题类型：{{problemType}}\n证据：{{evidence}}\n方案：{{proposal}}\n目标状态：{{status}}\n要求：执行后提供验证结果、风险变化与是否继续推进建议。',
+        'Execute the optimization ticket and report back the result:\nTicket: {{title}}\nProblem type: {{problemType}}\nEvidence: {{evidence}}\nPlan: {{proposal}}\nTarget status: {{status}}\nRequirement: after execution, provide validation results, risk changes, and whether further rollout is recommended.',
         {
           title: item.title,
           problemType: item.problemType,
@@ -3536,7 +3536,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
       title={t('digitalAvatar.workspace.currentContextTitle', '当前工作上下文')}
       description={t(
         'digitalAvatar.workspace.currentContextHint',
-        '分身配置、发布信息和治理入口退到辅助层，不再和对话主舞台抢首屏。',
+        'Avatar configuration, publishing information, and governance entry points stay in the support layer instead of competing with the conversation main stage.',
       )}
       action={
         <Button
@@ -3545,7 +3545,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
           className="h-8 rounded-full px-3 text-[11px] text-muted-foreground"
           onClick={openAuditWorkspace}
         >
-          {t('digitalAvatar.actions.auditCenter', { defaultValue: '审计中心' })}
+          {t('digitalAvatar.actions.auditCenter', { defaultValue: 'Audit center' })}
         </Button>
       }
     >
@@ -3963,7 +3963,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                     {canManage
                       ? t(
                           'digitalAvatar.states.noManagerAgentHint',
-                          '还没有管理组。请先使用顶部“新建管理组”创建一个专用管理 Agent。',
+                          'There is no manager group yet. Use “Create manager group” at the top to create a dedicated managing agent first.',
                         )
                       : t('digitalAvatar.states.noManagerAgent')}
                   </div>
@@ -3994,9 +3994,9 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
               </div>
               <div className="flex items-center gap-5 border-b border-border/60 pb-2">
                 {([
-                  { key: 'all', label: t('digitalAvatar.filters.allShort', '全部') },
-                  { key: 'external', label: t('digitalAvatar.filters.externalShort', '外部') },
-                  { key: 'internal', label: t('digitalAvatar.filters.internalShort', '内部') },
+                  { key: 'all', label: t('digitalAvatar.filters.allShort', 'All') },
+                  { key: 'external', label: t('digitalAvatar.filters.externalShort', 'External') },
+                  { key: 'internal', label: t('digitalAvatar.filters.internalShort', 'Internal') },
                 ] as { key: AvatarFilter; label: string }[]).map((item) => (
                   <button
                     key={item.key}
@@ -4066,13 +4066,13 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                           ?? 0;
                         const statusLabel =
                           status === 'published'
-                            ? t('digitalAvatar.status.published', '已发布')
+                            ? t('digitalAvatar.status.published', 'Published')
                             : status === 'draft'
-                              ? t('digitalAvatar.status.draft', '草稿')
+                              ? t('digitalAvatar.status.draft', 'Draft')
                               : status === 'disabled'
-                                ? t('digitalAvatar.status.disabled', '已停用')
+                                ? t('digitalAvatar.status.disabled', 'Disabled')
                                 : status === 'archived'
-                                  ? t('digitalAvatar.status.archived', '已归档')
+                                  ? t('digitalAvatar.status.archived', 'Archived')
                                   : t('digitalAvatar.labels.unset');
                         return (
                           <button
@@ -4093,7 +4093,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                                 <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                                   {pendingCount > 0 ? (
                                     <span className="inline-flex min-w-[60px] justify-center h-6 items-center rounded-full border border-[hsl(var(--status-warning-text))/0.2] bg-status-warning-bg px-2.5 text-[10px] font-semibold leading-none tracking-[0.01em] text-status-warning-text">
-                                      {t('digitalAvatar.labels.pendingCount', '待处理')} {pendingCount}
+                                      {t('digitalAvatar.labels.pendingCount', 'Pending')} {pendingCount}
                                     </span>
                                   ) : null}
                                   <span className={`inline-flex min-w-[52px] justify-center h-6 items-center rounded-full px-2.5 text-[10px] font-semibold leading-none tracking-[0.01em] ${avatarStatusBadgeClass(status)}`}>
@@ -4102,14 +4102,14 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                                 </div>
                               </div>
                               <div className="text-[10px] leading-5 text-muted-foreground">
-                                {t('digitalAvatar.list.capabilityCounts', '扩展 {{extensions}} · 技能 {{skills}}', {
+                                {t('digitalAvatar.list.capabilityCounts', 'Extensions {{extensions}} · Skills {{skills}}', {
                                   extensions: extensionCount,
                                   skills: skillCount,
                                 })}
                               </div>
                               <div className="flex items-center gap-2 text-[10px] text-muted-foreground/80">
                                 <span>
-                                  {t('digitalAvatar.list.lastActivity', '最近活动')} · {activityAt ? formatRelativeTime(activityAt) : t('digitalAvatar.labels.unset')}
+                                  {t('digitalAvatar.list.lastActivity', 'Last activity')} · {activityAt ? formatRelativeTime(activityAt) : t('digitalAvatar.labels.unset')}
                                 </span>
                               </div>
                             </div>
@@ -4190,7 +4190,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                       {canManage
                         ? t(
                             'digitalAvatar.states.noManagerAgentHint',
-                            '还没有管理组。请先使用顶部“新建管理组”创建一个专用管理 Agent。'
+                            'There is no manager group yet. Use “Create manager group” at the top to create a dedicated managing agent first.'
                           )
                         : t('digitalAvatar.states.noManagerAgent')}
                     </div>
@@ -4601,7 +4601,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                 title={t('digitalAvatar.workspace.resourceAndAccess', '资源与权限')}
                 description={t(
                   'digitalAvatar.workspace.documentAccessHint',
-                  '访客可读写文档，写入行为受策略控制。',
+                  'Visitors can read and write documents, and write operations are controlled by policy.',
                 )}
               >
                 <InspectorField
@@ -4653,9 +4653,9 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                         onChange={(event) => setPermissionDocumentAccessMode(event.target.value as PortalDocumentAccessMode)}
                         className="h-9 w-full rounded-[12px] border border-[hsl(var(--ui-line-soft))/0.82] bg-[hsl(var(--ui-surface-panel-strong))/0.92] px-3 text-sm text-foreground dark:bg-[hsl(var(--ui-surface-panel-strong))/0.82]"
                       >
-                        <option value="read_only">{t('digitalAvatar.documentAccess.readOnly', '只读')}</option>
-                        <option value="co_edit_draft">{t('digitalAvatar.documentAccess.coEditDraft', '协作草稿')}</option>
-                        <option value="controlled_write">{t('digitalAvatar.documentAccess.controlledWrite', '受控写入')}</option>
+                        <option value="read_only">{t('digitalAvatar.documentAccess.readOnly', 'Read only')}</option>
+                        <option value="co_edit_draft">{t('digitalAvatar.documentAccess.coEditDraft', 'Collaborative draft')}</option>
+                        <option value="controlled_write">{t('digitalAvatar.documentAccess.controlledWrite', 'Controlled write')}</option>
                       </select>
                     ) : (
                       formatDocumentAccessMode(permissionDocumentAccessMode, t)
@@ -4663,7 +4663,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                   }
                   hint={t(
                     'digitalAvatar.workspace.documentAccessHint',
-                    '访客可读写文档，写入行为受策略控制。',
+                    'Visitors can read and write documents, and write operations are controlled by policy.',
                   )}
                   alignTop
                 />
@@ -4746,7 +4746,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                   value={permissionScopeHint}
                   hint={t(
                     'digitalAvatar.workspace.capabilityScopeNote',
-                    '这里调整的是访客可见的文档与能力边界；底层服务 Agent 的实际扩展、技能和提示词仍由管理 Agent 或高级配置维护。',
+                    'This area adjusts the document and capability boundary visible to visitors. The actual extensions, skills, and prompts of the underlying service agent are still maintained by the managing agent or advanced configuration.',
                   )}
                   alignTop
                 />
@@ -4760,7 +4760,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                       disabled={savingPermissionConfig}
                     >
                       {savingPermissionConfig ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
-                      {t('digitalAvatar.actions.savePermissionConfig', '保存权限配置')}
+                      {t('digitalAvatar.actions.savePermissionConfig', 'Save permission config')}
                     </Button>
                   </div>
                 ) : null}
@@ -4799,7 +4799,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                   {permissionSelectorDialog === 'extensions'
                     ? (selectedAvatarRuntimeExtensionOptions.length === 0 ? (
                         <p className="text-sm text-muted-foreground">
-                          {t('digitalAvatar.workspace.noEnabledExtensions', '当前服务分身没有已启用扩展')}
+                          {t('digitalAvatar.workspace.noEnabledExtensions', 'The current service avatar has no enabled extensions')}
                         </p>
                       ) : (
                         selectedAvatarRuntimeExtensionOptions.map((option) => {
@@ -4826,7 +4826,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                                   ) : null}
                                 </div>
                                 <Badge variant={active ? 'default' : 'outline'} className="text-[10px]">
-                                  {active ? t('common.enabled', '已启用') : t('common.disabled', '未启用')}
+                                  {active ? t('common.enabled', 'Enabled') : t('common.disabled', 'Disabled')}
                                 </Badge>
                               </div>
                             </button>
@@ -4835,7 +4835,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                       ))
                     : (selectedAvatarAssignedSkillEntries.length === 0 ? (
                         <p className="text-sm text-muted-foreground">
-                          {t('digitalAvatar.workspace.noEnabledSkills', '该 Agent 暂无已分配技能')}
+                          {t('digitalAvatar.workspace.noEnabledSkills', 'This agent has no assigned skills yet')}
                         </p>
                       ) : (
                         selectedAvatarAssignedSkillEntries.map((entry) => {
@@ -4857,7 +4857,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                               <div className="flex items-center justify-between gap-3">
                                 <p className="text-sm font-medium text-foreground">{entry.name}</p>
                                 <Badge variant={active ? 'default' : 'outline'} className="text-[10px]">
-                                  {active ? t('common.enabled', '已启用') : t('common.disabled', '未启用')}
+                                  {active ? t('common.enabled', 'Enabled') : t('common.disabled', 'Disabled')}
                                 </Badge>
                               </div>
                             </button>
@@ -4882,7 +4882,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                 <p className="text-caption text-muted-foreground">
                   {t(
                     'digitalAvatar.governance.controlHint',
-                    '把治理事项按待处理、已处理和自动治理记录分层显示，先决策，再回看自动执行轨迹。'
+                    'Layer governance items into pending, processed, and automated records so decisions come first and automatic execution trails can be reviewed afterward.'
                   )}
                 </p>
               </CardHeader>
@@ -5009,8 +5009,8 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                   </div>
                   <div className="rounded-md border bg-muted/20 p-2 text-caption text-muted-foreground">
                     {t(
-                      'digitalAvatar.governance.queueSummary',
-                      '低风险动作会自动执行；这里仅保留需要管理 Agent 或人工确认的治理事项。'
+                    'digitalAvatar.governance.queueSummary',
+                      'Low-risk actions run automatically; only items that need the managing agent or human approval remain here.'
                     )}
                   </div>
                   <div className="space-y-2 max-h-[230px] overflow-y-auto pr-1">
@@ -5149,7 +5149,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                 <p className="text-caption text-muted-foreground">
                   {t(
                     'digitalAvatar.governance.timelineHint',
-                    '先看这条时间线快速判断最近发生了什么；需要深挖时再看完整事件流。'
+                    'Use this timeline first to quickly understand what happened recently; open the full event stream only when you need deeper investigation.'
                   )}
                 </p>
               </CardHeader>
@@ -5351,7 +5351,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                 <p className="text-caption text-muted-foreground">
                   {t(
                     'digitalAvatar.governance.runtimeEventsHint',
-                    '记录管理 Agent 全量执行事件（状态/思考/工具/结果/完成），支持分类筛选与追溯排查。'
+                    'Records the full execution event stream of the managing agent (status, thinking, tool, result, completion) and supports filtered investigation and trace-back.'
                   )}
                 </p>
               </CardHeader>
@@ -5666,8 +5666,8 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                       <InspectorSection
                         title={t('digitalAvatar.workspace.publicConfigTitle', '对外配置与生效')}
                         description={t(
-                          'digitalAvatar.workspace.publishMode.compareHint',
-                          '访客页用于正式对外交付，管理预览用于内部验收，测试入口用于联调排查。'
+                        'digitalAvatar.workspace.publishMode.compareHint',
+                          'The visitor page is for formal external delivery, management preview is for internal acceptance, and the test entry is for integration debugging.'
                         )}
                         action={
                           <button
@@ -5675,30 +5675,30 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                             className={INSPECTOR_ACTION_LINK_CLASS}
                             onClick={() => setPublishModeGuideOpen(true)}
                           >
-                            {t('digitalAvatar.workspace.publishMode.openGuide', '查看说明')}
+                            {t('digitalAvatar.workspace.publishMode.openGuide', 'View guide')}
                           </button>
                         }
                       >
                         <InspectorField
-                          label={t('digitalAvatar.workspace.outputFormLabel', '配置输出形态')}
+                          label={t('digitalAvatar.workspace.outputFormLabel', 'Configured output form')}
                           value={selectedAvatarOutputFormLabel}
                         />
                         <InspectorField
-                          label={t('digitalAvatar.workspace.effectiveExposureLabel', '生效对外曝光')}
+                          label={t('digitalAvatar.workspace.effectiveExposureLabel', 'Effective public exposure')}
                           value={selectedAvatarExposureLabel}
                         />
                         <InspectorField
-                          label={t('digitalAvatar.workspace.publishMode.currentMode', '当前视角')}
+                          label={t('digitalAvatar.workspace.publishMode.currentMode', 'Current view')}
                           value={
                             <div className="flex flex-wrap gap-4">
                               {availablePublishModes.map((mode) => {
                                 const active = publishViewMode === mode;
                                 const label =
                                   mode === 'visitor'
-                                    ? t('digitalAvatar.workspace.publishMode.visitorTab', '访客视角')
+                                    ? t('digitalAvatar.workspace.publishMode.visitorTab', 'Visitor view')
                                     : mode === 'preview'
-                                      ? t('digitalAvatar.workspace.publishMode.previewTab', '管理预览')
-                                      : t('digitalAvatar.workspace.publishMode.testTab', '测试入口');
+                                      ? t('digitalAvatar.workspace.publishMode.previewTab', 'Management preview')
+                                      : t('digitalAvatar.workspace.publishMode.testTab', 'Test entry');
                                 return (
                                   <button
                                     key={mode}
@@ -5718,23 +5718,23 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                           alignTop
                         />
                         <InspectorField
-                          label={t('digitalAvatar.workspace.publishMode.visitorAddress', '访客入口')}
+                          label={t('digitalAvatar.workspace.publishMode.visitorAddress', 'Visitor entry')}
                           value={activePublishUrl || t('digitalAvatar.labels.unset')}
                           hint={publishModeDescription.title}
                           alignTop
                         />
                       </InspectorSection>
                       <InspectorSection
-                        title={t('digitalAvatar.workspace.publicNarrativeTitle', '公开页顶部叙事')}
+                        title={t('digitalAvatar.workspace.publicNarrativeTitle', 'Public-page top narrative')}
                         description={
                           selectedAvatarNarrativeConfigured
                             ? t(
                                 'digitalAvatar.workspace.publicNarrativeConfiguredHint',
-                                '已配置对外页面顶部说明，可向访客解释这个分身为什么存在、适合处理什么以及如何开始。'
+                                'A public-page narrative has been configured to explain why this avatar exists, what it is good at, and how visitors should begin.'
                               )
                             : t(
                                 'digitalAvatar.workspace.publicNarrativeEmptyHint',
-                                '还未配置顶部叙事，建议补充一段用户向说明，帮助访客快速理解这个分身的定位。'
+                                'The top-page narrative is not configured yet. Add a visitor-facing explanation so people can quickly understand this avatar’s role.'
                               )
                         }
                         action={
@@ -5744,18 +5744,18 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                               className={INSPECTOR_ACTION_LINK_CLASS}
                               onClick={() => setPublicNarrativeDialogOpen(true)}
                             >
-                              {t('digitalAvatar.workspace.editPublicNarrative', '编辑叙事')}
+                              {t('digitalAvatar.workspace.editPublicNarrative', 'Edit narrative')}
                             </button>
                           ) : null
                         }
                       >
                         <InspectorField
-                          label={t('digitalAvatar.workspace.publicNarrativeSummaryLabel', '当前摘要')}
+                          label={t('digitalAvatar.workspace.publicNarrativeSummaryLabel', 'Current summary')}
                           value={publishHeroIntro.trim() || t('digitalAvatar.labels.unset')}
                           alignTop
                         />
                         <InspectorField
-                          label={t('digitalAvatar.workspace.publicNarrativeUseCasesLabel', '典型任务')}
+                          label={t('digitalAvatar.workspace.publicNarrativeUseCasesLabel', 'Typical tasks')}
                           value={
                             selectedAvatarNarrativeUseCases.length > 0 ? (
                               <ul className="space-y-1.5 pl-4 text-[13px] font-medium leading-6 text-foreground">
@@ -5766,7 +5766,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                                 ))}
                               </ul>
                             ) : (
-                              t('digitalAvatar.workspace.publicNarrativeNoUseCases', '未设置典型任务')
+                              t('digitalAvatar.workspace.publicNarrativeNoUseCases', 'No typical tasks configured')
                             )
                           }
                           alignTop
@@ -5902,18 +5902,18 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
       <Dialog open={publicNarrativeDialogOpen} onOpenChange={setPublicNarrativeDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{t('digitalAvatar.workspace.publicNarrativeTitle', '公开页顶部叙事')}</DialogTitle>
+            <DialogTitle>{t('digitalAvatar.workspace.publicNarrativeTitle', 'Public-page top narrative')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm leading-6 text-muted-foreground">
               {t(
                 'digitalAvatar.workspace.publicNarrativeDialogHint',
-                '这里填写的是公开页顶部给访客看的说明，重点解释这个分身为什么存在、适合处理什么，以及用户该如何开始。',
+                'This field controls the visitor-facing explanation shown at the top of the public page. Focus on why this avatar exists, what it is good at, and how users should begin.',
               )}
             </p>
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                {t('digitalAvatar.workspace.publicNarrativeIntroLabel', '顶部主叙事')}
+                {t('digitalAvatar.workspace.publicNarrativeIntroLabel', 'Top narrative')}
               </label>
               <Textarea
                 rows={4}
@@ -5921,14 +5921,14 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                 onChange={(event) => setPublishHeroIntro(event.target.value)}
                 placeholder={t(
                   'digitalAvatar.workspace.publicNarrativeIntroPlaceholder',
-                  '例如：这是一个面向客户支持的服务分身，专门帮助用户基于产品资料快速定位问题、整理答案并给出下一步建议。',
+                  'For example: this is a service avatar for customer support, specialized in locating issues quickly from product materials, organizing answers, and suggesting next steps.',
                 )}
                 disabled={!canManage}
               />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">
-                {t('digitalAvatar.workspace.publicNarrativeUseCasesLabel', '典型任务（每行一条）')}
+                {t('digitalAvatar.workspace.publicNarrativeUseCasesLabel', 'Typical tasks (one per line)')}
               </label>
               <Textarea
                 rows={5}
@@ -5936,7 +5936,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                 onChange={(event) => setPublishHeroUseCasesText(event.target.value)}
                 placeholder={t(
                   'digitalAvatar.workspace.publicNarrativeUseCasesPlaceholder',
-                  '回答产品使用问题\n根据资料整理计划\n继续处理指定文档',
+                  'Answer product usage questions\nCreate plans from materials\nContinue working on a specified document',
                 )}
                 disabled={!canManage}
               />
@@ -5944,7 +5944,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">
-                  {t('digitalAvatar.workspace.publicNarrativeWorkingStyleLabel', '处理方式说明')}
+                  {t('digitalAvatar.workspace.publicNarrativeWorkingStyleLabel', 'Working-style note')}
                 </label>
                 <Textarea
                   rows={4}
@@ -5952,14 +5952,14 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                   onChange={(event) => setPublishHeroWorkingStyle(event.target.value)}
                   placeholder={t(
                     'digitalAvatar.workspace.publicNarrativeWorkingStylePlaceholder',
-                    '例如：我会先基于当前开放资料处理；超出范围时，会继续交给管理 Agent 判断。',
+                    'For example: I first work from currently available materials; if the request is out of scope, I escalate it to the managing agent.',
                   )}
                   disabled={!canManage}
                 />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">
-                  {t('digitalAvatar.workspace.publicNarrativeCtaHintLabel', '开始提示')}
+                  {t('digitalAvatar.workspace.publicNarrativeCtaHintLabel', 'Getting-started hint')}
                 </label>
                 <Textarea
                   rows={4}
@@ -5967,7 +5967,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                   onChange={(event) => setPublishHeroCtaHint(event.target.value)}
                   placeholder={t(
                     'digitalAvatar.workspace.publicNarrativeCtaHintPlaceholder',
-                    '例如：直接在对话频道描述问题；如果需要我结合资料处理，先去资料频道选中目标文档。',
+                    'For example: describe the issue directly in the chat channel; if you want me to work with materials, select the target document in the documents channel first.',
                   )}
                   disabled={!canManage}
                 />
@@ -5975,12 +5975,12 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
             </div>
             <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={() => setPublicNarrativeDialogOpen(false)}>
-                {t('common.cancel', '取消')}
+                {t('common.cancel', 'Cancel')}
               </Button>
               {canManage ? (
                 <Button className={AVATAR_PRIMARY_BUTTON_CLASS} onClick={handleSavePublicNarrative} disabled={savingNarrativeConfig}>
                   {savingNarrativeConfig ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
-                  {t('common.save', '保存')}
+                  {t('common.save', 'Save')}
                 </Button>
               ) : null}
             </div>
@@ -5991,24 +5991,24 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
       <Dialog open={publishModeGuideOpen} onOpenChange={setPublishModeGuideOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>{t('digitalAvatar.workspace.publishMode.compareTitle', '视角切换说明')}</DialogTitle>
+            <DialogTitle>{t('digitalAvatar.workspace.publishMode.compareTitle', 'View-switch guide')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm leading-6 text-muted-foreground">
-              {t('digitalAvatar.workspace.publishMode.compareHint', '访客页用于正式对外交付，管理预览用于内部验收，测试入口用于联调排查。')}
+              {t('digitalAvatar.workspace.publishMode.compareHint', 'The visitor page is for formal external delivery, management preview is for internal acceptance, and the test entry is for integration debugging.')}
             </p>
             <div className="grid gap-3 sm:grid-cols-3">
               {availablePublishModes.map((mode) => {
                 const title = mode === 'visitor'
-                  ? t('digitalAvatar.workspace.publishMode.visitorTab', '访客视角')
+                  ? t('digitalAvatar.workspace.publishMode.visitorTab', 'Visitor view')
                   : mode === 'preview'
-                  ? t('digitalAvatar.workspace.publishMode.previewTab', '管理预览')
-                  : t('digitalAvatar.workspace.publishMode.testTab', '测试入口');
+                  ? t('digitalAvatar.workspace.publishMode.previewTab', 'Management preview')
+                  : t('digitalAvatar.workspace.publishMode.testTab', 'Test entry');
                 const desc = mode === 'visitor'
-                  ? t('digitalAvatar.workspace.publishMode.visitorDesc', '这是外部用户最终看到的数字分身页面，重点是能力说明、边界提示和对话入口。')
+                  ? t('digitalAvatar.workspace.publishMode.visitorDesc', 'This is the final digital-avatar page seen by external users, focused on capability explanation, boundary hints, and the conversation entry.')
                   : mode === 'preview'
-                  ? t('digitalAvatar.workspace.publishMode.previewDesc', '用于内部检查页面内容、权限边界和对话入口是否按预期展示。')
-                  : t('digitalAvatar.workspace.publishMode.testDesc', '用于联调、网络验证或内网快速访问，不代表正式访客入口。');
+                  ? t('digitalAvatar.workspace.publishMode.previewDesc', 'Used internally to check whether page content, permission boundaries, and the chat entry are displayed as expected.')
+                  : t('digitalAvatar.workspace.publishMode.testDesc', 'Used for integration debugging, network verification, or quick internal access. It is not the formal visitor entry.');
                 return (
                   <div
                     key={`publish-guide-${mode}`}
@@ -6022,7 +6022,7 @@ export function DigitalAvatarSection({ teamId, canManage }: DigitalAvatarSection
                       <p className="text-sm font-medium text-foreground">{title}</p>
                       {publishViewMode === mode ? (
                         <span className="rounded-full border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
-                          {t('digitalAvatar.workspace.publishMode.currentMode', '当前')}
+                          {t('digitalAvatar.workspace.publishMode.currentMode', 'Current')}
                         </span>
                       ) : null}
                     </div>

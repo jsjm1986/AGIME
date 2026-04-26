@@ -646,6 +646,8 @@ fn build_harness_delegation_overlay_text(overlay: &HarnessDelegationOverlay) -> 
 
 fn build_surface_contract_overlay_text(contract: &SurfacePromptContract) -> String {
     let mut lines = vec![match contract.session_source.as_str() {
+        "automation_builder" => "This is an Agentify builder surface. Stay in direct builder mode, validate real API paths, and do not use delegation or swarm.".to_string(),
+        "automation_runtime" => "This is an Agentify published app runtime surface. Treat session creation as initialization only, and only act when there is an actual user request in the current turn.".to_string(),
         "channel_runtime" => "This is an explicit channel execution turn. Treat it as a focused execution step inside a collaboration thread.".to_string(),
         "channel_conversation" => "This is a channel collaboration conversation surface. Continue the thread naturally, as an ongoing work dialogue rather than a one-shot execution task.".to_string(),
         "system" => "This is a system surface. Completion is contract-driven and may be blocked when required content access or validation is missing.".to_string(),

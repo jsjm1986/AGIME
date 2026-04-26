@@ -10,6 +10,7 @@ mod auth;
 mod automation;
 mod config;
 mod license;
+mod scheduled_tasks;
 mod state;
 
 #[cfg(all(feature = "tls-rustls", feature = "tls-native"))]
@@ -18,6 +19,7 @@ compile_error!("features `tls-rustls` and `tls-native` are mutually exclusive");
 compile_error!("one TLS backend feature must be enabled: `tls-rustls` or `tls-native`");
 
 use agime::config::paths::Paths;
+use agime::context_runtime::DEFAULT_AUTO_COMPACT_THRESHOLD;
 use agime_mcp::{
     mcp_server_runner::{serve, McpCommand},
     AutoVisualiserRouter, ComputerControllerServer, DeveloperServer, MemoryServer, TutorialServer,
@@ -346,9 +348,20 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
     let direct_host_flag =
         std::env::var("TEAM_ENABLE_DIRECT_HARNESS_HOST").unwrap_or_else(|_| "unset".to_string());
     let direct_host_path = agent::server_harness_host::current_host_execution_path();
+    let auto_compact_threshold = std::env::var("AGIME_AUTO_COMPACT_THRESHOLD")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(DEFAULT_AUTO_COMPACT_THRESHOLD);
     info!(
         "Direct host rollout mode: path={:?}, TEAM_ENABLE_DIRECT_HARNESS_HOST={}",
         direct_host_path, direct_host_flag
+    );
+    info!(
+        "Context runtime mode: strategy=context_runtime, auto_threshold={:.1}%",
+        auto_compact_threshold * 100.0
+    );
+    info!(
+        "Chat/channel direct host uses the context_runtime subsystem; executor_mongo remains on a compatibility path until it is migrated"
     );
 
     info!(
@@ -752,31 +765,61 @@ fn build_router(state: Arc<AppState>) -> Router {
         DatabaseBackend::SQLite(_) => None,
     };
 
-    // Chat routes (Phase 1 - Chat Track, MongoDB only)
-    let chat_routes = match (&state.db, &chat_manager) {
-        (DatabaseBackend::MongoDB(db), Some(cm)) => Some(
-            agent::chat_router(db.clone(), cm.clone(), state.config.workspace_root.clone()).layer(
-                axum::middleware::from_fn_with_state(
-                    state.clone(),
-                    auth::middleware_mongo::auth_middleware,
+    let shared_channel_manager: Option<Arc<agent::chat_channel_manager::ChatChannelManager>> =
+        match &state.db {
+            DatabaseBackend::MongoDB(db) => Some(Arc::new(
+                agent::chat_channel_manager::ChatChannelManager::new_with_event_persistence(
+                    db.clone(),
                 ),
-            ),
+            )),
+            DatabaseBackend::SQLite(_) => None,
+        };
+
+    // Chat routes (Phase 1 - Chat Track, MongoDB only)
+    let chat_routes = match (&state.db, &chat_manager, &shared_channel_manager) {
+        (DatabaseBackend::MongoDB(db), Some(cm), Some(channel_manager)) => Some(
+            agent::chat_router(
+                db.clone(),
+                cm.clone(),
+                channel_manager.clone(),
+                state.config.workspace_root.clone(),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::middleware_mongo::auth_middleware,
+            )),
         ),
         _ => None,
     };
 
-    if let (DatabaseBackend::MongoDB(db), Some(cm)) = (&state.db, &chat_manager) {
-        let db = db.clone();
+    let chat_public_routes = match &state.db {
+        DatabaseBackend::MongoDB(db) => Some(agent::chat_public_router(db.clone())),
+        DatabaseBackend::SQLite(_) => None,
+    };
+
+    if let (DatabaseBackend::MongoDB(db), Some(cm), Some(channel_manager)) =
+        (&state.db, &chat_manager, &shared_channel_manager)
+    {
+        let automation_db = db.clone();
+        let scheduled_task_db = db.clone();
         let cm = cm.clone();
-        let workspace_root = state.config.workspace_root.clone();
+        let channel_manager = channel_manager.clone();
+        let automation_workspace_root = state.config.workspace_root.clone();
+        let scheduled_task_workspace_root = state.config.workspace_root.clone();
         tokio::spawn(async move {
-            let automation_service = automation::service::AutomationService::new(db.clone());
+            let automation_service =
+                automation::service::AutomationService::new(automation_db.clone());
             if let Err(error) = automation_service.ensure_indexes().await {
                 tracing::error!("Failed to ensure automation indexes: {}", error);
                 return;
             }
-            automation::spawn_scheduler(db, cm, workspace_root);
+            automation::spawn_scheduler(automation_db, cm, automation_workspace_root);
         });
+        scheduled_tasks::spawn_scheduler(
+            scheduled_task_db,
+            channel_manager,
+            scheduled_task_workspace_root,
+        );
     }
 
     if let DatabaseBackend::MongoDB(db) = &state.db {
@@ -819,6 +862,21 @@ fn build_router(state: Arc<AppState>) -> Router {
                     auth::middleware_mongo::auth_middleware,
                 ),
             ),
+        ),
+        _ => None,
+    };
+
+    let scheduled_task_routes = match (&state.db, &shared_channel_manager) {
+        (DatabaseBackend::MongoDB(db), Some(channel_manager)) => Some(
+            scheduled_tasks::router(
+                db.clone(),
+                channel_manager.clone(),
+                state.config.workspace_root.clone(),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::middleware_mongo::auth_middleware,
+            )),
         ),
         _ => None,
     };
@@ -876,6 +934,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         api_router = api_router.merge(portal_router);
     }
 
+    if let Some(chat_public_router) = chat_public_routes {
+        api_router = api_router.nest("/api/team/agent/chat", chat_public_router);
+    }
+
     // Add agent routes if available (MongoDB only)
     if let Some(agent_router) = agent_routes {
         api_router = api_router.nest("/api/team/agent", agent_router);
@@ -897,6 +959,10 @@ fn build_router(state: Arc<AppState>) -> Router {
 
     if let Some(automation_router) = automation_routes {
         api_router = api_router.nest("/api/team/automation", automation_router);
+    }
+
+    if let Some(scheduled_task_router) = scheduled_task_routes {
+        api_router = api_router.nest("/api/team/scheduled-tasks", scheduled_task_router);
     }
 
     let api_router = api_router

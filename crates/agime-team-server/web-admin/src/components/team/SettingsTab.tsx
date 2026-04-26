@@ -225,7 +225,7 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
           toneHint: chatAssistantToneHint || '',
         },
       });
-      setChatAssistantMsg('已保存对话助手语境');
+      setChatAssistantMsg(t('teams.settings.chatAssistant.saved'));
     } catch (err) {
       setChatAssistantMsg(err instanceof Error ? err.message : t('common.error'));
     } finally {
@@ -330,41 +330,81 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
       {isAdmin && !daLoading && (
         <Card className="ui-section-panel">
           <CardHeader>
-            <CardTitle className="ui-heading text-[22px]">对话助手语境</CardTitle>
+            <CardTitle className="ui-heading text-[22px]">
+              {t('teams.settings.chatAssistant.title')}
+            </CardTitle>
             <p className="ui-secondary-text text-sm">
-              这里只影响普通聊天窗口，用来告诉助手你们是什么团队、做什么、平时常用什么业务语境。针对某个用户怎么回复，更适合在个人记忆里设置。
+              {t('teams.settings.chatAssistant.description')}
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-1">
-                <label className="text-sm font-medium">公司名</label>
-                <Input value={chatAssistantCompanyName} onChange={(e) => setChatAssistantCompanyName(e.target.value)} placeholder="例如：AIATME" />
+                <label className="text-sm font-medium">
+                  {t('teams.settings.chatAssistant.companyName')}
+                </label>
+                <Input
+                  value={chatAssistantCompanyName}
+                  onChange={(e) => setChatAssistantCompanyName(e.target.value)}
+                  placeholder={t('teams.settings.chatAssistant.companyNamePlaceholder')}
+                />
               </div>
               <div className="space-y-1">
-                <label className="text-sm font-medium">部门名</label>
-                <Input value={chatAssistantDepartmentName} onChange={(e) => setChatAssistantDepartmentName(e.target.value)} placeholder="例如：平台研发部" />
+                <label className="text-sm font-medium">
+                  {t('teams.settings.chatAssistant.departmentName')}
+                </label>
+                <Input
+                  value={chatAssistantDepartmentName}
+                  onChange={(e) => setChatAssistantDepartmentName(e.target.value)}
+                  placeholder={t('teams.settings.chatAssistant.departmentNamePlaceholder')}
+                />
               </div>
               <div className="space-y-1">
-                <label className="text-sm font-medium">团队名</label>
-                <Input value={chatAssistantTeamName} onChange={(e) => setChatAssistantTeamName(e.target.value)} placeholder="例如：智能体平台团队" />
+                <label className="text-sm font-medium">
+                  {t('teams.settings.chatAssistant.teamName')}
+                </label>
+                <Input
+                  value={chatAssistantTeamName}
+                  onChange={(e) => setChatAssistantTeamName(e.target.value)}
+                  placeholder={t('teams.settings.chatAssistant.teamNamePlaceholder')}
+                />
               </div>
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium">团队简介</label>
-              <Textarea value={chatAssistantTeamSummary} onChange={(e) => setChatAssistantTeamSummary(e.target.value)} className="min-h-[90px]" placeholder="简短说明团队是谁、主要做什么。" />
+              <label className="text-sm font-medium">
+                {t('teams.settings.chatAssistant.teamSummary')}
+              </label>
+              <Textarea
+                value={chatAssistantTeamSummary}
+                onChange={(e) => setChatAssistantTeamSummary(e.target.value)}
+                className="min-h-[90px]"
+                placeholder={t('teams.settings.chatAssistant.teamSummaryPlaceholder')}
+              />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium">业务语境</label>
-              <Textarea value={chatAssistantBusinessContext} onChange={(e) => setChatAssistantBusinessContext(e.target.value)} className="min-h-[100px]" placeholder="例如：我们经常讨论 API、智能体、内部系统协作、产品设计与交付。" />
+              <label className="text-sm font-medium">
+                {t('teams.settings.chatAssistant.businessContext')}
+              </label>
+              <Textarea
+                value={chatAssistantBusinessContext}
+                onChange={(e) => setChatAssistantBusinessContext(e.target.value)}
+                className="min-h-[100px]"
+                placeholder={t('teams.settings.chatAssistant.businessContextPlaceholder')}
+              />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium">团队沟通氛围</label>
-              <Input value={chatAssistantToneHint} onChange={(e) => setChatAssistantToneHint(e.target.value)} placeholder="例如：内部交流偏直接务实，少官话、少营销腔" />
+              <label className="text-sm font-medium">
+                {t('teams.settings.chatAssistant.toneHint')}
+              </label>
+              <Input
+                value={chatAssistantToneHint}
+                onChange={(e) => setChatAssistantToneHint(e.target.value)}
+                placeholder={t('teams.settings.chatAssistant.toneHintPlaceholder')}
+              />
             </div>
             {chatAssistantMsg ? <p className="text-sm text-muted-foreground">{chatAssistantMsg}</p> : null}
             <Button onClick={handleSaveChatAssistant} disabled={chatAssistantSaving}>
-              {chatAssistantSaving ? t('common.saving') : '保存语境'}
+              {chatAssistantSaving ? t('common.saving') : t('teams.settings.chatAssistant.save')}
             </Button>
           </CardContent>
         </Card>

@@ -16,7 +16,6 @@ use crate::providers::toolshim::{
 };
 
 use crate::agents::final_output_tool::FINAL_OUTPUT_TOOL_NAME;
-use crate::agents::platform_tools::PLATFORM_MANAGE_SCHEDULE_TOOL_NAME;
 use crate::agents::subagent_tool::should_enable_subagents;
 use crate::agents::subagent_tool::SUBAGENT_TOOL_NAME;
 use crate::agents::swarm_tool::SWARM_TOOL_NAME;
@@ -29,10 +28,7 @@ use rmcp::model::Tool;
 fn is_router_always_available_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        SUBAGENT_TOOL_NAME
-            | SWARM_TOOL_NAME
-            | FINAL_OUTPUT_TOOL_NAME
-            | PLATFORM_MANAGE_SCHEDULE_TOOL_NAME
+        SUBAGENT_TOOL_NAME | SWARM_TOOL_NAME | FINAL_OUTPUT_TOOL_NAME
     )
 }
 

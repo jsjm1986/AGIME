@@ -18,6 +18,8 @@ use tokio_util::sync::CancellationToken;
 use super::api_tools::ApiToolsProvider;
 use super::avatar_governance_tools::{AvatarGovernanceRole, AvatarGovernanceToolsProvider};
 use super::capability_policy::resolve_document_policy;
+use super::chat_channel_manager::ChatChannelManager;
+use super::chat_delivery_tools::ChatDeliveryToolsProvider;
 use super::chat_memory_tools::ChatMemoryToolsProvider;
 use super::developer_tools::DeveloperToolsProvider;
 use super::document_tools::DocumentToolsProvider;
@@ -108,6 +110,7 @@ impl PlatformExtensionRunner {
     pub async fn create(
         enabled_extensions: &[AgentExtensionConfig],
         db: Option<Arc<MongoDb>>,
+        channel_manager: Option<Arc<ChatChannelManager>>,
         team_id: Option<&str>,
         actor_user_id: Option<&str>,
         session_source: Option<&str>,
@@ -208,8 +211,14 @@ impl PlatformExtensionRunner {
             }
 
             if ext_config.extension == BuiltinExtension::SkillRegistry {
-                if let Some(entry) =
-                    Self::try_init_skill_registry(&db, team_id, actor_user_id, agent_id).await
+                if let Some(entry) = Self::try_init_skill_registry(
+                    &db,
+                    team_id,
+                    actor_user_id,
+                    agent_id,
+                    workspace_path,
+                )
+                .await
                 {
                     extensions.push(entry);
                 }
@@ -315,6 +324,19 @@ impl PlatformExtensionRunner {
             }
         }
 
+        let should_load_chat_delivery = allowed_extension_names
+            .map(|set| set.contains("chat_delivery"))
+            .unwrap_or(true);
+        if should_load_chat_delivery && !extensions.iter().any(|e| e.name == "chat_delivery") {
+            if let Some(entry) = Self::try_init_chat_delivery(&db, team_id, session_id).await {
+                tracing::info!(
+                    "Platform extension 'chat_delivery' loaded by direct chat context: {} tools",
+                    entry.tools.len()
+                );
+                extensions.push(entry);
+            }
+        }
+
         // Fallback: load PortalTools only when explicitly in allowed_extensions whitelist.
         // Unlike DocumentTools (always useful), PortalTools should only be available
         // to agents that are explicitly configured for portal management.
@@ -355,9 +377,23 @@ impl PlatformExtensionRunner {
             }
         }
 
-        if !extensions.iter().any(|e| e.name == "team_mcp") {
-            if let Some(entry) =
-                Self::try_init_team_mcp(&db, team_id, actor_user_id, agent_id).await
+        let scheduled_task_runtime =
+            matches!(session_source, Some(source) if source.eq_ignore_ascii_case("scheduled_task"));
+        let should_load_team_mcp = !scheduled_task_runtime
+            && allowed_extension_names
+                .map(|set| set.contains("team_mcp"))
+                .unwrap_or(false);
+        if should_load_team_mcp && !extensions.iter().any(|e| e.name == "team_mcp") {
+            if let Some(entry) = Self::try_init_team_mcp(
+                &db,
+                &channel_manager,
+                team_id,
+                actor_user_id,
+                agent_id,
+                session_id,
+                workspace_root,
+            )
+            .await
             {
                 tracing::info!(
                     "Platform extension 'team_mcp' loaded by team context: {} tools",
@@ -495,6 +531,35 @@ impl PlatformExtensionRunner {
         }
     }
 
+    async fn try_init_chat_delivery(
+        db: &Option<Arc<MongoDb>>,
+        team_id: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Option<PlatformExtensionEntry> {
+        let (db, tid, session_id) = match (db, team_id, session_id) {
+            (Some(db), Some(tid), Some(session_id)) if !session_id.trim().is_empty() => {
+                (db, tid, session_id.trim())
+            }
+            _ => return None,
+        };
+        let agent_service = AgentService::new(db.clone());
+        let Ok(Some(session)) = agent_service.get_session(session_id).await else {
+            return None;
+        };
+        if !session.session_source.eq_ignore_ascii_case("chat") {
+            return None;
+        }
+        let provider =
+            ChatDeliveryToolsProvider::new(db.clone(), tid.to_string(), session_id.to_string());
+        match Self::init_from_client("chat_delivery", Box::new(provider)).await {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                tracing::warn!("Failed to init chat_delivery: {}", e);
+                None
+            }
+        }
+    }
+
     /// Try to initialize PortalTools if db+team+base_url context is available.
     /// Returns `None` if context is missing or initialization fails.
     async fn try_init_portal_tools(
@@ -577,6 +642,7 @@ impl PlatformExtensionRunner {
         team_id: Option<&str>,
         actor_user_id: Option<&str>,
         agent_id: Option<&str>,
+        workspace_path: Option<&str>,
     ) -> Option<PlatformExtensionEntry> {
         let (db, tid) = match (db, team_id) {
             (Some(db), Some(tid)) => (db, tid),
@@ -587,7 +653,8 @@ impl PlatformExtensionRunner {
             .unwrap_or("agent")
             .trim()
             .to_string();
-        let provider = SkillRegistryToolsProvider::new(db.clone(), tid.to_string(), actor_id);
+        let provider = SkillRegistryToolsProvider::new(db.clone(), tid.to_string(), actor_id)
+            .with_workspace_root(workspace_path.map(str::to_string));
         match Self::init_from_client("skill_registry", Box::new(provider)).await {
             Ok(entry) => {
                 tracing::info!(
@@ -605,9 +672,12 @@ impl PlatformExtensionRunner {
 
     async fn try_init_team_mcp(
         db: &Option<Arc<MongoDb>>,
+        channel_manager: &Option<Arc<ChatChannelManager>>,
         team_id: Option<&str>,
         actor_user_id: Option<&str>,
         agent_id: Option<&str>,
+        session_id: Option<&str>,
+        workspace_root: Option<&str>,
     ) -> Option<PlatformExtensionEntry> {
         let (db, tid, actor_id) = match (db, team_id, actor_user_id) {
             (Some(db), Some(tid), Some(actor_id)) if !actor_id.trim().is_empty() => {
@@ -620,6 +690,9 @@ impl PlatformExtensionRunner {
             tid.to_string(),
             actor_id.to_string(),
             agent_id.map(str::to_string),
+            session_id.map(str::to_string),
+            channel_manager.clone(),
+            workspace_root.map(str::to_string),
         );
         match Self::init_from_client("team_mcp", Box::new(provider)).await {
             Ok(entry) => Some(entry),

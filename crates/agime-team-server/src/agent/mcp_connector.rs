@@ -45,7 +45,16 @@ pub struct ToolDefinition {
 #[derive(Debug, Clone)]
 pub enum ToolContentBlock {
     Text(String),
-    Image { mime_type: String, data: String }, // base64 data
+    Image {
+        mime_type: String,
+        data: String,
+    }, // base64 data
+    Resource {
+        uri: String,
+        mime_type: Option<String>,
+        text: Option<String>,
+        blob: Option<String>,
+    },
     StructuredJson(serde_json::Value),
 }
 
@@ -1469,36 +1478,45 @@ impl McpConnector {
                         data: img.data.clone(),
                     });
                 }
-                _ => {
-                    // For other types, fall back to text representation
-                    let text = match content.raw {
-                        rmcp::model::RawContent::Audio(ref audio) => {
-                            format!("[Audio: {}]", audio.mime_type)
-                        }
-                        rmcp::model::RawContent::Resource(ref res) => match &res.resource {
-                            rmcp::model::ResourceContents::TextResourceContents {
-                                uri,
-                                text,
-                                ..
-                            } => {
-                                if text.is_empty() {
-                                    format!("[Resource: {}]", uri)
-                                } else {
-                                    text.clone()
-                                }
-                            }
-                            rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => {
-                                format!("[Blob Resource: {}]", uri)
-                            }
-                        },
-                        rmcp::model::RawContent::ResourceLink(ref link) => {
-                            format!("[ResourceLink: {}]", link.uri)
-                        }
-                        _ => String::new(),
-                    };
-                    if !text.is_empty() {
-                        blocks.push(ToolContentBlock::Text(text));
+                rmcp::model::RawContent::Resource(ref res) => match &res.resource {
+                    rmcp::model::ResourceContents::TextResourceContents {
+                        uri,
+                        mime_type,
+                        text,
+                        ..
+                    } => {
+                        blocks.push(ToolContentBlock::Resource {
+                            uri: uri.clone(),
+                            mime_type: mime_type.clone(),
+                            text: Some(text.clone()),
+                            blob: None,
+                        });
                     }
+                    rmcp::model::ResourceContents::BlobResourceContents {
+                        uri,
+                        mime_type,
+                        blob,
+                        ..
+                    } => {
+                        blocks.push(ToolContentBlock::Resource {
+                            uri: uri.clone(),
+                            mime_type: mime_type.clone(),
+                            text: None,
+                            blob: Some(blob.clone()),
+                        });
+                    }
+                },
+                rmcp::model::RawContent::Audio(ref audio) => {
+                    blocks.push(ToolContentBlock::Text(format!(
+                        "[Audio: {}]",
+                        audio.mime_type
+                    )));
+                }
+                rmcp::model::RawContent::ResourceLink(ref link) => {
+                    blocks.push(ToolContentBlock::Text(format!(
+                        "[ResourceLink: {}]",
+                        link.uri
+                    )));
                 }
             }
         }
@@ -1877,6 +1895,40 @@ mod tests {
             .find_map(|c| c.as_text().map(|t| t.text.clone()))
             .unwrap_or_default();
         assert_eq!(text, "hello from task");
+    }
+
+    #[test]
+    fn extract_tool_result_blocks_preserves_html_blob_resource() {
+        let result = CallToolResult {
+            content: vec![rmcp::model::Content::resource(
+                rmcp::model::ResourceContents::BlobResourceContents {
+                    uri: "ui://sankey/diagram".to_string(),
+                    mime_type: Some("text/html".to_string()),
+                    blob: "PGh0bWw+PC9odG1sPg==".to_string(),
+                    meta: None,
+                },
+            )],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let blocks = McpConnector::extract_tool_result_blocks(&result);
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+            ToolContentBlock::Resource {
+                uri,
+                mime_type,
+                text,
+                blob,
+            } => {
+                assert_eq!(uri, "ui://sankey/diagram");
+                assert_eq!(mime_type.as_deref(), Some("text/html"));
+                assert!(text.is_none());
+                assert_eq!(blob.as_deref(), Some("PGh0bWw+PC9odG1sPg=="));
+            }
+            other => panic!("expected resource block, got {other:?}"),
+        }
     }
 
     #[test]

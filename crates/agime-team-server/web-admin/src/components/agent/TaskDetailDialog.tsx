@@ -73,6 +73,7 @@ function mergeResults(results: TaskResult[]): TaskResult[] {
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   pending: 'outline',
   approved: 'secondary',
+  queued: 'secondary',
   rejected: 'destructive',
   running: 'default',
   completed: 'default',
@@ -148,7 +149,7 @@ export function TaskDetailDialog({ task, open, onOpenChange, onAction }: Props) 
   // SSE streaming for running tasks
   useEffect(() => {
     if (!task || !open) return;
-    if (task.status !== 'running' && task.status !== 'approved') return;
+    if (task.status !== 'running' && task.status !== 'approved' && task.status !== 'queued') return;
 
     const es = taskApi.streamTaskResults(task.id);
     eventSourceRef.current = es;
@@ -208,7 +209,11 @@ export function TaskDetailDialog({ task, open, onOpenChange, onAction }: Props) 
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
             <span>{t('agent.task.detail', 'Task Detail')}</span>
-            <Badge variant={STATUS_VARIANTS[task.status] || 'outline'}>{t(`agent.status.${task.status}`)}</Badge>
+            <Badge variant={STATUS_VARIANTS[task.status] || 'outline'}>
+              {task.status === 'queued'
+                ? t('agent.status.queued', 'Queued')
+                : t(`agent.status.${task.status}`)}
+            </Badge>
           </DialogTitle>
         </DialogHeader>
 
@@ -332,7 +337,7 @@ export function TaskDetailDialog({ task, open, onOpenChange, onAction }: Props) 
               </Button>
             </div>
           )}
-          {(task.status === 'approved' || task.status === 'running') && (
+          {(task.status === 'approved' || task.status === 'queued' || task.status === 'running') && (
             <div className="flex gap-2 pt-4 border-t">
               <Button variant="destructive" onClick={() => handleAction(taskApi.cancelTask)} disabled={actionLoading}>
                 {t('agent.actions.cancel')}

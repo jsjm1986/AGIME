@@ -3,10 +3,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+use super::completion::CompletionSurfacePolicy;
 use super::delegation::DelegationRuntimeState;
-use super::result_budget::{
-    InMemoryToolResultStore, SharedContentReplacementState, ToolResultBudget,
-};
+use super::result_budget::ToolResultBudget;
 use super::signals::{CoordinatorSignalStore, SharedCoordinatorSignalStore};
 use super::state::{CoordinatorExecutionMode, HarnessMode, ProviderTurnMode};
 use super::task_runtime::TaskRuntime;
@@ -49,21 +48,21 @@ pub struct HarnessContext {
     pub mode: HarnessMode,
     pub coordinator_execution_mode: CoordinatorExecutionMode,
     pub provider_turn_mode: ProviderTurnMode,
+    pub completion_surface_policy: CompletionSurfacePolicy,
     pub delegation: DelegationRuntimeState,
     pub write_scope: Vec<String>,
     pub target_artifacts: Vec<String>,
     pub result_contract: Vec<String>,
+    pub validation_mode: bool,
     pub server_local_tool_names: Vec<String>,
     pub required_tool_prefixes: Vec<String>,
     pub task_budget_tokens: Option<u32>,
     pub task_runtime: Arc<TaskRuntime>,
     pub tool_result_budget: ToolResultBudget,
-    pub tool_result_store: Arc<InMemoryToolResultStore>,
     pub coordinator_signals: SharedCoordinatorSignalStore,
     pub permission_context: HarnessPermissionContext,
     pub transition_trace: SharedTransitionTrace,
     pub query_tracking: QueryTrackingState,
-    pub content_replacement_state: SharedContentReplacementState,
     pub worker_runtime: Option<HarnessWorkerRuntimeContext>,
 }
 
@@ -78,10 +77,12 @@ impl HarnessContext {
         mode: HarnessMode,
         coordinator_execution_mode: CoordinatorExecutionMode,
         provider_turn_mode: ProviderTurnMode,
+        completion_surface_policy: CompletionSurfacePolicy,
         delegation: DelegationRuntimeState,
         write_scope: Vec<String>,
         target_artifacts: Vec<String>,
         result_contract: Vec<String>,
+        validation_mode: bool,
         server_local_tool_names: Vec<String>,
         required_tool_prefixes: Vec<String>,
         task_budget_tokens: Option<u32>,
@@ -98,16 +99,17 @@ impl HarnessContext {
             mode,
             coordinator_execution_mode,
             provider_turn_mode,
+            completion_surface_policy,
             delegation: delegation.clone(),
             write_scope,
             target_artifacts,
             result_contract,
+            validation_mode,
             server_local_tool_names,
             required_tool_prefixes,
             task_budget_tokens,
             task_runtime,
             tool_result_budget: ToolResultBudget::default(),
-            tool_result_store: InMemoryToolResultStore::shared(),
             coordinator_signals: CoordinatorSignalStore::shared(),
             permission_context: HarnessPermissionContext {
                 mode,
@@ -118,9 +120,6 @@ impl HarnessContext {
             },
             transition_trace: shared_transition_trace(),
             query_tracking: QueryTrackingState::default(),
-            content_replacement_state: Arc::new(tokio::sync::Mutex::new(
-                super::result_budget::ContentReplacementState::default(),
-            )),
             worker_runtime,
         }
     }

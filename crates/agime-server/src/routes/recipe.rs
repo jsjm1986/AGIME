@@ -126,12 +126,6 @@ pub struct ListRecipeResponse {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct ScheduleRecipeRequest {
-    id: String,
-    cron_schedule: Option<String>,
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
 pub struct SetSlashCommandRequest {
     id: String,
     slash_command: Option<String>,
@@ -293,13 +287,6 @@ async fn list_recipes(
         .collect();
     state.set_recipe_file_hash_map(recipe_file_hash_map).await;
 
-    let scheduler = state.scheduler();
-    let scheduled_jobs = scheduler.list_scheduled_jobs().await;
-    let schedule_map: HashMap<_, _> = scheduled_jobs
-        .into_iter()
-        .map(|j| (PathBuf::from(j.source), j.cron))
-        .collect();
-
     let all_commands = slash_commands::list_commands();
     let slash_map: HashMap<_, _> = all_commands
         .into_iter()
@@ -307,9 +294,6 @@ async fn list_recipes(
         .collect();
 
     for manifest in &mut manifests {
-        if let Some(cron) = schedule_map.get(&manifest.file_path) {
-            manifest.schedule_cron = Some(cron.clone());
-        }
         if let Some(command) = slash_map.get(&manifest.file_path) {
             manifest.slash_command = Some(command.clone());
         }
@@ -344,39 +328,6 @@ async fn delete_recipe(
     }
 
     StatusCode::NO_CONTENT
-}
-
-#[utoipa::path(
-    post,
-    path = "/recipes/schedule",
-    request_body = ScheduleRecipeRequest,
-    responses(
-        (status = 200, description = "Recipe scheduled successfully"),
-        (status = 404, description = "Recipe not found"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "Recipe Management"
-)]
-async fn schedule_recipe(
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<ScheduleRecipeRequest>,
-) -> Result<StatusCode, StatusCode> {
-    let file_path = match get_recipe_file_path_by_id(state.as_ref(), &request.id).await {
-        Ok(path) => path,
-        Err(err) => return Err(err.status),
-    };
-
-    let scheduler = state.scheduler();
-    match scheduler
-        .schedule_recipe(file_path, request.cron_schedule)
-        .await
-    {
-        Ok(_) => Ok(StatusCode::OK),
-        Err(e) => {
-            tracing::error!("Failed to schedule recipe: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
 }
 
 #[utoipa::path(
@@ -524,7 +475,6 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/recipes/scan", post(scan_recipe))
         .route("/recipes/list", get(list_recipes))
         .route("/recipes/delete", post(delete_recipe))
-        .route("/recipes/schedule", post(schedule_recipe))
         .route("/recipes/slash-command", post(set_recipe_slash_command))
         .route("/recipes/save", post(save_recipe))
         .route("/recipes/parse", post(parse_recipe))

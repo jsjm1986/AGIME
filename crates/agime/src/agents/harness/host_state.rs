@@ -5,10 +5,11 @@ use crate::agents::extension::ExtensionConfig;
 use crate::session::extension_data::ExtensionState;
 use crate::session::SessionManager;
 
-use super::completion::ExecuteCompletionOutcome;
+use super::completion::{CompletionSurfacePolicy, ExecuteCompletionOutcome};
 use super::delegation::DelegationMode;
 use super::signals::CoordinatorSignalSummary;
 use super::state::{CoordinatorExecutionMode, ProviderTurnMode};
+use super::transition::TransitionTrace;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HarnessHostSessionState {
@@ -19,6 +20,8 @@ pub struct HarnessHostSessionState {
     pub coordinator_execution_mode: CoordinatorExecutionMode,
     #[serde(default)]
     pub provider_turn_mode: ProviderTurnMode,
+    #[serde(default)]
+    pub completion_surface_policy: CompletionSurfacePolicy,
     pub write_scope: Vec<String>,
     pub target_artifacts: Vec<String>,
     pub result_contract: Vec<String>,
@@ -37,6 +40,8 @@ pub struct HarnessHostSessionState {
     pub last_signal_summary: Option<CoordinatorSignalSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_completion_outcome: Option<ExecuteCompletionOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_transition_trace: Option<TransitionTrace>,
 }
 
 impl ExtensionState for HarnessHostSessionState {
@@ -91,6 +96,25 @@ pub async fn update_host_completion_outcome(
     Ok(())
 }
 
+pub async fn update_host_transition_trace(session_id: &str, trace: TransitionTrace) -> Result<()> {
+    if let Some(mut state) = load_host_session_state(session_id).await? {
+        let merged = match state.last_transition_trace.take() {
+            Some(mut existing) => {
+                existing.records.extend(trace.records);
+                if existing.records.len() > existing.max_records {
+                    let trim = existing.records.len().saturating_sub(existing.max_records);
+                    existing.records.drain(0..trim);
+                }
+                existing
+            }
+            None => trace,
+        };
+        state.last_transition_trace = Some(merged);
+        save_host_session_state(session_id, &state).await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +159,7 @@ mod tests {
                 delegation_mode: DelegationMode::Swarm,
                 coordinator_execution_mode: CoordinatorExecutionMode::ExplicitSwarm,
                 provider_turn_mode: ProviderTurnMode::Aggregated,
+                completion_surface_policy: CompletionSurfacePolicy::Conversation,
                 write_scope: Vec::new(),
                 target_artifacts: Vec::new(),
                 result_contract: Vec::new(),
@@ -147,6 +172,7 @@ mod tests {
                 last_notification_summary: None,
                 last_signal_summary: None,
                 last_completion_outcome: None,
+                last_transition_trace: None,
             },
         )
         .await

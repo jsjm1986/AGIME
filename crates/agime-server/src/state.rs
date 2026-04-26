@@ -1,5 +1,4 @@
 use agime::execution::manager::AgentManager;
-use agime::scheduler_trait::SchedulerTrait;
 use axum::http::StatusCode;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -27,11 +26,6 @@ impl AppState {
             recipe_session_tracker: Arc::new(Mutex::new(HashSet::new())),
         }))
     }
-
-    pub fn scheduler(&self) -> Arc<dyn SchedulerTrait> {
-        self.agent_manager.scheduler()
-    }
-
     pub async fn set_recipe_file_hash_map(&self, hash_map: HashMap<String, PathBuf>) {
         let mut map = self.recipe_file_hash_map.lock().await;
         *map = hash_map;

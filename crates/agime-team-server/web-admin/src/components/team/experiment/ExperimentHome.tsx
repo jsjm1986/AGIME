@@ -1,4 +1,5 @@
 import { ArrowRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "../../ui/button";
 import { Card, CardContent } from "../../ui/card";
@@ -8,6 +9,7 @@ import {
   EXPERIMENT_LABS,
   type ExperimentLabDefinition,
   type ExperimentLabId,
+  localizeExperimentLab,
 } from "./labRegistry";
 
 interface ExperimentHomeProps {
@@ -37,7 +39,10 @@ function StatusBadge({ lab }: { lab: ExperimentLabDefinition }) {
 }
 
 export function ExperimentHome({ activeLabId, onOpenLab }: ExperimentHomeProps) {
-  const labs = EXPERIMENT_LABS.filter((lab) => lab.enabled);
+  const { i18n } = useTranslation();
+  const labs = EXPERIMENT_LABS
+    .filter((lab) => lab.enabled)
+    .map((lab) => localizeExperimentLab(lab, i18n.language));
   const singleLab = labs.length === 1;
 
   return (
@@ -98,7 +103,7 @@ export function ExperimentHome({ activeLabId, onOpenLab }: ExperimentHomeProps) 
                       className="rounded-full px-4"
                       disabled={!lab.enabled}
                     >
-                      {lab.enabled ? "进入应用" : "即将开放"}
+                      {lab.enabled ? "Open app" : "Coming soon"}
                       {lab.enabled ? <ArrowRight className="h-3.5 w-3.5" /> : null}
                     </Button>
                   </div>

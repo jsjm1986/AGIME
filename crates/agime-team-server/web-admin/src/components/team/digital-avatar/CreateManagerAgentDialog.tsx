@@ -23,7 +23,7 @@ function isManagerCandidate(agent: TeamAgent): boolean {
 
 function buildManagerAgentName(seed: string): string {
   const cleaned = seed.trim() || '数字分身';
-  const name = `${cleaned} - 管理Agent`;
+  const name = `${cleaned} - Manager`;
   if (name.length <= 100) return name;
   return name.slice(0, 100).trim();
 }

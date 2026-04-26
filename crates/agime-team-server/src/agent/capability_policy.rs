@@ -9,6 +9,48 @@ use serde::{Deserialize, Serialize};
 
 use super::session_mongo::AgentSessionDoc;
 
+pub fn is_non_delegating_session_source(session_source: &str) -> bool {
+    session_source.eq_ignore_ascii_case("portal_manager")
+        || session_source.eq_ignore_ascii_case("scheduled_task")
+        || session_source.eq_ignore_ascii_case("automation_builder")
+}
+
+fn post_filter_allowed_extensions_for_session_source(
+    session_source: &str,
+    mut effective_allowed_extension_names: Vec<String>,
+) -> Vec<String> {
+    if session_source.eq_ignore_ascii_case("scheduled_task") {
+        effective_allowed_extension_names.retain(|runtime_name| runtime_name != "tasks");
+    }
+    effective_allowed_extension_names
+}
+
+fn explicitly_requestable_platform_runtime_names(session_source: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    if !session_source.eq_ignore_ascii_case("scheduled_task") {
+        values.push("api_tools".to_string());
+    }
+    values
+}
+
+pub fn source_delegation_override_for_session_source(
+    session_source: &str,
+) -> Option<DelegationPolicyOverride> {
+    if !is_non_delegating_session_source(session_source) {
+        return None;
+    }
+
+    Some(DelegationPolicyOverride {
+        allow_plan: Some(false),
+        allow_subagent: Some(false),
+        allow_swarm: Some(false),
+        allow_worker_messaging: Some(false),
+        allow_auto_swarm: Some(false),
+        allow_validation_worker: Some(false),
+        ..DelegationPolicyOverride::default()
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DocumentScopeMode {
@@ -112,7 +154,6 @@ fn default_scope_for_session_source(
         .as_deref()
     {
         Some("portal" | "portal_coding" | "portal_manager") => DocumentScopeMode::PortalBound,
-        Some("channel_runtime" | "channel_conversation") => DocumentScopeMode::AttachedOnly,
         _ => DocumentScopeMode::Full,
     }
 }
@@ -368,6 +409,40 @@ impl RuntimeCapabilitySnapshot {
 
 pub struct AgentRuntimePolicyResolver;
 
+fn resolved_builtin_capabilities(agent: &TeamAgent) -> Vec<ConfiguredBuiltinCapability> {
+    let mut capabilities = Vec::new();
+
+    for config in &agent.enabled_extensions {
+        if !capabilities
+            .iter()
+            .any(|item: &ConfiguredBuiltinCapability| item.extension == config.extension)
+        {
+            capabilities.push(ConfiguredBuiltinCapability {
+                extension: config.extension,
+                enabled: config.enabled,
+                registry: builtin_registry_entry(config.extension),
+            });
+        }
+    }
+
+    for extension in BuiltinExtension::all() {
+        let registry = builtin_registry_entry(extension);
+        if registry.default_enabled
+            && !capabilities
+                .iter()
+                .any(|item: &ConfiguredBuiltinCapability| item.extension == extension)
+        {
+            capabilities.push(ConfiguredBuiltinCapability {
+                extension,
+                enabled: true,
+                registry,
+            });
+        }
+    }
+
+    capabilities
+}
+
 impl AgentRuntimePolicyResolver {
     pub fn resolve(
         agent: &TeamAgent,
@@ -414,15 +489,7 @@ impl AgentRuntimePolicyResolver {
                 })
             });
 
-        let builtin_capabilities = agent
-            .enabled_extensions
-            .iter()
-            .map(|config| ConfiguredBuiltinCapability {
-                extension: config.extension,
-                enabled: config.enabled,
-                registry: builtin_registry_entry(config.extension),
-            })
-            .collect::<Vec<_>>();
+        let builtin_capabilities = resolved_builtin_capabilities(agent);
 
         let custom_extensions = agent
             .custom_extensions
@@ -467,12 +534,20 @@ impl AgentRuntimePolicyResolver {
             }
         }
 
+        let session_injected_capabilities =
+            session_injected_capabilities(session_source.as_str(), portal_restricted);
+
         let mut effective_allowed_extension_names = match overlay_allowed_extensions {
             Some(values) if !values.is_empty() => {
                 let requested = normalize_unique_runtime_names(values);
+                let overlay_requestable =
+                    explicitly_requestable_platform_runtime_names(session_source.as_str());
                 requested
                     .into_iter()
-                    .filter(|runtime_name| base_extension_names.contains(runtime_name))
+                    .filter(|runtime_name| {
+                        base_extension_names.contains(runtime_name)
+                            || overlay_requestable.contains(runtime_name)
+                    })
                     .collect::<Vec<_>>()
             }
             _ => {
@@ -481,6 +556,18 @@ impl AgentRuntimePolicyResolver {
                 values
             }
         };
+        for capability in &session_injected_capabilities {
+            for runtime_name in &capability.runtime_names {
+                let normalized = normalize_runtime_name(runtime_name);
+                if !effective_allowed_extension_names.contains(&normalized) {
+                    effective_allowed_extension_names.push(normalized);
+                }
+            }
+        }
+        effective_allowed_extension_names = post_filter_allowed_extensions_for_session_source(
+            session_source.as_str(),
+            effective_allowed_extension_names,
+        );
         effective_allowed_extension_names.sort();
 
         let assigned_skills = agent
@@ -532,16 +619,17 @@ impl AgentRuntimePolicyResolver {
             (None, _) => None,
         };
 
-        let session_injected_capabilities =
-            session_injected_capabilities(session_source.as_str(), portal_restricted);
         let portal_delegation_policy_override =
             portal_effective.and_then(|item| item.delegation_policy_override.clone());
         let session_delegation_policy_override =
             session.and_then(|item| item.delegation_policy_override.clone());
+        let source_delegation_policy_override =
+            source_delegation_override_for_session_source(session_source.as_str());
         let delegation_policy = agent
             .delegation_policy
             .apply_override(portal_delegation_policy_override.as_ref())
-            .apply_override(session_delegation_policy_override.as_ref());
+            .apply_override(session_delegation_policy_override.as_ref())
+            .apply_override(source_delegation_policy_override.as_ref());
 
         RuntimeCapabilitySnapshot {
             session_source,
@@ -751,7 +839,7 @@ pub fn session_injected_capabilities(
     portal_restricted: bool,
 ) -> Vec<CapabilityRegistryEntry> {
     let mut entries = Vec::new();
-    if !portal_restricted {
+    if !portal_restricted && !session_source.eq_ignore_ascii_case("scheduled_task") {
         entries.push(CapabilityRegistryEntry {
             config_key: "team_mcp".to_string(),
             display_name: "Team MCP".to_string(),
@@ -765,7 +853,7 @@ pub fn session_injected_capabilities(
         });
     }
     match session_source {
-        "chat" => {
+        "chat" | "automation_runtime" => {
             entries.push(CapabilityRegistryEntry {
                 config_key: "chat_memory".to_string(),
                 display_name: "Chat Memory".to_string(),
@@ -775,9 +863,27 @@ pub fn session_injected_capabilities(
                 runtime_names: vec!["chat_memory".to_string()],
                 editable: false,
                 default_enabled: true,
-                hidden_reason: Some("chat_session".to_string()),
+                hidden_reason: Some(if session_source == "automation_runtime" {
+                    "automation_runtime_session".to_string()
+                } else {
+                    "chat_session".to_string()
+                }),
             });
+            if session_source == "chat" {
+                entries.push(CapabilityRegistryEntry {
+                    config_key: "chat_delivery".to_string(),
+                    display_name: "Chat Delivery".to_string(),
+                    kind: CapabilityKind::SessionInjected,
+                    display_group: CapabilityDisplayGroup::SystemInjected,
+                    runtime_delivery: RuntimeDelivery::SessionInjected,
+                    runtime_names: vec!["chat_delivery".to_string()],
+                    editable: false,
+                    default_enabled: true,
+                    hidden_reason: Some("direct_chat_delivery".to_string()),
+                });
+            }
         }
+        "channel_conversation" => {}
         "portal" | "portal_manager" | "portal_coding" => {
             entries.push(CapabilityRegistryEntry {
                 config_key: "avatar_governance".to_string(),
@@ -895,7 +1001,7 @@ mod tests {
             total_tokens: None,
             input_tokens: None,
             output_tokens: None,
-            compaction_count: 0,
+            context_runtime_state: None,
             disabled_extensions: Vec::new(),
             enabled_extensions: Vec::new(),
             created_at: now,
@@ -909,6 +1015,7 @@ mod tests {
             last_execution_error: None,
             last_execution_finished_at: None,
             last_runtime_session_id: None,
+            last_delegation_runtime: None,
             attached_document_ids: Vec::new(),
             workspace_path: None,
             workspace_id: None,
@@ -934,7 +1041,10 @@ mod tests {
             source_channel_id: None,
             source_channel_name: None,
             source_thread_root_id: None,
+            thread_branch: None,
+            thread_repo_ref: None,
             hidden_from_chat_list: false,
+            pending_message_workspace_files: Vec::new(),
         }
     }
 
@@ -964,6 +1074,21 @@ mod tests {
     }
 
     #[test]
+    fn resolver_backfills_missing_default_enabled_builtin_extensions_for_legacy_agents() {
+        let agent = sample_agent();
+        let snapshot = AgentRuntimePolicyResolver::resolve(&agent, None, None);
+
+        assert!(snapshot
+            .extensions
+            .effective_allowed_extension_names
+            .contains(&"document_tools".to_string()));
+        assert!(snapshot
+            .extensions
+            .effective_allowed_extension_names
+            .contains(&"tasks".to_string()));
+    }
+
+    #[test]
     fn hybrid_skill_mode_is_narrowed_to_assigned_skills_for_system_sessions() {
         let agent = sample_agent();
         let session = sample_session("system");
@@ -972,6 +1097,82 @@ mod tests {
             snapshot.skills.effective_allowed_skill_ids,
             Some(vec!["skill-alpha".to_string()])
         );
+    }
+
+    #[test]
+    fn session_injected_chat_memory_survives_extension_allowlist() {
+        let agent = sample_agent();
+        let mut session = sample_session("chat");
+        session.allowed_extensions = Some(vec!["document_tools".to_string()]);
+
+        let snapshot = AgentRuntimePolicyResolver::resolve(&agent, Some(&session), None);
+        assert!(snapshot
+            .extensions
+            .effective_allowed_extension_names
+            .contains(&"document_tools".to_string()));
+        assert!(snapshot
+            .extensions
+            .effective_allowed_extension_names
+            .contains(&"chat_memory".to_string()));
+        assert!(snapshot
+            .extensions
+            .session_injected_capabilities
+            .iter()
+            .any(|item| item.config_key == "chat_memory"));
+    }
+
+    #[test]
+    fn automation_runtime_keeps_chat_memory_without_clamping_delegation() {
+        let mut agent = sample_agent();
+        agent.delegation_policy = DelegationPolicy::default();
+        let session = sample_session("automation_runtime");
+
+        let snapshot = AgentRuntimePolicyResolver::resolve(&agent, Some(&session), None);
+
+        assert!(snapshot.delegation_policy.allow_subagent);
+        assert!(snapshot.delegation_policy.allow_swarm);
+        assert!(snapshot
+            .extensions
+            .session_injected_capabilities
+            .iter()
+            .any(|item| item.config_key == "chat_memory"));
+    }
+
+    #[test]
+    fn explicit_api_tools_allowlist_survives_capability_filtering() {
+        let agent = sample_agent();
+        let mut session = sample_session("chat");
+        session.allowed_extensions = Some(vec!["api_tools".to_string()]);
+
+        let snapshot = AgentRuntimePolicyResolver::resolve(&agent, Some(&session), None);
+        assert!(snapshot
+            .extensions
+            .effective_allowed_extension_names
+            .contains(&"api_tools".to_string()));
+    }
+
+    #[test]
+    fn internal_chat_defaults_to_full_document_policy() {
+        let policy = resolve_document_policy(None, None, None, Some("chat"), false);
+        assert_eq!(policy.document_access_mode.as_deref(), None);
+        assert_eq!(policy.document_scope_mode.as_deref(), Some("full"));
+        assert_eq!(policy.document_write_mode.as_deref(), Some("full_write"));
+    }
+
+    #[test]
+    fn internal_channel_defaults_to_full_document_policy() {
+        let policy = resolve_document_policy(None, None, None, Some("channel_conversation"), false);
+        assert_eq!(policy.document_access_mode.as_deref(), None);
+        assert_eq!(policy.document_scope_mode.as_deref(), Some("full"));
+        assert_eq!(policy.document_write_mode.as_deref(), Some("full_write"));
+    }
+
+    #[test]
+    fn external_portal_sessions_stay_portal_bound_and_read_only() {
+        let policy = resolve_document_policy(None, None, None, Some("portal"), true);
+        assert_eq!(policy.document_access_mode.as_deref(), None);
+        assert_eq!(policy.document_scope_mode.as_deref(), Some("portal_bound"));
+        assert_eq!(policy.document_write_mode.as_deref(), Some("read_only"));
     }
 
     #[test]
@@ -1034,6 +1235,98 @@ mod tests {
             snapshot.delegation_policy.approval_mode,
             agime_team::models::ApprovalMode::LeaderOwned
         );
+    }
+
+    #[test]
+    fn portal_manager_source_clamps_delegation_even_when_agent_allows_it() {
+        let mut agent = sample_agent();
+        agent.delegation_policy = DelegationPolicy::default();
+        let session = sample_session("portal_manager");
+
+        let snapshot = AgentRuntimePolicyResolver::resolve(&agent, Some(&session), None);
+
+        assert!(!snapshot.delegation_policy.allow_plan);
+        assert!(!snapshot.delegation_policy.allow_subagent);
+        assert!(!snapshot.delegation_policy.allow_swarm);
+        assert!(!snapshot.delegation_policy.allow_auto_swarm);
+        assert!(!snapshot.delegation_policy.allow_worker_messaging);
+        assert!(!snapshot.delegation_policy.allow_validation_worker);
+    }
+
+    #[test]
+    fn portal_coding_source_keeps_existing_delegation_policy() {
+        let mut agent = sample_agent();
+        agent.delegation_policy = DelegationPolicy::default();
+        let session = sample_session("portal_coding");
+
+        let snapshot = AgentRuntimePolicyResolver::resolve(&agent, Some(&session), None);
+
+        assert!(snapshot.delegation_policy.allow_plan);
+        assert!(snapshot.delegation_policy.allow_subagent);
+        assert!(snapshot.delegation_policy.allow_swarm);
+        assert!(snapshot.delegation_policy.allow_auto_swarm);
+    }
+
+    #[test]
+    fn source_override_helper_targets_non_delegating_surfaces() {
+        let override_policy = source_delegation_override_for_session_source("portal_manager")
+            .expect("portal manager override");
+        assert_eq!(override_policy.allow_plan, Some(false));
+        assert_eq!(override_policy.allow_subagent, Some(false));
+        assert_eq!(override_policy.allow_swarm, Some(false));
+        assert_eq!(override_policy.allow_auto_swarm, Some(false));
+        assert_eq!(override_policy.allow_worker_messaging, Some(false));
+        assert_eq!(override_policy.allow_validation_worker, Some(false));
+        let scheduled_override = source_delegation_override_for_session_source("scheduled_task")
+            .expect("scheduled task override");
+        assert_eq!(scheduled_override.allow_plan, Some(false));
+        assert_eq!(scheduled_override.allow_subagent, Some(false));
+        assert_eq!(scheduled_override.allow_swarm, Some(false));
+        assert_eq!(scheduled_override.allow_auto_swarm, Some(false));
+        assert_eq!(scheduled_override.allow_worker_messaging, Some(false));
+        assert_eq!(scheduled_override.allow_validation_worker, Some(false));
+        let builder_override = source_delegation_override_for_session_source("automation_builder")
+            .expect("automation builder override");
+        assert_eq!(builder_override.allow_plan, Some(false));
+        assert_eq!(builder_override.allow_subagent, Some(false));
+        assert_eq!(builder_override.allow_swarm, Some(false));
+        assert_eq!(builder_override.allow_auto_swarm, Some(false));
+        assert_eq!(builder_override.allow_worker_messaging, Some(false));
+        assert_eq!(builder_override.allow_validation_worker, Some(false));
+        assert!(source_delegation_override_for_session_source("portal_coding").is_none());
+        assert!(source_delegation_override_for_session_source("chat").is_none());
+    }
+
+    #[test]
+    fn scheduled_task_source_clamps_delegation_even_when_agent_allows_it() {
+        let mut agent = sample_agent();
+        agent.delegation_policy = DelegationPolicy::default();
+        let session = sample_session("scheduled_task");
+
+        let snapshot = AgentRuntimePolicyResolver::resolve(&agent, Some(&session), None);
+
+        assert!(!snapshot.delegation_policy.allow_plan);
+        assert!(!snapshot.delegation_policy.allow_subagent);
+        assert!(!snapshot.delegation_policy.allow_swarm);
+        assert!(!snapshot.delegation_policy.allow_auto_swarm);
+        assert!(!snapshot.delegation_policy.allow_worker_messaging);
+        assert!(!snapshot.delegation_policy.allow_validation_worker);
+    }
+
+    #[test]
+    fn automation_builder_source_clamps_delegation_even_when_agent_allows_it() {
+        let mut agent = sample_agent();
+        agent.delegation_policy = DelegationPolicy::default();
+        let session = sample_session("automation_builder");
+
+        let snapshot = AgentRuntimePolicyResolver::resolve(&agent, Some(&session), None);
+
+        assert!(!snapshot.delegation_policy.allow_plan);
+        assert!(!snapshot.delegation_policy.allow_subagent);
+        assert!(!snapshot.delegation_policy.allow_swarm);
+        assert!(!snapshot.delegation_policy.allow_auto_swarm);
+        assert!(!snapshot.delegation_policy.allow_worker_messaging);
+        assert!(!snapshot.delegation_policy.allow_validation_worker);
     }
 
     #[test]

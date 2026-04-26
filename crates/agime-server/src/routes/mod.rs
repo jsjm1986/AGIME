@@ -7,7 +7,6 @@ pub mod mcp_ui_proxy;
 pub mod recipe;
 pub mod recipe_utils;
 pub mod reply;
-pub mod schedule;
 pub mod session;
 pub mod setup;
 pub mod shared_session;
@@ -43,7 +42,6 @@ pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Rout
         .merge(recipe::routes(state.clone()))
         .merge(session::routes(state.clone()))
         .merge(shared_session::routes(state.clone()))
-        .merge(schedule::routes(state.clone()))
         .merge(setup::routes(state.clone()))
         .merge(upload::routes())
         .merge(mcp_ui_proxy::routes(secret_key))

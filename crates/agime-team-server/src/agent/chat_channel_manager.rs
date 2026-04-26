@@ -20,6 +20,8 @@ const EVENT_PERSIST_QUEUE_CAP: usize = 8192;
 pub struct ChannelStreamEvent {
     pub id: u64,
     pub event: StreamEvent,
+    pub thread_root_id: Option<String>,
+    pub root_message_id: Option<String>,
 }
 
 struct EventBuffer {
@@ -218,16 +220,6 @@ impl ChatChannelManager {
             if let Some(channel) = runs.get(channel_id) {
                 if let Ok(mut buffer) = channel.buffer.lock() {
                     buffer.last_activity = std::time::Instant::now();
-                    let item = ChannelStreamEvent {
-                        id: buffer.next_id,
-                        event: event.clone(),
-                    };
-                    buffer.next_id = buffer.next_id.saturating_add(1);
-                    buffer.events.push_back(item.clone());
-                    while buffer.events.len() > EVENT_HISTORY_LIMIT {
-                        let _ = buffer.events.pop_front();
-                    }
-                    let _ = channel.stream_tx.send(item.clone());
                     let active_run = run_scope_id
                         .and_then(|scope| channel.runs.get(scope))
                         .or_else(|| {
@@ -237,6 +229,18 @@ impl ChatChannelManager {
                                 None
                             }
                         });
+                    let item = ChannelStreamEvent {
+                        id: buffer.next_id,
+                        event: event.clone(),
+                        thread_root_id: active_run.and_then(|run| run.thread_root_id.clone()),
+                        root_message_id: active_run.and_then(|run| run.root_message_id.clone()),
+                    };
+                    buffer.next_id = buffer.next_id.saturating_add(1);
+                    buffer.events.push_back(item.clone());
+                    while buffer.events.len() > EVENT_HISTORY_LIMIT {
+                        let _ = buffer.events.pop_front();
+                    }
+                    let _ = channel.stream_tx.send(item.clone());
                     if let Some(run) = active_run {
                         persist = Some(PersistChannelEvent {
                             channel_id: channel_id.to_string(),

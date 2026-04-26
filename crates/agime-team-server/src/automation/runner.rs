@@ -109,7 +109,7 @@ impl AutomationRunner {
                 actor_user_id,
                 vec![],
                 Some(build_builder_context_prompt(draft, &integrations)),
-                Some(foundry_allowed_extensions()),
+                Some(foundry_builder_allowed_extensions()),
                 None,
                 None,
                 None,
@@ -119,7 +119,7 @@ impl AutomationRunner {
                 false,
                 None,
                 None,
-                Some("system".to_string()),
+                Some(automation_builder_session_source().to_string()),
                 Some(true),
             )
             .await?;
@@ -214,7 +214,7 @@ impl AutomationRunner {
                 &session_user_id,
                 vec![],
                 Some("这是实验室 > API 自动化运行会话，只服务当前模块执行和结果产出。".to_string()),
-                Some(foundry_allowed_extensions()),
+                Some(foundry_runtime_allowed_extensions()),
                 None,
                 None,
                 None,
@@ -224,7 +224,7 @@ impl AutomationRunner {
                 false,
                 None,
                 None,
-                Some("system".to_string()),
+                Some(automation_run_session_source().to_string()),
                 Some(true),
             )
             .await?;
@@ -277,7 +277,7 @@ impl AutomationRunner {
                 actor_user_id,
                 vec![],
                 Some(build_runtime_context_prompt(module, &integrations)),
-                Some(foundry_allowed_extensions()),
+                Some(foundry_runtime_allowed_extensions()),
                 None,
                 None,
                 None,
@@ -287,19 +287,10 @@ impl AutomationRunner {
                 false,
                 None,
                 None,
-                Some("chat".to_string()),
+                Some(automation_runtime_session_source().to_string()),
                 Some(false),
             )
             .await?;
-        let _ = agent_service
-            .append_visible_session_notice(
-                &session.session_id,
-                &format!(
-                    "已初始化应用「{}」。后续你可以直接在这里继续对话、发起动作，或查看运行结果摘要。",
-                    module.name
-                ),
-            )
-            .await;
         let _ = service
             .update_module_runtime_session(team_id, &module.module_id, &session.session_id)
             .await?;
@@ -664,7 +655,7 @@ fn build_probe_prompt(
         .join("\n\n");
 
     format!(
-        "你正在为一个 Agent App 草稿生成最小可用方案。\n\n任务名称：{name}\n目标：{goal}\n约束：{constraints}\n成功标准：{success}\n风险偏好：{risk}\n\n规则：\n- 优先使用 `api_tools__http_request` 做真实 API 调用；必要时才回退到 developer。\n- 不要使用浏览器/Playwright。\n- 只选择支撑当前目标的最小必要接口。\n- 信息不足时先列缺失项，不要编造接口。\n- 输出尽量短，不要复述整段接口文档。\n\n请按这个顺序输出：\n1. 可行性\n2. 已验证或推荐的调用路径\n3. 缺失信息\n4. 下一步\n5. 推荐运行方式\n\n{integration_lines}",
+        "你正在为一个 Agent App 草稿生成最小可用方案。\n\n任务名称：{name}\n目标：{goal}\n约束：{constraints}\n成功标准：{success}\n风险偏好：{risk}\n\n规则：\n- 优先使用 `api_tools__http_request` 做真实 API 调用；必要时才回退到 developer。\n- 不要使用浏览器/Playwright。\n- 只选择支撑当前目标的最小必要接口。\n- 信息不足时先列缺失项，不要编造接口。\n- 输出尽量短，不要复述整段接口文档。\n- 如果资料中已经明确给出了 base_url 和可执行 endpoint，在给出“可发布/ready”结论前，必须至少完成一次真实 `api_tools__http_request`。\n- 没有真实 HTTP 验证证据时，不得宣称应用已经 ready 或可直接发布。\n\n请按这个顺序输出：\n1. 可行性\n2. 已验证或推荐的调用路径\n3. 缺失信息\n4. 下一步\n5. 推荐运行方式\n\n{integration_lines}",
         name = draft.name,
         goal = draft.goal,
         constraints = if draft.constraints.is_empty() {
@@ -697,7 +688,7 @@ fn build_builder_context_prompt(
     };
 
     format!(
-        "你正在 Agentify｜万物智能 的 Builder 会话中工作。\n\n当前草稿：{name}\n目标：{goal}\n约束：{constraints}\n成功标准：{success}\n风险偏好：{risk}\n\n职责：\n1. 理解用户导入的 API 资料。\n2. 为目标生成一个可持续对话、可运行的 Agent App。\n3. 找出最小可行 API 路径并真实验证。\n4. 允许多软件组合编排，但不要硬编码行业模板。\n5. 信息不足时优先追问。\n6. 默认输出高层摘要，不要长篇复述接口文档。\n7. 优先使用 `api_tools__http_request`；必要时才回退到 developer。\n8. 不使用浏览器/Playwright。\n\n回答优先给：已确认能力、缺失信息、下一步建议、是否可发布。\n\n{integration_lines}",
+        "你正在 Agentify｜万物智能 的 Builder 会话中工作。\n\n当前草稿：{name}\n目标：{goal}\n约束：{constraints}\n成功标准：{success}\n风险偏好：{risk}\n\n职责：\n1. 理解用户导入的 API 资料。\n2. 为目标生成一个可持续对话、可运行的 Agent App。\n3. 找出最小可行 API 路径并真实验证。\n4. 允许多软件组合编排，但不要硬编码行业模板。\n5. 信息不足时优先追问。\n6. 默认输出高层摘要，不要长篇复述接口文档。\n7. 优先使用 `api_tools__http_request`；必要时才回退到 developer。\n8. 不使用浏览器/Playwright。\n9. 如果资料里已经给出明确的 base_url 和 endpoint，就先完成真实 `api_tools__http_request` 验证，再谈是否可发布。\n10. 没有真实 HTTP 验证证据时，不要说 ready、不要说可以直接发布。\n\n回答优先给：已确认能力、缺失信息、下一步建议、是否可发布。\n\n{integration_lines}",
         name = draft.name,
         goal = draft.goal,
         constraints = if draft.constraints.is_empty() {
@@ -847,10 +838,71 @@ fn format_runtime_notice(
     format!("{}\n\n{}", title, body)
 }
 
-fn foundry_allowed_extensions() -> Vec<String> {
+fn foundry_builder_allowed_extensions() -> Vec<String> {
+    vec!["api_tools".to_string(), "document_tools".to_string()]
+}
+
+fn foundry_runtime_allowed_extensions() -> Vec<String> {
     vec![
         "api_tools".to_string(),
         "developer".to_string(),
         "document_tools".to_string(),
     ]
+}
+
+fn automation_builder_session_source() -> &'static str {
+    // Builder probing stays on a dedicated conversation-like surface that
+    // suppresses delegation/swarm upgrades while keeping normal chat semantics.
+    "automation_builder"
+}
+
+fn automation_runtime_session_source() -> &'static str {
+    // Published app runtime sessions are side-effect free containers.
+    // The first real user message is the only thing that should trigger execution.
+    "automation_runtime"
+}
+
+fn automation_run_session_source() -> &'static str {
+    // Background module runs remain hidden system-owned execution sessions.
+    "system"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        automation_builder_session_source, automation_run_session_source,
+        automation_runtime_session_source, foundry_builder_allowed_extensions,
+        foundry_runtime_allowed_extensions,
+    };
+
+    #[test]
+    fn automation_builder_session_stays_on_chat_surface() {
+        assert_eq!(automation_builder_session_source(), "automation_builder");
+    }
+
+    #[test]
+    fn automation_run_session_stays_on_system_surface() {
+        assert_eq!(automation_run_session_source(), "system");
+    }
+
+    #[test]
+    fn automation_runtime_session_uses_distinct_runtime_surface() {
+        assert_eq!(automation_runtime_session_source(), "automation_runtime");
+    }
+
+    #[test]
+    fn automation_builder_extensions_prefer_structured_api_tools() {
+        let extensions = foundry_builder_allowed_extensions();
+        assert!(extensions.iter().any(|item| item == "api_tools"));
+        assert!(extensions.iter().any(|item| item == "document_tools"));
+        assert!(!extensions.iter().any(|item| item == "developer"));
+    }
+
+    #[test]
+    fn automation_runtime_extensions_keep_developer_fallback() {
+        let extensions = foundry_runtime_allowed_extensions();
+        assert!(extensions.iter().any(|item| item == "api_tools"));
+        assert!(extensions.iter().any(|item| item == "developer"));
+        assert!(extensions.iter().any(|item| item == "document_tools"));
+    }
 }

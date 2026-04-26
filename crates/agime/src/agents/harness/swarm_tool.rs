@@ -207,6 +207,7 @@ pub fn handle_swarm_tool(
                     content: vec![Content::text(lines.join("\n"))],
                     structured_content: Some(json!({
                         "run_id": result.run_id,
+                        "accepted_targets": result.accepted_targets,
                         "produced_targets": result.produced_targets,
                         "downgraded": result.downgraded,
                         "downgrade_message": result.downgrade_message,

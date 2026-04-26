@@ -55,9 +55,6 @@ export function useAgent(): UseAgentReturn {
   const recipeDeeplinkFromConfig = useRef<string | null>(
     (window.appConfig.get('recipeDeeplink') as string | null | undefined) ?? null
   );
-  const scheduledJobIdFromConfig = useRef<string | null>(
-    (window.appConfig.get('scheduledJobId') as string | null | undefined) ?? null
-  );
   const { getExtensions, addExtension, read } = useConfig();
 
   const resetChat = useCallback(() => {
@@ -65,7 +62,6 @@ export function useAgent(): UseAgentReturn {
     setAgentState(AgentState.UNINITIALIZED);
     recipeIdFromConfig.current = null;
     recipeDeeplinkFromConfig.current = null;
-    scheduledJobIdFromConfig.current = null;
     deletedSessionsRef.current.clear();
   }, []);
 
@@ -201,15 +197,6 @@ export function useAgent(): UseAgentReturn {
             throw Error('Failed to get session info');
           }
           setSessionId(agentSession.id);
-
-          if (!initContext.recipe && agentSession.recipe && scheduledJobIdFromConfig.current) {
-            agentSession.recipe = {
-              ...agentSession.recipe,
-              scheduledJobId: scheduledJobIdFromConfig.current,
-              isScheduledExecution: true,
-            } as Recipe;
-            scheduledJobIdFromConfig.current = null;
-          }
 
           recipeIdFromConfig.current = null;
           recipeDeeplinkFromConfig.current = null;

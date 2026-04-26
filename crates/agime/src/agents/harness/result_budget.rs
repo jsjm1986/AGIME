@@ -1,10 +1,6 @@
-use std::sync::Arc;
-
 use chrono::Utc;
-use dashmap::DashMap;
 use rmcp::model::{CallToolResult, Content, ErrorData};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,49 +51,6 @@ pub struct ToolResultHandle {
     pub created_at: i64,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ContentReplacementState {
-    pub recent_handles: Vec<ToolResultHandle>,
-}
-
-impl ContentReplacementState {
-    pub fn record(&mut self, handle: ToolResultHandle) {
-        self.recent_handles.push(handle);
-        if self.recent_handles.len() > 128 {
-            let trim = self.recent_handles.len().saturating_sub(128);
-            self.recent_handles.drain(0..trim);
-        }
-    }
-}
-
-pub type SharedContentReplacementState = Arc<Mutex<ContentReplacementState>>;
-
-pub trait ToolResultStore: Send + Sync {
-    fn store(&self, handle: &ToolResultHandle, content: String);
-    fn load(&self, handle_id: &str) -> Option<String>;
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct InMemoryToolResultStore {
-    inner: Arc<DashMap<String, String>>,
-}
-
-impl InMemoryToolResultStore {
-    pub fn shared() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-}
-
-impl ToolResultStore for InMemoryToolResultStore {
-    fn store(&self, handle: &ToolResultHandle, content: String) {
-        self.inner.insert(handle.id.clone(), content);
-    }
-
-    fn load(&self, handle_id: &str) -> Option<String> {
-        self.inner.get(handle_id).map(|entry| entry.clone())
-    }
-}
-
 #[derive(Debug)]
 pub struct BudgetedToolResult {
     pub result: Result<CallToolResult, ErrorData>,
@@ -137,20 +90,21 @@ fn replacement_message(
     handle: &ToolResultHandle,
     text: &str,
     budget: &ToolResultBudget,
+    visible_limit: usize,
 ) -> String {
     match action {
         ResultBudgetAction::Truncate => {
-            let visible = summarize_text(text, budget.standard_limit.min(handle.original_length));
+            let visible = summarize_text(text, visible_limit.min(handle.original_length));
             format!(
-                "Tool result for `{}` was truncated due to budget limits. Handle: {}. Preview:\n{}",
-                tool_name, handle.id, visible
+                "Tool result for `{}` was truncated due to budget limits. Preview:\n{}",
+                tool_name, visible
             )
         }
         ResultBudgetAction::Summarize => {
             let summary = summarize_text(text, budget.summary_limit);
             format!(
-                "Tool result for `{}` was summarized due to size. Handle: {}. Summary:\n{}",
-                tool_name, handle.id, summary
+                "Tool result for `{}` was summarized due to size. Summary:\n{}",
+                tool_name, summary
             )
         }
         ResultBudgetAction::ReplaceWithHandle => {
@@ -170,8 +124,6 @@ pub async fn apply_tool_result_budget(
     explicit_limit: Option<usize>,
     result: Result<CallToolResult, ErrorData>,
     budget: &ToolResultBudget,
-    store: &impl ToolResultStore,
-    replacement_state: &SharedContentReplacementState,
 ) -> BudgetedToolResult {
     let Some(limit) = bucket_limit(budget, bucket, explicit_limit) else {
         return BudgetedToolResult {
@@ -200,20 +152,23 @@ pub async fn apply_tool_result_budget(
                             created_at: Utc::now().timestamp(),
                         };
                         let next_action = if char_count > budget.replace_threshold {
-                            ResultBudgetAction::ReplaceWithHandle
+                            // We do not yet have a production readback path for
+                            // ToolResultHandle, so an unreadable handle-only fallback
+                            // would discard information. Prefer a bounded summary until
+                            // resume/readback semantics actually exist.
+                            ResultBudgetAction::Summarize
                         } else if char_count > limit.saturating_mul(4) {
                             ResultBudgetAction::Summarize
                         } else {
                             ResultBudgetAction::Truncate
                         };
-                        store.store(&handle, text.text.clone());
-                        replacement_state.lock().await.record(handle.clone());
                         processed_content.push(Content::text(replacement_message(
                             next_action,
                             tool_name,
                             &handle,
                             &text.text,
                             budget,
+                            limit,
                         )));
                         if first_handle.is_none() {
                             first_handle = Some(handle);

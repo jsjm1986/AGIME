@@ -17,6 +17,7 @@ use std::sync::RwLock;
 use super::runtime::ResolvedCapabilities;
 use super::types::*;
 use crate::config::paths::Paths;
+use crate::model::ModelLimitConfig;
 
 /// Minimum budget value (used for validation)
 const MIN_THINKING_BUDGET: u32 = 1024;
@@ -286,15 +287,12 @@ impl CapabilityRegistry {
         resolved
     }
 
-    /// Resolve capabilities and then apply runtime thinking overrides.
-    ///
-    /// This path is intentionally uncached because the same model can be used
-    /// with different agent-specific settings in the same process.
-    pub fn resolve_with_thinking_override(
+    pub fn resolve_with_runtime_overrides(
         &self,
         model_name: &str,
         thinking_enabled: Option<bool>,
         thinking_budget: Option<u32>,
+        reasoning_effort: Option<&str>,
     ) -> ResolvedCapabilities {
         let normalized = self.normalize_model_name(model_name);
         let base_caps = self.find_matching_capabilities(&normalized);
@@ -308,7 +306,7 @@ impl CapabilityRegistry {
             let budget_override = thinking_budget.map(|budget| {
                 let validated_budget = self.validate_thinking_budget(&base_caps, budget);
                 if validated_budget != budget {
-                    tracing::warn!(
+                    tracing::info!(
                         "Runtime thinking budget {} clamped to {} for model {}",
                         budget,
                         validated_budget,
@@ -318,12 +316,46 @@ impl CapabilityRegistry {
                 validated_budget
             });
 
-            self.configure_thinking_runtime(
-                &mut resolved,
-                &base_caps,
-                effective_enabled,
-                budget_override,
-            );
+            if resolved.thinking_supported {
+                self.configure_thinking_runtime(
+                    &mut resolved,
+                    &base_caps,
+                    effective_enabled,
+                    budget_override,
+                );
+            } else if effective_enabled || budget_override.is_some() {
+                resolved.thinking_supported = true;
+                resolved.thinking_enabled = effective_enabled;
+                resolved.thinking_budget = budget_override.or(Some(16000));
+            } else {
+                resolved.thinking_enabled = false;
+                resolved.thinking_budget = None;
+            }
+        }
+
+        if let Some(effort) = reasoning_effort
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if resolved.reasoning_supported {
+                if base_caps
+                    .reasoning
+                    .effort_levels
+                    .iter()
+                    .any(|level| level == effort)
+                {
+                    resolved.reasoning_effort = Some(effort.to_string());
+                } else {
+                    tracing::warn!(
+                        "Invalid runtime reasoning effort '{}' for model {}, keeping resolved default",
+                        effort,
+                        model_name
+                    );
+                }
+            } else {
+                resolved.reasoning_supported = true;
+                resolved.reasoning_effort = Some(effort.to_string());
+            }
         }
 
         resolved
@@ -473,7 +505,7 @@ impl CapabilityRegistry {
                     if let Some(budget) = thinking.budget {
                         let validated_budget = self.validate_thinking_budget(base_caps, budget);
                         if validated_budget != budget {
-                            tracing::warn!(
+                            tracing::info!(
                                 "User thinking budget {} clamped to {} for model {}",
                                 budget,
                                 validated_budget,
@@ -607,34 +639,9 @@ impl CapabilityRegistry {
         }
     }
 
-    /// Check if a model supports thinking
-    pub fn supports_thinking(&self, model_name: &str) -> bool {
-        self.resolve(model_name).thinking_supported
-    }
-
     /// Check if thinking is enabled for a model
     pub fn is_thinking_enabled(&self, model_name: &str) -> bool {
         self.resolve(model_name).thinking_enabled
-    }
-
-    /// Get thinking budget for a model
-    pub fn get_thinking_budget(&self, model_name: &str) -> Option<u32> {
-        let resolved = self.resolve(model_name);
-        if resolved.thinking_enabled {
-            resolved.thinking_budget
-        } else {
-            None
-        }
-    }
-
-    /// Check if a model supports reasoning effort
-    pub fn supports_reasoning(&self, model_name: &str) -> bool {
-        self.resolve(model_name).reasoning_supported
-    }
-
-    /// Get reasoning effort for a model
-    pub fn get_reasoning_effort(&self, model_name: &str) -> Option<String> {
-        self.resolve(model_name).reasoning_effort.clone()
     }
 
     /// Get system role name for a model
@@ -662,26 +669,18 @@ impl CapabilityRegistry {
         self.resolve(model_name).schema_processor.clone()
     }
 
-    /// Infer provider from model name
-    pub fn infer_provider(&self, model_name: &str) -> Option<String> {
-        self.resolve(model_name).provider.clone()
-    }
-
-    /// Get all models that support thinking
-    pub fn get_thinking_models(&self) -> Vec<String> {
+    /// Get all model context-length hints from the compiled registry.
+    pub fn get_model_limit_hints(&self) -> Vec<ModelLimitConfig> {
         self.capabilities
             .iter()
-            .filter(|c| c.capabilities.thinking.supported)
-            .map(|c| c.raw_pattern.clone())
-            .collect()
-    }
-
-    /// Get all models that support reasoning
-    pub fn get_reasoning_models(&self) -> Vec<String> {
-        self.capabilities
-            .iter()
-            .filter(|c| c.capabilities.reasoning.supported)
-            .map(|c| c.raw_pattern.clone())
+            .filter_map(|c| {
+                c.capabilities
+                    .context_length
+                    .map(|context_limit| ModelLimitConfig {
+                        pattern: c.raw_pattern.clone(),
+                        context_limit,
+                    })
+            })
             .collect()
     }
 }
@@ -786,9 +785,10 @@ mod tests {
     #[test]
     fn test_runtime_override_can_disable_default_thinking() {
         let registry = CapabilityRegistry::new().unwrap();
-        let caps = registry.resolve_with_thinking_override(
+        let caps = registry.resolve_with_runtime_overrides(
             "claude-3-7-sonnet-20250219",
             Some(false),
+            None,
             None,
         );
         assert!(caps.thinking_supported);
@@ -799,10 +799,14 @@ mod tests {
     #[test]
     fn test_runtime_override_falls_back_when_model_does_not_support_thinking() {
         let registry = CapabilityRegistry::new().unwrap();
-        let caps =
-            registry.resolve_with_thinking_override("model-without-thinking", Some(true), None);
-        assert!(!caps.thinking_supported);
-        assert!(!caps.thinking_enabled);
-        assert!(caps.thinking_budget.is_none());
+        let caps = registry.resolve_with_runtime_overrides(
+            "model-without-thinking",
+            Some(true),
+            None,
+            None,
+        );
+        assert!(caps.thinking_supported);
+        assert!(caps.thinking_enabled);
+        assert_eq!(caps.thinking_budget, Some(16000));
     }
 }

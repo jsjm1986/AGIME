@@ -91,8 +91,5 @@
   },
   "extensionmanager__manage_extensions": {
     "description": "Enable or disable extensions."
-  },
-  "platform__manage_schedule": {
-    "description": "Manage scheduled tasks."
   }
 }

@@ -560,6 +560,23 @@ impl MongoDb {
         )
         .await?;
 
+        self.create_indexes(
+            collections::CHAT_WORKSPACE_SHARES,
+            vec![
+                IndexModel::builder()
+                    .keys(doc! { "share_id": 1 })
+                    .options(IndexOptions::builder().unique(true).build())
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "session_id": 1, "user_id": 1, "path": 1 })
+                    .build(),
+                IndexModel::builder()
+                    .keys(doc! { "created_at": -1 })
+                    .build(),
+            ],
+        )
+        .await?;
+
         tracing::info!("MongoDB indexes ensured successfully");
         Ok(())
     }
@@ -606,4 +623,5 @@ pub mod collections {
     pub const EXTERNAL_USERS: &str = "external_users";
     pub const EXTERNAL_USER_SESSIONS: &str = "external_user_sessions";
     pub const EXTERNAL_USER_EVENTS: &str = "external_user_events";
+    pub const CHAT_WORKSPACE_SHARES: &str = "chat_workspace_shares";
 }

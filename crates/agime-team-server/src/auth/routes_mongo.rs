@@ -531,7 +531,7 @@ pub async fn get_session(State(state): State<Arc<AppState>>, jar: CookieJar) -> 
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "error": "No session" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -775,7 +775,7 @@ pub async fn get_system_admin_session(
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "error": "No system admin session" })),
             )
-                .into_response()
+                .into_response();
         }
     };
 

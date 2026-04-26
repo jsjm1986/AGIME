@@ -27,7 +27,6 @@ import Pair, { PairRouteState } from './components/Pair';
 import SettingsView, { SettingsViewOptions } from './components/settings/SettingsView';
 import SessionsView from './components/sessions/SessionsView';
 import SharedSessionView from './components/sessions/SharedSessionView';
-import SchedulesView from './components/schedule/SchedulesView';
 import ProviderSettings from './components/settings/providers/ProviderSettingsPage';
 import { AppLayout } from './components/Layout/AppLayout';
 import { ChatProvider } from './contexts/ChatContext';
@@ -232,11 +231,6 @@ const SessionsRoute = ({
   return <SessionsView onSessionDeleted={onSessionDeleted} />;
 };
 
-const SchedulesRoute = () => {
-  const navigate = useNavigate();
-  return <SchedulesView onClose={() => navigate('/')} />;
-};
-
 const RecipesRoute = () => {
   return <RecipesView />;
 };
@@ -263,9 +257,6 @@ const PermissionRoute = () => {
             break;
           case 'sessions':
             navigate('/sessions');
-            break;
-          case 'schedules':
-            navigate('/schedules');
             break;
           case 'recipes':
             navigate('/recipes');
@@ -904,7 +895,6 @@ export function AppInner() {
               path="sessions"
               element={<SessionsRoute onSessionDeleted={handleSessionDeleted} />}
             />
-            <Route path="schedules" element={<SchedulesRoute />} />
             <Route path="recipes" element={<RecipesRoute />} />
             <Route path="team" element={<TeamView />} />
             <Route path="config-copilot" element={<ConfigCopilotView />} />

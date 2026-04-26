@@ -23,6 +23,7 @@ import {
   Globe,
   Github,
   ShieldCheck,
+  Clock3,
 } from "lucide-react";
 import { NAV_ITEMS } from "../../config/teamNavConfig";
 import { useBrand } from "../../contexts/BrandContext";
@@ -31,6 +32,7 @@ import { RelationshipMemoryControl } from "../chat/RelationshipMemoryControl";
 
 const NAV_ICONS: Record<string, React.ReactNode> = {
   MessageCircle: <MessageCircle className="w-4 h-4" />,
+  Clock3: <Clock3 className="w-4 h-4" />,
   MessageSquareShare: <MessageSquareShare className="w-4 h-4" />,
   Bot: <Bot className="w-4 h-4" />,
   FileText: <FileText className="w-4 h-4" />,
@@ -200,43 +202,48 @@ function SidebarHeaderBlock({
 interface SidebarFooterProps {
   onLogout: () => void;
   userName: string;
+  profileHref: string;
+  profileTitle: string;
+  onProfileNavigate?: () => void;
   logoutLabel: string;
   websiteTitle: string;
   websiteText: string;
   websiteUrl?: string | null;
   githubLabel: string;
-  poweredByText: string;
-  showPoweredBy: boolean;
-  relationshipMemoryControl?: React.ReactNode;
+  auxiliaryRow?: React.ReactNode;
 }
 
-function SidebarFooter({
+function SidebarFooterFrame({
   onLogout,
   userName,
+  profileHref,
+  profileTitle,
+  onProfileNavigate,
   logoutLabel,
   websiteTitle,
   websiteText,
   websiteUrl,
   githubLabel,
-  poweredByText,
-  showPoweredBy,
-  relationshipMemoryControl,
+  auxiliaryRow,
 }: SidebarFooterProps) {
   const controlTextButtonClass =
-    "inline-flex h-5 shrink-0 items-center justify-center whitespace-nowrap rounded-full border border-transparent bg-transparent px-1 text-[9px] font-normal leading-4 tracking-[0.01em] text-[hsl(var(--sidebar-foreground))/0.68] transition-colors hover:text-[hsl(var(--sidebar-foreground))]";
+    "inline-flex h-5 shrink-0 items-center justify-center whitespace-nowrap px-1 text-[11px] font-medium leading-4 tracking-[0.01em] text-[hsl(var(--sidebar-foreground))/0.72] transition-colors hover:text-[hsl(var(--sidebar-foreground))]";
   const footerLinkClass =
-    "inline-flex items-center gap-1 text-[9px] font-normal leading-4 text-[hsl(var(--sidebar-foreground))/0.62] transition-colors hover:text-[hsl(var(--sidebar-foreground))]";
+    "inline-flex items-center justify-center gap-1 px-1 text-[11px] font-medium leading-4 text-[hsl(var(--sidebar-foreground))/0.76] transition-colors hover:text-[hsl(var(--sidebar-foreground))]";
+  const identityTextClass =
+    "text-[12px] font-semibold leading-5 tracking-[0.01em] text-[hsl(var(--sidebar-foreground))/0.88]";
 
   return (
-    <div className="border-t border-[hsl(var(--sidebar-border))] px-3 pb-2 pt-2">
+    <div className="border-t border-[hsl(var(--sidebar-border))] px-3 pb-3 pt-2.5">
       <div className="space-y-1.5">
         <div className="flex justify-center">
-          <div className="inline-flex items-center gap-1 text-[hsl(var(--sidebar-foreground))/0.72]">
-            <ThemeToggle className="h-5 w-5 rounded-full border border-transparent bg-transparent p-0 text-[hsl(var(--sidebar-foreground))/0.68] shadow-none hover:bg-[hsl(var(--sidebar-accent))/0.05] hover:text-[hsl(var(--sidebar-foreground))]" />
+          <div className="inline-flex min-h-5 items-center gap-0.5 text-[hsl(var(--sidebar-foreground))/0.72]">
+            <ThemeToggle className="h-5 w-5 rounded-full border border-transparent bg-transparent p-0 text-[hsl(var(--sidebar-foreground))/0.72] shadow-none hover:bg-transparent hover:text-[hsl(var(--sidebar-foreground))]" />
             <LanguageSwitcher
+              plain
               className={`${controlTextButtonClass} shadow-none`}
             />
-            <span className="text-[10px] text-[hsl(var(--sidebar-foreground))/0.28]">
+            <span className="text-[11px] text-[hsl(var(--sidebar-foreground))/0.28]">
               ·
             </span>
             <button
@@ -250,15 +257,20 @@ function SidebarFooter({
         </div>
 
         <div className="flex justify-center">
-          <div className="flex min-w-0 items-center justify-center gap-1.5">
-            <p className="max-w-[144px] truncate text-center text-[11px] font-normal tracking-[0.01em] leading-4 text-[hsl(var(--sidebar-foreground))]">
+          <div className="flex min-h-5 max-w-full flex-nowrap items-center justify-center gap-2">
+            <Link
+              to={profileHref}
+              onClick={onProfileNavigate}
+              className={`${identityTextClass} max-w-[144px] truncate transition-colors hover:text-[hsl(var(--sidebar-foreground))] hover:underline underline-offset-4`}
+              title={profileTitle}
+            >
               {userName}
-            </p>
-            {relationshipMemoryControl ? relationshipMemoryControl : null}
+            </Link>
+            {auxiliaryRow}
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 px-0.5 pt-0.5">
+        <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 px-0.5 pt-0.5">
           {websiteUrl ? (
             <a
               href={websiteUrl}
@@ -281,13 +293,33 @@ function SidebarFooter({
             <span>{githubLabel}</span>
           </a>
         </div>
-        {showPoweredBy ? (
-          <p className="px-0.5 pt-0.5 text-center text-[9px] font-normal leading-4 text-[hsl(var(--sidebar-foreground))/0.4]">
-            {poweredByText}
-          </p>
-        ) : null}
       </div>
     </div>
+  );
+}
+
+function DefaultSidebarFooter(props: Omit<SidebarFooterProps, "auxiliaryRow"> & { auxiliaryLabel: string }) {
+  const auxiliaryTextClass =
+    "inline-flex items-center justify-center whitespace-nowrap px-0.5 text-[11px] font-medium leading-4 tracking-[0.01em] text-[hsl(var(--sidebar-foreground))/0.58]";
+
+  return (
+    <SidebarFooterFrame
+      {...props}
+      auxiliaryRow={
+        <span className={auxiliaryTextClass}>
+          {props.auxiliaryLabel}
+        </span>
+      }
+    />
+  );
+}
+
+function TeamSidebarFooter(props: Omit<SidebarFooterProps, "auxiliaryRow"> & { relationshipMemoryControl: React.ReactNode }) {
+  return (
+    <SidebarFooterFrame
+      {...props}
+      auxiliaryRow={props.relationshipMemoryControl}
+    />
   );
 }
 
@@ -570,11 +602,11 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
             <PanelLeftOpen className="h-3.5 w-3.5" />
           </button>
           ) : null}
-        {teamCtx && user ? (
+        {teamCtx ? (
           <RelationshipMemoryControl
             teamId={teamCtx.team.id}
             teamName={teamCtx.team.name}
-            userDisplayName={user.display_name}
+            userDisplayName={user?.display_name}
             variant="icon"
           />
         ) : null}
@@ -621,26 +653,39 @@ export function Sidebar({ onNavigate }: SidebarProps = {}) {
         : renderDefaultNav()}
       {collapsed ? (
         renderCollapsedUserSection()
-      ) : (
-        <SidebarFooter
+      ) : teamCtx ? (
+        <TeamSidebarFooter
           onLogout={handleLogout}
           userName={footerUserName}
+          profileHref="/settings"
+          profileTitle={t("sidebar.settings")}
+          onProfileNavigate={onNavigate}
           logoutLabel={t("auth.logout")}
           websiteTitle={footerWebsiteTitle}
           websiteText={footerWebsiteText}
           websiteUrl={brand.websiteUrl}
           githubLabel={t("sidebar.github")}
-          poweredByText={t("sidebar.poweredBy")}
-          showPoweredBy={brand.poweredByVisible}
           relationshipMemoryControl={
-            teamCtx && user ? (
-              <RelationshipMemoryControl
-                teamId={teamCtx.team.id}
-                teamName={teamCtx.team.name}
-                userDisplayName={user.display_name}
-              />
-            ) : undefined
+            <RelationshipMemoryControl
+              teamId={teamCtx.team.id}
+              teamName={teamCtx.team.name}
+              userDisplayName={user?.display_name}
+            />
           }
+        />
+      ) : (
+        <DefaultSidebarFooter
+          onLogout={handleLogout}
+          userName={footerUserName}
+          profileHref="/settings"
+          profileTitle={t("sidebar.settings")}
+          onProfileNavigate={onNavigate}
+          logoutLabel={t("auth.logout")}
+          websiteTitle={footerWebsiteTitle}
+          websiteText={footerWebsiteText}
+          websiteUrl={brand.websiteUrl}
+          githubLabel={t("sidebar.github")}
+          auxiliaryLabel={t("sidebar.globalWorkspace")}
         />
       )}
     </aside>

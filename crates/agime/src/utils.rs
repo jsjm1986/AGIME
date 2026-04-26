@@ -21,6 +21,106 @@ pub fn sanitize_unicode_tags(text: &str) -> String {
         .collect()
 }
 
+fn strip_summary_token_punctuation(token: &str) -> &str {
+    token.trim_matches(|c: char| {
+        matches!(
+            c,
+            '`' | '*'
+                | '_'
+                | '.'
+                | ','
+                | ':'
+                | ';'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | '/'
+                | '\\'
+                | '"'
+                | '\''
+                | '!'
+                | '?'
+                | '='
+                | '+'
+        )
+    })
+}
+
+fn looks_like_ascii_summary_context(token: Option<&str>) -> bool {
+    token.is_some_and(|value| {
+        let stripped = strip_summary_token_punctuation(value);
+        !stripped.is_empty() && stripped.chars().any(|ch| ch.is_ascii_alphanumeric())
+    })
+}
+
+fn is_summary_noise_separator(token: &str) -> bool {
+    matches!(
+        strip_summary_token_punctuation(token),
+        "бк" | "БК" | "бд" | "БД"
+    )
+}
+
+fn normalize_summary_noise_tokens(line: &str) -> String {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return String::new();
+    }
+
+    let mut out = Vec::with_capacity(tokens.len());
+    for (idx, token) in tokens.iter().enumerate() {
+        if is_summary_noise_separator(token)
+            && (looks_like_ascii_summary_context(tokens.get(idx.wrapping_sub(1)).copied())
+                || looks_like_ascii_summary_context(tokens.get(idx + 1).copied()))
+        {
+            if out
+                .last()
+                .is_none_or(|value: &String| value.as_str() != "-")
+            {
+                out.push("-".to_string());
+            }
+            continue;
+        }
+        out.push((*token).to_string());
+    }
+    out.join(" ")
+}
+
+/// Normalize user-visible delegation summaries without touching general message content.
+///
+/// This is intentionally narrow:
+/// - keeps legitimate Unicode
+/// - removes invisible Unicode Tags via `sanitize_unicode_tags`
+/// - normalizes whitespace/newlines
+/// - replaces clearly broken short separator tokens like standalone `бк`
+///   only in ASCII/path-oriented summary contexts
+pub fn normalize_delegation_summary_text(text: &str) -> String {
+    let normalized = sanitize_unicode_tags(text)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    let mut lines = Vec::new();
+    let mut previous_blank = false;
+
+    for raw_line in normalized.lines() {
+        let line = normalize_summary_noise_tokens(raw_line.trim());
+        if line.is_empty() {
+            if !previous_blank {
+                lines.push(String::new());
+            }
+            previous_blank = true;
+            continue;
+        }
+        lines.push(line);
+        previous_blank = false;
+    }
+
+    lines.join("\n").trim().to_string()
+}
+
 /// Safely truncate a string at character boundaries, not byte boundaries
 ///
 /// This function ensures that multi-byte UTF-8 characters (like Japanese, emoji, etc.)
@@ -99,6 +199,30 @@ mod tests {
         let mixed = "Hello\u{E0041} 世界\u{E0042} 🌍\u{E0043}!";
         let cleaned = sanitize_unicode_tags(mixed);
         assert_eq!(cleaned, "Hello 世界 🌍!");
+    }
+
+    #[test]
+    fn test_normalize_delegation_summary_text_replaces_noise_separator_in_ascii_context() {
+        let raw = "Result: README.md **does not exist** бк file not found.";
+        assert_eq!(
+            normalize_delegation_summary_text(raw),
+            "Result: README.md **does not exist** - file not found."
+        );
+    }
+
+    #[test]
+    fn test_normalize_delegation_summary_text_preserves_legitimate_cyrillic_words() {
+        let raw = "Результат: привет бк мир";
+        assert_eq!(normalize_delegation_summary_text(raw), raw);
+    }
+
+    #[test]
+    fn test_normalize_delegation_summary_text_replaces_bd_separator_in_ascii_context() {
+        let raw = "swarm бд 7 completed";
+        assert_eq!(
+            normalize_delegation_summary_text(raw),
+            "swarm - 7 completed"
+        );
     }
 
     #[test]

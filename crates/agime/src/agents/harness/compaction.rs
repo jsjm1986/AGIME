@@ -1,19 +1,19 @@
 use anyhow::Result;
 use tracing::info;
 
-use crate::context_mgmt::{compact_messages_with_active_strategy, ContextCompactionStrategy};
+use super::{
+    checkpoints::{HarnessCheckpoint, HarnessCheckpointKind},
+    state::HarnessMode,
+    transcript::{HarnessCheckpointStore, SessionHarnessStore},
+};
+use crate::context_runtime::{
+    load_context_runtime_state, recover_on_overflow, save_context_runtime_state,
+};
 use crate::conversation::{
     message::{Message, SystemNotificationType},
     Conversation,
 };
 use crate::providers::base::{Provider, ProviderUsage};
-use crate::session::SessionManager;
-
-use super::{
-    checkpoints::{HarnessCheckpoint, HarnessCheckpointKind},
-    state::HarnessMode,
-    transcript::{HarnessCheckpointStore, HarnessTranscriptStore, SessionHarnessStore},
-};
 
 const COMPACTION_THINKING_TEXT: &str = "AGIME is compacting the conversation...";
 
@@ -21,25 +21,22 @@ const COMPACTION_THINKING_TEXT: &str = "AGIME is compacting the conversation..."
 pub enum RecoveryCompactionExecution {
     Abort {
         message: String,
-        next_compaction_count: u32,
+        next_runtime_compaction_count: u32,
     },
     Continue {
         conversation: Conversation,
         usage: ProviderUsage,
         prelude_messages: Vec<Message>,
-        next_compaction_count: u32,
+        next_runtime_compaction_count: u32,
     },
 }
 
-pub fn max_compaction_attempts_for(strategy: ContextCompactionStrategy) -> u32 {
-    match strategy {
-        ContextCompactionStrategy::LegacySegmented => 3,
-        ContextCompactionStrategy::CfpmMemoryV1 | ContextCompactionStrategy::CfpmMemoryV2 => 6,
-    }
+pub fn max_compaction_attempts_for_context_runtime() -> u32 {
+    3
 }
 
-pub fn compaction_strategy_label(strategy: ContextCompactionStrategy) -> &'static str {
-    strategy.as_config_value()
+pub fn compaction_strategy_label() -> &'static str {
+    "context_runtime"
 }
 
 pub fn auto_compaction_inline_message(threshold_percentage: u32) -> String {
@@ -73,17 +70,12 @@ pub fn recovery_compaction_prelude_messages() -> Vec<Message> {
     ]
 }
 
-pub fn compaction_checkpoint(
-    turn: u32,
-    mode: HarnessMode,
-    strategy: ContextCompactionStrategy,
-    phase: &str,
-) -> HarnessCheckpoint {
+pub fn compaction_checkpoint(turn: u32, mode: HarnessMode, phase: &str) -> HarnessCheckpoint {
     HarnessCheckpoint {
         kind: HarnessCheckpointKind::Compaction,
         turn,
         mode,
-        detail: format!("{}:{}", phase, compaction_strategy_label(strategy)),
+        detail: format!("{}:{}", phase, compaction_strategy_label()),
     }
 }
 
@@ -95,61 +87,43 @@ pub async fn execute_recovery_compaction(
     transcript_store: &SessionHarnessStore,
     turns_taken: u32,
     current_mode: HarnessMode,
-    active_compaction_strategy: ContextCompactionStrategy,
     max_compaction_attempts: u32,
-    compaction_count: u32,
+    runtime_compaction_count: u32,
 ) -> Result<RecoveryCompactionExecution> {
-    if compaction_count >= max_compaction_attempts {
+    if runtime_compaction_count >= max_compaction_attempts {
         return Ok(RecoveryCompactionExecution::Abort {
             message: recovery_compaction_abort_message(max_compaction_attempts),
-            next_compaction_count: compaction_count,
+            next_runtime_compaction_count: runtime_compaction_count,
         });
     }
 
-    let next_compaction_count = compaction_count + 1;
+    let next_runtime_compaction_count = runtime_compaction_count + 1;
     info!(
         "Recovery compaction attempt {} of {} using {}",
-        next_compaction_count,
+        next_runtime_compaction_count,
         max_compaction_attempts,
-        compaction_strategy_label(active_compaction_strategy)
+        compaction_strategy_label()
     );
 
-    let (compacted_conversation, usage) =
-        compact_messages_with_active_strategy(provider, conversation, false).await?;
-
-    transcript_store
-        .replace_conversation(session_id, &compacted_conversation)
-        .await?;
-
-    if active_compaction_strategy.is_cfpm() {
-        if let Err(err) = SessionManager::replace_cfpm_memory_facts_from_conversation(
-            session_id,
-            &compacted_conversation,
-            "recovery_compaction",
-        )
-        .await
-        {
-            tracing::warn!("Failed to refresh CFPM memory facts: {}", err);
-        }
-    }
+    let mut context_runtime_state = load_context_runtime_state(session_id).await?;
+    let _recovery = recover_on_overflow(provider, conversation, &mut context_runtime_state).await?;
+    save_context_runtime_state(session_id, &context_runtime_state).await?;
 
     let _ = transcript_store
         .record_checkpoint(
             session_id,
-            compaction_checkpoint(
-                turns_taken,
-                current_mode,
-                active_compaction_strategy,
-                "recovery_compaction",
-            ),
+            compaction_checkpoint(turns_taken, current_mode, "recovery_compaction"),
         )
         .await;
 
     Ok(RecoveryCompactionExecution::Continue {
-        conversation: compacted_conversation,
-        usage,
+        conversation: conversation.clone(),
+        usage: ProviderUsage::new(
+            "context-runtime".to_string(),
+            crate::providers::base::Usage::default(),
+        ),
         prelude_messages: recovery_compaction_prelude_messages(),
-        next_compaction_count,
+        next_runtime_compaction_count,
     })
 }
 

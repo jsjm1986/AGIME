@@ -17,6 +17,7 @@ use std::time::UNIX_EPOCH;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
+use super::execution_admission::{self, TaskAdmissionOutcome};
 use super::executor_mongo::TaskExecutor;
 use super::harness_core::HarnessDelegationMode;
 use super::service_mongo::AgentService;
@@ -62,6 +63,8 @@ pub struct BridgeExecutionRequest {
     pub context_id: String,
     pub agent_id: String,
     pub session_id: String,
+    pub channel_id: Option<String>,
+    pub run_scope_id: Option<String>,
     pub user_message: String,
     pub cancel_token: CancellationToken,
     pub workspace_path: Option<String>,
@@ -179,7 +182,7 @@ pub async fn bridge_events<B: EventBroadcaster>(
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_via_bridge<B: EventBroadcaster>(
     db: &Arc<MongoDb>,
-    agent_service: &AgentService,
+    agent_service: &Arc<AgentService>,
     internal_task_manager: &Arc<TaskManager>,
     broadcaster: &Arc<B>,
     context_id: &str,
@@ -199,6 +202,8 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
             context_id: context_id.to_string(),
             agent_id: agent_id.to_string(),
             session_id: session_id.to_string(),
+            channel_id: None,
+            run_scope_id: None,
             user_message: user_message.to_string(),
             cancel_token,
             workspace_path: workspace_path.map(str::to_string),
@@ -212,7 +217,7 @@ pub async fn execute_via_bridge<B: EventBroadcaster>(
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
     db: &Arc<MongoDb>,
-    agent_service: &AgentService,
+    agent_service: &Arc<AgentService>,
     internal_task_manager: &Arc<TaskManager>,
     broadcaster: &Arc<B>,
     context_id: &str,
@@ -233,6 +238,8 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
             context_id: context_id.to_string(),
             agent_id: agent_id.to_string(),
             session_id: session_id.to_string(),
+            channel_id: None,
+            run_scope_id: None,
             user_message: user_message.to_string(),
             cancel_token,
             workspace_path: workspace_path.map(str::to_string),
@@ -245,7 +252,7 @@ pub async fn execute_via_bridge_with_turn_instruction<B: EventBroadcaster>(
 
 pub async fn execute_bridge_request<B: EventBroadcaster>(
     db: &Arc<MongoDb>,
-    agent_service: &AgentService,
+    agent_service: &Arc<AgentService>,
     internal_task_manager: &Arc<TaskManager>,
     broadcaster: &Arc<B>,
     request: BridgeExecutionRequest,
@@ -260,8 +267,15 @@ pub async fn execute_bridge_request<B: EventBroadcaster>(
     // Build task content
     let mut content = serde_json::json!({
         "messages": [{"role": "user", "content": request.user_message}],
-        "session_id": request.session_id,
+        "session_id": request.session_id.clone(),
+        "context_id": request.context_id.clone(),
     });
+    if let Some(channel_id) = request.channel_id.as_deref() {
+        content["channel_id"] = serde_json::Value::String(channel_id.to_string());
+    }
+    if let Some(run_scope_id) = request.run_scope_id.as_deref() {
+        content["run_scope_id"] = serde_json::Value::String(run_scope_id.to_string());
+    }
     if let Some(wp) = request.workspace_path.as_deref() {
         content["workspace_path"] = serde_json::Value::String(wp.to_string());
     }
@@ -324,9 +338,26 @@ pub async fn execute_bridge_request<B: EventBroadcaster>(
         linked.cancel();
     });
 
-    // Execute via TaskExecutor
-    let executor = TaskExecutor::new(db.clone(), internal_task_manager.clone());
-    let mut exec_result = Box::pin(executor.execute_task(&task_id, internal_cancel)).await;
+    let admission = execution_admission::admit_or_queue_task(
+        db,
+        agent_service,
+        internal_task_manager,
+        &task_id,
+    )
+    .await?;
+    if matches!(admission, TaskAdmissionOutcome::Queued) {
+        broadcaster
+            .broadcast(
+                &request.context_id,
+                StreamEvent::Status {
+                    status: "queued".to_string(),
+                },
+            )
+            .await;
+    }
+
+    let mut exec_result =
+        wait_for_task_terminal(agent_service, &task_id, &request.cancel_token).await;
 
     // Align bridge return value with persisted task status.
     // TaskExecutor can consume internal errors and still return Ok(()),
@@ -364,13 +395,56 @@ pub async fn execute_bridge_request<B: EventBroadcaster>(
         }
     }
 
-    // Wait for bridge to finish
-    let _ = bridge_handle.await;
+    // Wait for bridge to finish. If the request was cancelled while queued,
+    // no executor will emit a terminal stream event, so stop the relay task.
+    if request.cancel_token.is_cancelled() {
+        bridge_handle.abort();
+    } else {
+        let _ = bridge_handle.await;
+    }
 
     // Cleanup temp task
     let _ = cleanup_temp_task(db, &task_id).await;
 
     exec_result
+}
+
+async fn wait_for_task_terminal(
+    agent_service: &Arc<AgentService>,
+    task_id: &str,
+    cancel_token: &CancellationToken,
+) -> Result<()> {
+    loop {
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                let _ = agent_service.cancel_task(task_id).await;
+                return Err(anyhow!("Task {} was cancelled", task_id));
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {
+                let Some(task) = agent_service.get_task(task_id).await? else {
+                    return Ok(());
+                };
+                match task.status {
+                    TaskStatus::Pending | TaskStatus::Approved | TaskStatus::Queued | TaskStatus::Running => {}
+                    TaskStatus::Completed => return Ok(()),
+                    TaskStatus::Failed => {
+                        let msg = task
+                            .error_message
+                            .unwrap_or_else(|| "Task execution failed".to_string());
+                        return Err(anyhow!("Task {} failed: {}", task_id, msg));
+                    }
+                    TaskStatus::Cancelled => return Err(anyhow!("Task {} was cancelled", task_id)),
+                    other => {
+                        return Err(anyhow!(
+                            "Task {} ended in unexpected status: {}",
+                            task_id,
+                            other
+                        ));
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn normalize_scope_path(path: &str) -> Option<String> {

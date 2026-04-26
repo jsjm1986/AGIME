@@ -152,22 +152,13 @@ export function LoginPage() {
       <div className="absolute top-4 right-4">
         <LanguageSwitcher />
       </div>
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-      <div className="max-w-lg space-y-4 px-2 pt-10 lg:pt-20">
-        <div className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--ui-line-soft))/0.74] bg-[hsl(var(--ui-surface-panel-strong))/0.78] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[hsl(var(--muted-foreground))/0.88]">
-          {brand.name}
-        </div>
-        <div className="space-y-3">
-          <h1 className="font-display text-[34px] font-semibold tracking-[-0.04em] text-[hsl(var(--foreground))] md:text-[42px]">
-            {t('auth.login')}
-          </h1>
-          <p className="max-w-xl text-sm leading-7 text-[hsl(var(--muted-foreground))/0.94] md:text-[15px]">
-            {t('auth.loginDescription')}
-          </p>
-        </div>
-      </div>
-      <Card className="w-full max-w-md border-[hsl(var(--ui-line-soft))/0.78] bg-[hsl(var(--card))/0.92] shadow-[0_26px_54px_hsl(var(--ui-shadow)/0.12)]">
+      <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-md items-center justify-center">
+      <div className="w-full">
+      <Card className="w-full border-[hsl(var(--ui-line-soft))/0.78] bg-[hsl(var(--card))/0.92] shadow-[0_26px_54px_hsl(var(--ui-shadow)/0.12)]">
         <CardHeader>
+          <div className="mb-2 inline-flex w-fit items-center gap-2 rounded-full border border-[hsl(var(--ui-line-soft))/0.74] bg-[hsl(var(--ui-surface-panel-strong))/0.78] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[hsl(var(--muted-foreground))/0.88]">
+            {brand.name}
+          </div>
           <CardTitle className="text-[26px]">{t('auth.login')}</CardTitle>
           <CardDescription className="leading-6">{t('auth.loginDescription')}</CardDescription>
         </CardHeader>
@@ -265,7 +256,7 @@ export function LoginPage() {
       </Card>
 
       {/* License activation toggle */}
-      <div className="mt-4 w-full max-w-md">
+      <div className="mt-4 w-full">
         <button
           type="button"
           onClick={() => setShowLicense(!showLicense)}
@@ -409,6 +400,7 @@ export function LoginPage() {
             </CardContent>
           </Card>
         )}
+      </div>
       </div>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import {
   Loader2,
   X,
@@ -13,12 +13,16 @@ import {
   Wrench,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import i18n from "../../i18n";
 import { useAuth } from "../../contexts/AuthContext";
 import {
   chatApi,
   type ComposerCapabilitiesCatalog,
   type CreateSessionOptions,
   type ChatSessionEvent,
+  type ChatWorkspaceFileBlock,
+  type DelegationRuntime,
+  type DelegationRuntimeEventPayload,
   type SessionTaskItem,
   type SessionTaskSummary,
   type UserChatMemorySuggestion,
@@ -43,17 +47,23 @@ import {
 import { DocumentPicker } from "../documents/DocumentPicker";
 import { BottomSheetPanel } from "../mobile/BottomSheetPanel";
 import type { TeamAgent } from "../../api/agent";
-import type { Message } from "./ChatMessageBubble";
+import type { Message, ToolCallInfo } from "./ChatMessageBubble";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const CHAT_DEBUG_VIEW_STORAGE_KEY = "chat:show_tool_debug_messages:v1";
-const CAPABILITY_BLOCK_HEADER = "请优先使用以下能力完成本轮任务：";
+const CAPABILITY_BLOCK_HEADER = bilingual("请优先使用以下能力完成本轮任务：", "Please prioritize using the following capabilities in this turn:");
+const MIN_VISIBLE_COMPACTION_FREED_TOKENS = 256;
 
 const AGENT_STATUS_DOT: Record<string, string> = {
   running: "bg-status-success-text",
   error: "bg-status-error-text",
   paused: "bg-status-warning-text",
 };
+
+function bilingual(zh: string, en: string): string {
+  const lang = i18n.resolvedLanguage || i18n.language || "zh";
+  return lang.toLowerCase().startsWith("en") ? en : zh;
+}
 
 const FILE_ACCEPT = [
   ".pdf",
@@ -88,6 +98,54 @@ function stringArraysEqual(a: string[], b: string[]) {
     if (a[i] !== b[i]) return false;
   }
   return true;
+}
+
+function normalizeCompactionToken(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function compactionFreedTokens(detail: {
+  before_tokens?: unknown;
+  after_tokens?: unknown;
+  before?: unknown;
+  after?: unknown;
+}): number {
+  const before = Number(detail.before_tokens ?? detail.before ?? 0);
+  const after = Number(detail.after_tokens ?? detail.after ?? 0);
+  if (!Number.isFinite(before) || !Number.isFinite(after)) {
+    return 0;
+  }
+  return Math.max(0, before - after);
+}
+
+function shouldDisplayCompactionEvent(detail: {
+  before_tokens?: unknown;
+  after_tokens?: unknown;
+  before?: unknown;
+  after?: unknown;
+  phase?: unknown;
+  reason?: unknown;
+}): boolean {
+  const freed = compactionFreedTokens(detail);
+  const phase = normalizeCompactionToken(detail.phase);
+  const reason = normalizeCompactionToken(detail.reason);
+  const structural =
+    phase === "session_memory_compaction" ||
+    phase === "committed_collapse" ||
+    phase === "staged_collapse" ||
+    reason === "session_memory_compaction" ||
+    reason === "committed_collapse" ||
+    reason === "staged_collapse";
+  if (structural) {
+    return true;
+  }
+  if (phase === "projection_refresh" || reason === "projection_refresh") {
+    return freed >= MIN_VISIBLE_COMPACTION_FREED_TOKENS;
+  }
+  return freed >= MIN_VISIBLE_COMPACTION_FREED_TOKENS;
 }
 
 function parseCapabilityBlock(text: string): {
@@ -150,14 +208,182 @@ function summarizeMemorySuggestion(
 ): string[] {
   const patch = suggestion.proposed_patch || {};
   const lines: string[] = [];
-  if (patch.preferred_address) lines.push(`称呼：${patch.preferred_address}`);
-  if (patch.role_hint) lines.push(`角色：${patch.role_hint}`);
-  if (patch.current_focus) lines.push(`关注：${patch.current_focus}`);
+  if (patch.preferred_address) lines.push(bilingual(`称呼：${patch.preferred_address}`, `Preferred address: ${patch.preferred_address}`));
+  if (patch.role_hint) lines.push(bilingual(`角色：${patch.role_hint}`, `Role: ${patch.role_hint}`));
+  if (patch.current_focus) lines.push(bilingual(`关注：${patch.current_focus}`, `Focus: ${patch.current_focus}`));
   if (patch.collaboration_preference) {
-    lines.push(`协作偏好：${patch.collaboration_preference}`);
+    lines.push(bilingual(`协作偏好：${patch.collaboration_preference}`, `Collaboration preference: ${patch.collaboration_preference}`));
   }
-  if (patch.notes) lines.push(`备注：${patch.notes}`);
+  if (patch.notes) lines.push(bilingual(`备注：${patch.notes}`, `Notes: ${patch.notes}`));
   return lines;
+}
+
+function delegationRuntimeStatusTone(status?: string | null) {
+  switch ((status || "").toLowerCase()) {
+    case "completed":
+      return "bg-status-success-bg text-status-success-text";
+    case "failed":
+      return "bg-status-error-bg text-status-error-text";
+    case "running":
+      return "bg-status-info-bg text-status-info-text";
+    case "pending":
+      return "bg-status-warning-bg text-status-warning-text";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
+function delegationRuntimeStatusLabel(status?: string | null) {
+  switch ((status || "").toLowerCase()) {
+    case "completed":
+      return bilingual("已完成", "Completed");
+    case "failed":
+      return bilingual("失败", "Failed");
+    case "running":
+      return bilingual("运行中", "Running");
+    case "pending":
+      return bilingual("等待中", "Pending");
+    default:
+      return bilingual("空闲", "Idle");
+  }
+}
+
+function delegationWorkerRoleLabel(role?: string | null) {
+  switch ((role || "").toLowerCase()) {
+    case "leader":
+      return bilingual("协调者", "Leader");
+    case "subagent":
+      return bilingual("独立任务", "Single worker");
+    case "swarm_worker":
+      return bilingual("并行任务", "Parallel worker");
+    case "validation_worker":
+      return bilingual("验证任务", "Validation worker");
+    default:
+      return bilingual("任务", "Worker");
+  }
+}
+
+function delegationWorkerTitle(worker: DelegationRuntime["workers"][number]) {
+  const raw = (worker.title || worker.worker_id || "").trim();
+  const index =
+    raw.match(/^worker_(\d+)(?:_|$)/i)?.[1] ||
+    (worker.worker_id || "").match(/^worker_(\d+)(?:_|$)/i)?.[1];
+  if (index) {
+    return `Worker ${index}`;
+  }
+  if ((!raw || raw === worker.worker_id) && worker.role === "subagent") {
+    return "Worker";
+  }
+  return raw || "Worker";
+}
+
+function delegationLeaderTitle(title?: string | null) {
+  const raw = (title || "").trim();
+  if (!raw || raw === "Leader") {
+    return bilingual("协调者", "Leader");
+  }
+  return raw;
+}
+
+function buildDelegationRuntimeSummary(runtime: DelegationRuntime | null): string {
+  if (!runtime) return bilingual("无委托", "No delegation");
+  const running = runtime.workers.filter((worker) => worker.status === "running").length;
+  const pending = runtime.workers.filter((worker) => worker.status === "pending").length;
+  const completed = runtime.workers.filter(
+    (worker) => worker.status === "completed",
+  ).length;
+  const failed = runtime.workers.filter((worker) => worker.status === "failed").length;
+  if (running > 0) {
+    return bilingual(
+      `${running} worker(s) running${completed > 0 ? `, ${completed} completed` : ""}`,
+      `${running} worker(s) running${completed > 0 ? `, ${completed} completed` : ""}`,
+    );
+  }
+  if (pending > 0) {
+    return bilingual(`${pending} 个 worker 等待中`, `${pending} worker(s) pending`);
+  }
+  if (failed > 0) {
+    return completed > 0
+      ? bilingual(
+          `${completed} worker(s) completed, ${failed} failed`,
+          `${completed} worker(s) completed, ${failed} failed`,
+        )
+      : bilingual(`${failed} 个 worker 失败`, `${failed} worker(s) failed`);
+  }
+  return bilingual(
+    `${completed || runtime.workers.length} worker(s) completed`,
+    `${completed || runtime.workers.length} worker(s) completed`,
+  );
+}
+
+function applyDelegationRuntimePatch(
+  previous: DelegationRuntime | null,
+  payload: DelegationRuntimeEventPayload,
+): DelegationRuntime {
+  const base: DelegationRuntime = previous
+    ? {
+        ...previous,
+        workers: [...previous.workers],
+      }
+    : {
+        active_run: true,
+        mode: payload.mode || "subagent",
+        status: payload.status || "running",
+        summary: payload.summary || null,
+        leader: null,
+        workers: [],
+      };
+
+  if (payload.mode) {
+    base.mode = payload.mode;
+  }
+  if (payload.status) {
+    base.status = payload.status;
+  }
+  if (typeof payload.summary === "string") {
+    base.summary = payload.summary;
+  }
+
+  if (payload.worker) {
+    const nextWorker = payload.worker;
+    const workerKey = nextWorker.worker_id;
+    const workerIndex = base.workers.findIndex(
+      (worker) => worker.worker_id === workerKey,
+    );
+    if (workerIndex >= 0) {
+      base.workers[workerIndex] = {
+        ...base.workers[workerIndex],
+        ...nextWorker,
+        summary:
+          nextWorker.summary ?? base.workers[workerIndex].summary ?? undefined,
+        result_summary:
+          nextWorker.result_summary ??
+          base.workers[workerIndex].result_summary ??
+          undefined,
+        error: nextWorker.error ?? base.workers[workerIndex].error ?? undefined,
+      };
+    } else {
+      base.workers.push(nextWorker);
+    }
+  }
+
+  const hasRunning = base.workers.some((worker) => worker.status === "running");
+  const hasPending = base.workers.some((worker) => worker.status === "pending");
+  const hasFailed = base.workers.some((worker) => worker.status === "failed");
+  if (hasRunning) {
+    base.status = "running";
+  } else if (hasPending) {
+    base.status = "pending";
+  } else if (hasFailed) {
+    base.status = "failed";
+  } else {
+    base.status = "completed";
+  }
+  base.active_run = base.status === "running" || base.status === "pending";
+  if (!base.summary?.trim()) {
+    base.summary = buildDelegationRuntimeSummary(base);
+  }
+  return base;
 }
 
 export interface ChatRuntimeEvent {
@@ -273,14 +499,37 @@ function deriveAssistantPresentation(
   rawContent?: string,
   rawThinking?: string,
 ) {
-  const extracted = extractTaggedThinking(rawContent || "");
+  const extracted = extractTaggedThinking(
+    stripAssistantSystemInlineNoise(rawContent || ""),
+  );
   return {
     content: extracted.content,
     thinking: combineThinkingSegments(rawThinking, extracted.thinking),
   };
 }
 
+function isCompactionInlineMessageText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return (
+    normalized.startsWith("exceeded auto-compact threshold of ") ||
+    normalized.startsWith("context limit reached. compacting to continue conversation...")
+  );
+}
+
+function stripAssistantSystemInlineNoise(text: string): string {
+  let output = text;
+  const patterns = [
+    /^Exceeded auto-compact threshold of \d+%\.\s*Performing auto-compaction\.\.\.\s*/i,
+    /^Context limit reached\.\s*Compacting to continue conversation\.\.\.\s*/i,
+  ];
+  for (const pattern of patterns) {
+    output = output.replace(pattern, "");
+  }
+  return output;
+}
+
 type PersistedToolState = {
+  runId?: string | null;
   name?: string;
   result?: string;
   success?: boolean;
@@ -334,6 +583,10 @@ function buildPersistedToolStateMap(events: ChatSessionEvent[]) {
       }
       states.set(toolId, {
         ...(states.get(toolId) || {}),
+        runId:
+          typeof event.run_id === "string" && event.run_id.trim().length > 0
+            ? event.run_id.trim()
+            : states.get(toolId)?.runId,
         name: toolName || states.get(toolId)?.name,
         status: "running",
       });
@@ -355,6 +608,10 @@ function buildPersistedToolStateMap(events: ChatSessionEvent[]) {
       const success = payload.success !== false;
       states.set(toolId, {
         ...(states.get(toolId) || {}),
+        runId:
+          typeof event.run_id === "string" && event.run_id.trim().length > 0
+            ? event.run_id.trim()
+            : states.get(toolId)?.runId,
         name: toolName || states.get(toolId)?.name,
         result: stringifyToolResult(payload.content),
         success,
@@ -367,12 +624,109 @@ function buildPersistedToolStateMap(events: ChatSessionEvent[]) {
   return states;
 }
 
+function attachUnmatchedPersistedToolStatesToLatestAssistant(
+  messages: Message[],
+  toolStates: Map<string, PersistedToolState>,
+  unresolvedStatus: "running" | "missing",
+) {
+  if (messages.length === 0 || toolStates.size === 0) {
+    return messages;
+  }
+
+  const latestRunId = Array.from(toolStates.values())
+    .map((state) => state.runId?.trim())
+    .filter((value): value is string => Boolean(value))
+    .slice(-1)[0];
+
+  const referencedToolIds = new Set(
+    messages.flatMap((message) => (message.toolCalls || []).map((tool) => tool.id)),
+  );
+
+  const syntheticToolCalls = Array.from(toolStates.entries())
+    .filter(([id, state]) => {
+      if (referencedToolIds.has(id)) {
+        return false;
+      }
+      return !latestRunId || state.runId === latestRunId;
+    })
+    .map(([id, state]) => ({
+      id,
+      name: state.name || "tool",
+      result: state.result,
+      success: state.success,
+      durationMs: state.durationMs,
+      status: state.status || unresolvedStatus,
+    }));
+
+  if (syntheticToolCalls.length === 0) {
+    return messages;
+  }
+
+  const next = [...messages];
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const message = next[index];
+    if (message.role !== "assistant") {
+      continue;
+    }
+    if (message.toolCalls && message.toolCalls.length > 0) {
+      return next;
+    }
+    next[index] = {
+      ...message,
+      toolCalls: syntheticToolCalls,
+    };
+    return next;
+  }
+  return next;
+}
+
+function isWorkspaceDeliveryHandoffText(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.startsWith("document exported to workspace successfully.") ||
+    normalized.startsWith("document access established") ||
+    normalized.includes("use developer shell, mcp, or another local tool")
+  );
+}
+
+function removeRedundantWorkspaceDeliveryHandoffs(messages: Message[]): Message[] {
+  const cleaned: Message[] = [];
+  let seenAssistantSinceLastUser = false;
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      seenAssistantSinceLastUser = false;
+      cleaned.push(message);
+      continue;
+    }
+
+    const isRedundantHandoff =
+      seenAssistantSinceLastUser &&
+      isWorkspaceDeliveryHandoffText(message.content) &&
+      !(message.thinking && message.thinking.trim().length > 0) &&
+      (message.workspaceFiles?.length || 0) === 0 &&
+      (message.toolCalls?.length || 0) === 0;
+
+    if (isRedundantHandoff) {
+      continue;
+    }
+
+    cleaned.push(message);
+    seenAssistantSinceLastUser = true;
+  }
+
+  return cleaned;
+}
+
 function enrichHistoricalMessagesWithToolStates(
   messages: Message[],
   toolStates: Map<string, PersistedToolState>,
   unresolvedStatus: "running" | "missing",
 ) {
-  return messages.map((message) => {
+  const enriched = messages.map((message) => {
     if (!message.toolCalls || message.toolCalls.length === 0) {
       return message;
     }
@@ -400,6 +754,110 @@ function enrichHistoricalMessagesWithToolStates(
       }),
     };
   });
+  return removeRedundantWorkspaceDeliveryHandoffs(
+    attachUnmatchedPersistedToolStatesToLatestAssistant(
+      enriched,
+      toolStates,
+      unresolvedStatus,
+    ),
+  );
+}
+
+function mergeAssistantTurnMessages(messages: Message[]): Message[] {
+  if (messages.length <= 1) {
+    return messages;
+  }
+
+  const merged: Message[] = [];
+  let pendingAssistant: Message | null = null;
+
+  const flushPending = () => {
+    if (pendingAssistant) {
+      merged.push(pendingAssistant);
+      pendingAssistant = null;
+    }
+  };
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      flushPending();
+      merged.push(message);
+      continue;
+    }
+
+    if (!pendingAssistant) {
+      pendingAssistant = { ...message };
+      continue;
+    }
+
+    const mergedContentParts: string[] = [
+      pendingAssistant.content.trim(),
+      message.content.trim(),
+    ].filter(Boolean);
+    const mergedThinkingParts: string[] = [
+      pendingAssistant.thinking?.trim() || "",
+      message.thinking?.trim() || "",
+    ].filter(Boolean);
+    const mergedRawContentParts: string[] = [
+      pendingAssistant.rawContent?.trim() || "",
+      message.rawContent?.trim() || "",
+    ].filter(Boolean);
+    const mergedRawThinkingParts: string[] = [
+      pendingAssistant.rawThinking?.trim() || "",
+      message.rawThinking?.trim() || "",
+    ].filter(Boolean);
+    const workspaceFilesByPath = new Map<string, ChatWorkspaceFileBlock>();
+    for (const file of pendingAssistant.workspaceFiles || []) {
+      workspaceFilesByPath.set(file.path, file);
+    }
+    for (const file of message.workspaceFiles || []) {
+      if (!workspaceFilesByPath.has(file.path)) {
+        workspaceFilesByPath.set(file.path, file);
+      }
+    }
+    const toolCallsById = new Map<string, ToolCallInfo>();
+    for (const toolCall of pendingAssistant.toolCalls || []) {
+      toolCallsById.set(toolCall.id, toolCall);
+    }
+    for (const toolCall of message.toolCalls || []) {
+      if (!toolCallsById.has(toolCall.id)) {
+        toolCallsById.set(toolCall.id, toolCall);
+      }
+    }
+
+    pendingAssistant = {
+      ...pendingAssistant,
+      content: mergedContentParts.join("\n\n"),
+      thinking:
+        mergedThinkingParts.length > 0
+          ? mergedThinkingParts.join("\n\n")
+          : undefined,
+      rawContent:
+        mergedRawContentParts.length > 0
+          ? mergedRawContentParts.join("\n\n")
+          : undefined,
+      rawThinking:
+        mergedRawThinkingParts.length > 0
+          ? mergedRawThinkingParts.join("\n\n")
+          : undefined,
+      toolCalls:
+        toolCallsById.size > 0 ? Array.from(toolCallsById.values()) : undefined,
+      workspaceFiles:
+        workspaceFilesByPath.size > 0
+          ? Array.from(workspaceFilesByPath.values())
+          : undefined,
+      turn: message.turn || pendingAssistant.turn,
+      compaction: message.compaction || pendingAssistant.compaction,
+      isStreaming: pendingAssistant.isStreaming || message.isStreaming,
+      timestamp:
+        message.timestamp > pendingAssistant.timestamp
+          ? message.timestamp
+          : pendingAssistant.timestamp,
+    };
+  }
+
+  flushPending();
+  return merged;
 }
 
 export function ChatConversation({
@@ -456,10 +914,14 @@ export function ChatConversation({
     useState<ChatInputComposeRequest | null>(null);
   const [showCapabilities, setShowCapabilities] = useState(false);
   const [showTasksPanel, setShowTasksPanel] = useState(false);
+  const [showDelegationPanel, setShowDelegationPanel] = useState(false);
   const [tasksEnabled, setTasksEnabled] = useState(false);
   const [taskBoardId, setTaskBoardId] = useState<string | null>(null);
   const [currentTasks, setCurrentTasks] = useState<SessionTaskItem[]>([]);
   const [taskSummary, setTaskSummary] = useState<SessionTaskSummary | null>(null);
+  const [delegationRuntime, setDelegationRuntime] =
+    useState<DelegationRuntime | null>(null);
+  const [delegationSupported, setDelegationSupported] = useState(false);
   const [memorySuggestions, setMemorySuggestions] = useState<
     UserChatMemorySuggestion[]
   >([]);
@@ -478,6 +940,7 @@ export function ChatConversation({
   const eventSourceRef = useRef<EventSource | null>(null);
   const currentSessionRef = useRef<string | null>(sessionId);
   const justCreatedRef = useRef(false);
+  const shouldScrollToBottomOnLoadRef = useRef<boolean>(!!sessionId);
   const optimisticTurnRef = useRef<{
     sessionId: string;
     userMessage: Message;
@@ -556,12 +1019,12 @@ export function ChatConversation({
         if (!cancelled) {
           console.error("Failed to load composer capabilities:", error);
           setCapabilityCatalog(null);
-          setCapabilityError(
-            t(
-              "chat.capabilityPickerLoadFailed",
-              "当前无法读取可调用技能目录，请稍后再试。",
-            ),
-          );
+            setCapabilityError(
+              t(
+                "chat.capabilityPickerLoadFailed",
+                "Unable to load the callable skill catalog right now. Please try again later.",
+              ),
+            );
         }
       } finally {
         if (!cancelled) {
@@ -579,6 +1042,9 @@ export function ChatConversation({
   useEffect(() => {
     currentSessionRef.current = sessionId;
     lastEventIdRef.current = null;
+    if (sessionId) {
+      shouldScrollToBottomOnLoadRef.current = true;
+    }
   }, [sessionId]);
 
   const loadRelationshipSuggestions = useCallback(
@@ -716,10 +1182,10 @@ export function ChatConversation({
           ? "HTTP"
           : extension.type.toUpperCase()
         : extension.class === "builtin"
-          ? "内置"
+          ? bilingual("内置", "Built-in")
           : extension.class === "team"
-            ? "团队"
-            : "扩展";
+            ? bilingual("团队", "Team")
+            : bilingual("扩展", "Extension");
       entries.set(extension.ext_ref, {
         key: `ext:${extension.runtime_name}`,
         kind: "extension",
@@ -817,6 +1283,8 @@ export function ChatConversation({
     if (!sessionId) {
       optimisticTurnRef.current = null;
       setMessages([]);
+      setDelegationRuntime(null);
+      setDelegationSupported(false);
       return;
     }
     // Skip loadSession if we just created this session in handleSend
@@ -828,10 +1296,36 @@ export function ChatConversation({
     loadSession(sessionId);
   }, [sessionId]);
 
-  // M17: Auto-scroll only when user is near the bottom
+  // On first load of a session, wait until layout settles, then jump to the newest message.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    if (!shouldScrollToBottomOnLoadRef.current || loading) {
+      return;
+    }
+
+    let frame1 = 0;
+    let frame2 = 0;
+    frame1 = window.requestAnimationFrame(() => {
+      frame2 = window.requestAnimationFrame(() => {
+        shouldScrollToBottomOnLoadRef.current = false;
+        messagesEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame1);
+      window.cancelAnimationFrame(frame2);
+    };
+  }, [loading, messages, sessionId]);
+
+  // After initial load, auto-scroll only when user is already near the bottom.
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
+    if (shouldScrollToBottomOnLoadRef.current) {
+      return;
+    }
     const threshold = 150;
     const isNearBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight <
@@ -940,6 +1434,7 @@ export function ChatConversation({
     try {
       const detail = await chatApi.getSession(sid);
       applyTaskDetail(detail);
+      applyDelegationDetail(detail);
       let parsed = await hydrateHistoricalMessages(
         sid,
         detail.messages_json,
@@ -1023,6 +1518,7 @@ export function ChatConversation({
         let rawText = "";
         let rawThinking = "";
         const toolCalls: Array<{ name: string; id: string }> = [];
+        const workspaceFiles: ChatWorkspaceFileBlock[] = [];
         if (typeof m.content === "string") {
           rawText = m.content;
         } else if (Array.isArray(m.content)) {
@@ -1050,7 +1546,27 @@ export function ChatConversation({
               });
             }
             if (cType === "systemnotification" && typeof c?.msg === "string") {
+              if (isCompactionInlineMessageText(c.msg)) {
+                continue;
+              }
               rawText += c.msg;
+              continue;
+            }
+            if (
+              cType === "workspace_file" &&
+              typeof c?.path === "string" &&
+              typeof c?.label === "string"
+            ) {
+              workspaceFiles.push({
+                type: "workspace_file",
+                path: c.path,
+                label: c.label,
+                content_type:
+                  typeof c?.content_type === "string" ? c.content_type : null,
+                size_bytes:
+                  typeof c?.size_bytes === "number" ? c.size_bytes : null,
+                preview_supported: c?.preview_supported !== false,
+              });
             }
           }
         } else if (m.content && typeof m.content === "object") {
@@ -1070,7 +1586,8 @@ export function ChatConversation({
         const hasContent =
           visibleAssistant.content.trim().length > 0 ||
           (visibleAssistant.thinking || "").trim().length > 0 ||
-          toolCalls.length > 0;
+          toolCalls.length > 0 ||
+          workspaceFiles.length > 0;
         if (!hasContent) continue;
         const createdRaw = Number(m?.created ?? m?.timestamp ?? 0);
         const createdMs = Number.isFinite(createdRaw)
@@ -1086,6 +1603,10 @@ export function ChatConversation({
           rawContent: role === "assistant" ? rawText : undefined,
           rawThinking: role === "assistant" ? rawThinking : undefined,
           toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          workspaceFiles:
+            role === "assistant" && workspaceFiles.length > 0
+              ? workspaceFiles
+              : undefined,
           timestamp: createdMs > 0 ? new Date(createdMs) : new Date(),
         });
       }
@@ -1418,13 +1939,21 @@ export function ChatConversation({
       captureEventId(e);
       const data = safeParse(e.data);
       if (!data) return;
-      if (typeof data.content === "string" && data.content.length > 0) {
+      if (
+        typeof data.content === "string" &&
+        data.content.length > 0 &&
+        !isCompactionInlineMessageText(data.content)
+      ) {
         emitRuntimeEvent("text", data.content, { source: "assistant_stream" });
       }
       updateLastAssistant((msg) => {
+        const nextChunk =
+          typeof data.content === "string" &&
+          !isCompactionInlineMessageText(data.content)
+            ? data.content
+            : "";
         const nextRawContent =
-          (msg.rawContent || "") +
-          (typeof data.content === "string" ? data.content : "");
+          (msg.rawContent || "") + nextChunk;
         const derived = deriveAssistantPresentation(
           nextRawContent,
           msg.rawThinking || "",
@@ -1536,6 +2065,13 @@ export function ChatConversation({
       }
     });
 
+    es.addEventListener("delegation", (e) => {
+      if (currentSessionRef.current !== sid) return;
+      const data = safeParse(e.data) as DelegationRuntimeEventPayload | null;
+      if (!data) return;
+      setDelegationRuntime((prev) => applyDelegationRuntimePatch(prev, data));
+    });
+
     es.addEventListener("turn", (e) => {
       if (currentSessionRef.current !== sid) return;
       captureEventId(e);
@@ -1561,12 +2097,17 @@ export function ChatConversation({
       captureEventId(e);
       const data = safeParse(e.data);
       if (!data) return;
+      if (!shouldDisplayCompactionEvent(data)) {
+        return;
+      }
       const compactLabel = t("chat.statusCompaction", "Compacting context...");
       setLiveStatus(compactLabel);
       emitRuntimeEvent("compaction", compactLabel, {
         strategy: data.strategy,
         before: data.before_tokens,
         after: data.after_tokens,
+        phase: data.phase,
+        reason: data.reason,
       });
       updateLastAssistant((msg) => ({
         ...msg,
@@ -1574,6 +2115,8 @@ export function ChatConversation({
           strategy: data.strategy,
           before: data.before_tokens,
           after: data.after_tokens,
+          phase: data.phase,
+          reason: data.reason,
         },
       }));
     });
@@ -1662,7 +2205,8 @@ export function ChatConversation({
           const hasReadableContent =
             msg.content.trim().length > 0 ||
             (msg.thinking || "").trim().length > 0 ||
-            (msg.toolCalls?.length || 0) > 0;
+            (msg.toolCalls?.length || 0) > 0 ||
+            (msg.workspaceFiles?.length || 0) > 0;
           return {
             ...msg,
             isStreaming: false,
@@ -1726,6 +2270,7 @@ export function ChatConversation({
           const detail = await chatApi.getSession(sid);
           if (currentSessionRef.current !== sid) return;
           applyTaskDetail(detail);
+          applyDelegationDetail(detail);
           if (detail.is_processing) {
             // Sync latest persisted messages before reconnect to reduce visual gaps.
             const parsed = await hydrateHistoricalMessages(
@@ -1779,14 +2324,16 @@ export function ChatConversation({
   };
 
   const displayMessages = useMemo(() => {
-    if (showToolDebugMessages) return messages;
+    const turnMergedMessages = mergeAssistantTurnMessages(messages);
+    if (showToolDebugMessages) return turnMergedMessages;
 
     const out: Message[] = [];
-    for (const msg of messages) {
+    for (const msg of turnMergedMessages) {
       const isToolOnlyAssistant =
         msg.role === "assistant" &&
         (msg.content || "").trim().length === 0 &&
         !(msg.thinking && msg.thinking.trim().length > 0) &&
+        (msg.workspaceFiles?.length || 0) === 0 &&
         (msg.toolCalls?.length || 0) > 0;
 
       if (!isToolOnlyAssistant) {
@@ -1837,6 +2384,7 @@ export function ChatConversation({
         const detail = await chatApi.getSession(sid);
         if (currentSessionRef.current !== sid) return;
         applyTaskDetail(detail);
+        applyDelegationDetail(detail);
 
         if (!detail.is_processing) {
           const parsed = await hydrateHistoricalMessages(
@@ -1920,6 +2468,8 @@ export function ChatConversation({
     !!agent?.model && normalizedModelName !== normalizedAgentName;
   const hasSecondaryIdentity = !!agent?.description || showModelBadge;
   const compactHeader = headerVariant === "compact";
+  const delegationSummary = buildDelegationRuntimeSummary(delegationRuntime);
+  const canShowDelegationToggle = delegationSupported || !!delegationRuntime;
 
   const applyTaskDetail = useCallback(
     (detail: {
@@ -1932,6 +2482,39 @@ export function ChatConversation({
       setTaskBoardId(detail.task_board_id || null);
       setCurrentTasks(detail.current_tasks || []);
       setTaskSummary(detail.task_summary || null);
+    },
+    [],
+  );
+
+  const applyDelegationDetail = useCallback(
+    (detail: {
+      delegation_runtime?: DelegationRuntime | null;
+      harness_capabilities?: {
+        subagent_enabled?: boolean;
+        swarm_enabled?: boolean;
+        worker_peer_messaging_enabled?: boolean;
+        auto_swarm_enabled?: boolean;
+        validation_worker_enabled?: boolean;
+      } | null;
+      subagent_enabled?: boolean;
+      swarm_enabled?: boolean;
+      worker_peer_messaging_enabled?: boolean;
+      validation_worker_enabled?: boolean;
+    }) => {
+      setDelegationRuntime(detail.delegation_runtime || null);
+      setDelegationSupported(
+        Boolean(
+          detail.harness_capabilities?.subagent_enabled ||
+            detail.harness_capabilities?.swarm_enabled ||
+            detail.harness_capabilities?.worker_peer_messaging_enabled ||
+            detail.harness_capabilities?.auto_swarm_enabled ||
+            detail.harness_capabilities?.validation_worker_enabled ||
+            detail.subagent_enabled ||
+            detail.swarm_enabled ||
+            detail.worker_peer_messaging_enabled ||
+            detail.validation_worker_enabled,
+        ),
+      );
     },
     [],
   );
@@ -2019,6 +2602,25 @@ export function ChatConversation({
                 {!compactHeader && (
                   <span className="hidden md:inline">
                     {t("chat.tasks", "Tasks")}
+                  </span>
+                )}
+              </button>
+            )}
+            {canShowDelegationToggle && (
+              <button
+                onClick={() => setShowDelegationPanel((value) => !value)}
+                className={`${compactHeader ? "h-8 gap-1 rounded-full px-2.5 text-[11px]" : "h-6 gap-1 rounded-md px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-caption"} inline-flex items-center border border-border/60 text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground`}
+                title={t("chat.delegation", "协作运行态")}
+              >
+                {showDelegationPanel ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )}
+                <Bot className="h-3.5 w-3.5" />
+                {!compactHeader && (
+                  <span className="hidden md:inline">
+                    {t("chat.delegation", "协作运行态")}
                   </span>
                 )}
               </button>
@@ -2150,98 +2752,204 @@ export function ChatConversation({
                 {...msg}
                 agentName={agentName}
                 userName={user?.display_name}
+                sessionId={sessionId || undefined}
+                showExecutionDetails={showToolDebugMessages}
               />
             ))}
             <div ref={messagesEndRef} />
           </div>
-          {tasksEnabled && showTasksPanel && (
-            <aside className="hidden w-72 shrink-0 overflow-y-auto rounded-2xl border border-border/60 bg-muted/18 p-3 lg:block">
-              <div className="flex items-center gap-2">
-                <ListTodo className="h-4 w-4 text-muted-foreground" />
-                <div className="text-sm font-medium text-foreground">
-                  {t("chat.tasks", "Tasks")}
-                </div>
-              </div>
-              {taskSummary && (
-                <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px]">
-                  <div className="rounded-xl bg-background px-2 py-2">
-                    <div className="font-semibold text-foreground">
-                      {taskSummary.pending_count}
+          {(tasksEnabled && showTasksPanel) || showDelegationPanel ? (
+            <aside className="hidden w-80 shrink-0 overflow-y-auto rounded-2xl border border-border/60 bg-muted/18 p-3 lg:block">
+              <div className="space-y-3">
+                {tasksEnabled && showTasksPanel && (
+                  <section className="rounded-xl border border-border/60 bg-background/70 p-3">
+                    <div className="flex items-center gap-2">
+                      <ListTodo className="h-4 w-4 text-muted-foreground" />
+                      <div className="text-sm font-medium text-foreground">
+                        {t("chat.tasks", "Tasks")}
+                      </div>
                     </div>
-                    <div className="text-muted-foreground">
-                      {t("chat.tasksPending", "待办")}
-                    </div>
-                  </div>
-                  <div className="rounded-xl bg-background px-2 py-2">
-                    <div className="font-semibold text-foreground">
-                      {taskSummary.in_progress_count}
-                    </div>
-                    <div className="text-muted-foreground">
-                      {t("chat.tasksInProgress", "进行中")}
-                    </div>
-                  </div>
-                  <div className="rounded-xl bg-background px-2 py-2">
-                    <div className="font-semibold text-foreground">
-                      {taskSummary.completed_count}
-                    </div>
-                    <div className="text-muted-foreground">
-                      {t("chat.tasksCompleted", "已完成")}
-                    </div>
-                  </div>
-                </div>
-              )}
-              {taskBoardId && (
-                <div className="mt-3 text-[11px] text-muted-foreground">
-                  {t("chat.taskBoardId", "任务板")}: {taskBoardId}
-                </div>
-              )}
-              <div className="mt-3 space-y-2">
-                {currentTasks.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-border/70 px-3 py-4 text-xs text-muted-foreground">
-                    {t("chat.noTasks", "当前没有任务")}
-                  </div>
-                ) : (
-                  currentTasks.map((task) => {
-                    const tone =
-                      task.status === "completed"
-                        ? "border-status-success-text/30 bg-status-success-text/8"
-                        : task.status === "in_progress"
-                          ? "border-status-info-text/30 bg-status-info-text/8"
-                          : "border-border/60 bg-background";
-                    return (
-                      <div
-                        key={task.id}
-                        className={`rounded-xl border px-3 py-2.5 ${tone}`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium text-foreground">
-                              {task.subject}
+                    {taskSummary && (
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px]">
+                        <div className="rounded-xl bg-background px-2 py-2">
+                          <div className="font-semibold text-foreground">
+                            {taskSummary.pending_count}
+                          </div>
+                          <div className="text-muted-foreground">
+                            {t("chat.tasksPending", "待办")}
+                          </div>
+                        </div>
+                        <div className="rounded-xl bg-background px-2 py-2">
+                          <div className="font-semibold text-foreground">
+                            {taskSummary.in_progress_count}
+                          </div>
+                          <div className="text-muted-foreground">
+                            {t("chat.tasksInProgress", "进行中")}
+                          </div>
+                        </div>
+                        <div className="rounded-xl bg-background px-2 py-2">
+                          <div className="font-semibold text-foreground">
+                            {taskSummary.completed_count}
+                          </div>
+                          <div className="text-muted-foreground">
+                            {t("chat.tasksCompleted", "已完成")}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {taskBoardId && (
+                      <div className="mt-3 text-[11px] text-muted-foreground">
+                        {t("chat.taskBoardId", "任务板")}: {taskBoardId}
+                      </div>
+                    )}
+                    <div className="mt-3 space-y-2">
+                      {currentTasks.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-border/70 px-3 py-4 text-xs text-muted-foreground">
+                          {t("chat.noTasks", "当前没有任务")}
+                        </div>
+                      ) : (
+                        currentTasks.map((task) => {
+                          const tone =
+                            task.status === "completed"
+                              ? "border-status-success-text/30 bg-status-success-text/8"
+                              : task.status === "in_progress"
+                                ? "border-status-info-text/30 bg-status-info-text/8"
+                                : "border-border/60 bg-background";
+                          return (
+                            <div
+                              key={task.id}
+                              className={`rounded-xl border px-3 py-2.5 ${tone}`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-sm font-medium text-foreground">
+                                    {task.subject}
+                                  </div>
+                                  <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
+                                    {task.active_form}
+                                  </div>
+                                </div>
+                                {task.status === "completed" ? (
+                                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-status-success-text" />
+                                ) : (
+                                  <span className="mt-0.5 shrink-0 rounded-full border border-border/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                    {task.status}
+                                  </span>
+                                )}
+                              </div>
+                              {task.owner ? (
+                                <div className="mt-2 text-[11px] text-muted-foreground">
+                                  {t("chat.taskOwner", "负责人")}: {task.owner}
+                                </div>
+                              ) : null}
                             </div>
-                            <div className="mt-1 text-[11px] leading-4 text-muted-foreground">
-                              {task.active_form}
+                          );
+                        })
+                      )}
+                    </div>
+                  </section>
+                )}
+                {showDelegationPanel && (
+                  <section className="rounded-xl border border-border/60 bg-background/70 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Bot className="h-4 w-4 text-muted-foreground" />
+                        <div className="text-sm font-medium text-foreground">
+                          {t("chat.delegation", "协作运行态")}
+                        </div>
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] ${delegationRuntimeStatusTone(
+                          delegationRuntime?.status,
+                        )}`}
+                      >
+                        {delegationRuntimeStatusLabel(delegationRuntime?.status)}
+                      </span>
+                    </div>
+                    <div className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                      {delegationSummary}
+                    </div>
+                    {delegationRuntime?.leader ? (
+                      <div className="mt-3 rounded-xl border border-border/60 bg-background px-3 py-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                              Leader
+                            </div>
+                            <div className="text-sm font-medium text-foreground">
+                              {delegationLeaderTitle(delegationRuntime.leader.title)}
                             </div>
                           </div>
-                          {task.status === "completed" ? (
-                            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-status-success-text" />
-                          ) : (
-                            <span className="mt-0.5 shrink-0 rounded-full border border-border/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                              {task.status}
-                            </span>
-                          )}
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] ${delegationRuntimeStatusTone(
+                              delegationRuntime.leader.status,
+                            )}`}
+                          >
+                            {delegationRuntimeStatusLabel(delegationRuntime.leader.status)}
+                          </span>
                         </div>
-                        {task.owner ? (
-                          <div className="mt-2 text-[11px] text-muted-foreground">
-                            {t("chat.taskOwner", "负责人")}: {task.owner}
+                        {delegationRuntime.leader.summary ? (
+                          <div className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                            {delegationRuntime.leader.summary}
                           </div>
                         ) : null}
                       </div>
-                    );
-                  })
+                    ) : null}
+                    <div className="mt-3 space-y-2">
+                      {delegationRuntime?.workers?.length ? (
+                        delegationRuntime.workers.map((worker) => (
+                          <div
+                            key={worker.worker_id}
+                            className="rounded-xl border border-border/60 bg-background px-3 py-2.5"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium text-foreground">
+                                  {delegationWorkerTitle(worker)}
+                                </div>
+                                <div className="mt-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                                  {delegationWorkerRoleLabel(worker.role)}
+                                </div>
+                              </div>
+                              <span
+                                className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${delegationRuntimeStatusTone(
+                                  worker.status,
+                                )}`}
+                              >
+                                {delegationRuntimeStatusLabel(worker.status)}
+                              </span>
+                            </div>
+                            {worker.summary ? (
+                              <div className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                                {worker.summary}
+                              </div>
+                            ) : null}
+                            {worker.result_summary ? (
+                              <div className="mt-2 text-[11px] leading-5 text-foreground">
+                                {worker.result_summary}
+                              </div>
+                            ) : null}
+                            {worker.error ? (
+                              <div className="mt-2 text-[11px] leading-5 text-status-error-text">
+                                {worker.error}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-border/70 px-3 py-4 text-xs text-muted-foreground">
+                          {t(
+                            "chat.noDelegationRuntime",
+                            "No subagent or swarm runtime has happened yet.",
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </section>
                 )}
               </div>
             </aside>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -2283,7 +2991,7 @@ export function ChatConversation({
                 <div className="mt-1 text-[12px] text-foreground">
                   {t(
                     "chat.selectedCapabilitiesInlineHint",
-                    "已为本轮对话挂入 {{count}} 个能力，发送时会自动带上。",
+                    "{{count}} capability references are attached to this turn and will be sent automatically.",
                     { count: selectedCapabilities.length },
                   )}
                 </div>
@@ -2335,7 +3043,7 @@ export function ChatConversation({
                         item.plainLineZh ||
                         t(
                           "chat.capabilityPickerNoDetail",
-                          "当前没有可展示的能力解读，可以直接选择后插入到输入框。",
+                          "No extra capability explanation is available right now. You can insert it directly into the composer.",
                         )}
                     </div>
                   </button>
@@ -2360,7 +3068,7 @@ export function ChatConversation({
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-700">
-                  个人记忆建议
+                  {t("chat.relationshipMemory.suggestionTitle", "个人记忆建议")}
                 </div>
                 <div className="mt-1 text-[13px] font-medium text-foreground">
                   {memorySuggestions[0].reason}
@@ -2369,7 +3077,7 @@ export function ChatConversation({
                   {summarizeMemorySuggestion(memorySuggestions[0]).map((line) => (
                     <div key={line}>{line}</div>
                   ))}
-                  <div>只作用于你在当前团队下的普通对话。</div>
+                  <div>{t("chat.relationshipMemory.scopeHint", "只作用于你在当前团队下的普通对话。")}</div>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -2382,7 +3090,7 @@ export function ChatConversation({
                   }
                   className="inline-flex h-8 items-center rounded-full border border-border/70 bg-background px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/40"
                 >
-                  忽略
+                  {t("chat.relationshipMemory.dismiss", "忽略")}
                 </button>
                 <button
                   type="button"
@@ -2393,7 +3101,7 @@ export function ChatConversation({
                   }
                   className="inline-flex h-8 items-center rounded-full bg-foreground px-3 text-[12px] font-medium text-background transition-colors hover:opacity-90"
                 >
-                  记住
+                  {t("chat.relationshipMemory.accept", "记住")}
                 </button>
               </div>
             </div>
@@ -2434,20 +3142,20 @@ export function ChatConversation({
                   type="button"
                   onClick={() => setShowDocPicker(true)}
                   className="inline-flex h-9 items-center gap-1 rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45 sm:h-10 sm:text-[12px]"
-                  title={t("documents.attachDocuments")}
-                  aria-label={t("documents.attachDocuments")}
+                  title={t("chat.attachDocuments", "Attach Documents")}
+                  aria-label={t("chat.attachDocuments", "Attach Documents")}
                 >
-                  <span>{t("documents.attachDocumentsShort", "附件")}</span>
+                  <span>{t("chat.attachDocumentsShort", "Attach")}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploading}
                   className="inline-flex h-9 items-center gap-1 rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45 disabled:opacity-50 sm:h-10 sm:text-[12px]"
-                  title={t("documents.upload")}
-                  aria-label={t("documents.upload")}
+                  title={t("chat.upload", "Upload")}
+                  aria-label={t("chat.upload", "Upload")}
                 >
-                  <span>{t("documents.uploadShort", "上传")}</span>
+                  <span>{t("chat.uploadShort", "Upload")}</span>
                 </button>
                   </>
                 )}
@@ -2488,7 +3196,7 @@ export function ChatConversation({
         title={t("chat.tools", "工具")}
         description={t(
           "chat.toolsHint",
-          "从这里快速切换会话、附加文档或上传资料，不需要先滚回顶部。",
+          "Quickly switch sessions, attach documents, or upload material from here without scrolling back to the top.",
         )}
       >
         <div className="space-y-2">
@@ -2509,7 +3217,7 @@ export function ChatConversation({
               <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
                 {t(
                   "chat.capabilityPickerComposerHint",
-                  "把当前 Agent 真正可调用的技能和 MCP 扩展插入输入框。",
+                  "Insert the skills and MCP extensions that this agent can actually call into the composer.",
                 )}
               </div>
             </div>

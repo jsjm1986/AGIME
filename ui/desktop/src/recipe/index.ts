@@ -7,12 +7,7 @@ import type { RecipeParameter } from '../api';
 
 // Re-export OpenAPI types with frontend-specific additions
 export type Parameter = RecipeParameter;
-export type Recipe = import('../api').Recipe & {
-  // TODO: Separate these from the raw recipe type
-  // Properties added for scheduled execution
-  scheduledJobId?: string;
-  isScheduledExecution?: boolean;
-};
+export type Recipe = import('../api').Recipe;
 
 export async function encodeRecipe(recipe: Recipe): Promise<string> {
   try {

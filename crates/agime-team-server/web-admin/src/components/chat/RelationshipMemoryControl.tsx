@@ -3,6 +3,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Loader2,
   Sparkles,
@@ -68,6 +69,7 @@ export function RelationshipMemoryControl({
   variant = "footer",
   className,
 }: RelationshipMemoryControlProps) {
+  const { t } = useTranslation();
   const isMobile = useIsMobile();
   const isCompact = variant === "icon";
   const [open, setOpen] = useState(false);
@@ -95,11 +97,16 @@ export function RelationshipMemoryControl({
       syncDraft(memory);
     } catch (loadError) {
       console.error("Failed to load relationship memory:", loadError);
-      setError("当前无法读取个人记忆，请稍后再试。");
+      setError(
+        t(
+          "chat.relationshipMemory.loadFailed",
+          "Personal memory is unavailable right now. Please try again later.",
+        ),
+      );
     } finally {
       setLoading(false);
     }
-  }, [syncDraft, teamId]);
+  }, [syncDraft, t, teamId]);
 
   useEffect(() => {
     void loadMemory();
@@ -126,8 +133,15 @@ export function RelationshipMemoryControl({
   }, [loadMemory, teamId]);
 
   const scopeLabel = teamName
-    ? `仅在「${teamName}」团队的普通对话里生效`
-    : "仅在当前团队的普通对话里生效";
+    ? t(
+        "chat.relationshipMemory.scopeWithTeam",
+        "Only applies to regular chats in the {{teamName}} team.",
+        { teamName },
+      )
+    : t(
+        "chat.relationshipMemory.scopeCurrentTeam",
+        "Only applies to regular chats in the current team.",
+      );
 
   const hasMemory =
     !!memoryRecord?.preferred_address ||
@@ -160,7 +174,7 @@ export function RelationshipMemoryControl({
       });
     } catch (saveError) {
       console.error("Failed to save relationship memory:", saveError);
-      setError("保存失败，请稍后再试。");
+      setError(t("chat.relationshipMemory.saveFailed", "Failed to save. Please try again later."));
     } finally {
       setSaving(false);
     }
@@ -171,6 +185,7 @@ export function RelationshipMemoryControl({
     draft.preferredAddress,
     draft.roleHint,
     syncDraft,
+    t,
     teamId,
   ]);
 
@@ -179,26 +194,40 @@ export function RelationshipMemoryControl({
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2 text-[11px] font-medium text-muted-foreground">
           <span className="inline-flex items-center rounded-full border border-border/70 bg-muted/30 px-2.5 py-1">
-            个人记忆
+            {t("chat.relationshipMemory.badge", "Personal memory")}
           </span>
           <span className="inline-flex items-center rounded-full border border-primary/15 bg-primary/[0.045] px-2.5 py-1 text-primary/80">
-            {teamName ? `当前团队 · ${teamName}` : "当前团队"}
+            {teamName
+              ? t(
+                  "chat.relationshipMemory.currentTeamWithName",
+                  "Current team · {{teamName}}",
+                  { teamName },
+                )
+              : t("chat.relationshipMemory.currentTeam", "Current team")}
           </span>
         </div>
         <div className="space-y-1">
           <div className="text-[16px] font-semibold tracking-[-0.01em] text-foreground">
-            和 {userDisplayName || "你"} 的熟悉感设置
+            {t(
+              "chat.relationshipMemory.heading",
+              "How I should relate to {{userDisplayName}}",
+              { userDisplayName: userDisplayName || t("chat.relationshipMemory.you", "you") },
+            )}
           </div>
           <p className="text-[12px] leading-5 text-muted-foreground">
-            这份记忆只作用于你在当前团队里的普通对话，不会共享给其他团队，也不会进入
-            Agentify、portal 等功能型会话。
+            {t(
+              "chat.relationshipMemory.description",
+              "This memory only applies to your regular chats in the current team. It is not shared with other teams and does not enter functional surfaces like Agentify or portal sessions.",
+            )}
           </p>
         </div>
       </div>
 
       <div className="grid gap-4">
         <div className="space-y-1.5">
-          <label className="text-sm font-medium">优先称呼</label>
+          <label className="text-sm font-medium">
+            {t("chat.relationshipMemory.preferredAddressLabel", "Preferred address")}
+          </label>
           <Input
             value={draft.preferredAddress}
             onChange={(e) =>
@@ -207,11 +236,19 @@ export function RelationshipMemoryControl({
                 preferredAddress: e.target.value,
               }))
             }
-            placeholder="例如：agime / 老板 / 爸爸"
+            placeholder={t(
+              "chat.relationshipMemory.preferredAddressPlaceholder",
+              "For example: agime / boss / dad",
+            )}
           />
         </div>
         <div className="space-y-1.5">
-          <label className="text-sm font-medium">你希望我怎么和你说话</label>
+          <label className="text-sm font-medium">
+            {t(
+              "chat.relationshipMemory.collaborationPreferenceLabel",
+              "How should I talk to you",
+            )}
+          </label>
           <Textarea
             value={draft.collaborationPreference}
             onChange={(e) =>
@@ -221,11 +258,16 @@ export function RelationshipMemoryControl({
               }))
             }
             className="min-h-[88px]"
-            placeholder="例如：先给判断，再给建议；直接一点，少一点客服腔；需要时可以更像熟人交流。"
+            placeholder={t(
+              "chat.relationshipMemory.collaborationPreferencePlaceholder",
+              "For example: give the judgment first, then suggestions; be direct; sound less like customer support; feel more familiar when appropriate.",
+            )}
           />
         </div>
         <div className="space-y-1.5">
-          <label className="text-sm font-medium">团队角色</label>
+          <label className="text-sm font-medium">
+            {t("chat.relationshipMemory.roleHintLabel", "Team role")}
+          </label>
           <Input
             value={draft.roleHint}
             onChange={(e) =>
@@ -234,11 +276,16 @@ export function RelationshipMemoryControl({
                 roleHint: e.target.value,
               }))
             }
-            placeholder="例如：产品负责人 / 开发 / 运营"
+            placeholder={t(
+              "chat.relationshipMemory.roleHintPlaceholder",
+              "For example: product lead / engineer / operations",
+            )}
           />
         </div>
         <div className="space-y-1.5">
-          <label className="text-sm font-medium">最近关注</label>
+          <label className="text-sm font-medium">
+            {t("chat.relationshipMemory.currentFocusLabel", "Current focus")}
+          </label>
           <Textarea
             value={draft.currentFocus}
             onChange={(e) =>
@@ -248,11 +295,16 @@ export function RelationshipMemoryControl({
               }))
             }
             className="min-h-[78px]"
-            placeholder="例如：最近主要在打磨普通对话体验和 API 协同。"
+            placeholder={t(
+              "chat.relationshipMemory.currentFocusPlaceholder",
+              "For example: recently focused on improving regular chat UX and API collaboration.",
+            )}
           />
         </div>
         <div className="space-y-1.5">
-          <label className="text-sm font-medium">备注</label>
+          <label className="text-sm font-medium">
+            {t("chat.relationshipMemory.notesLabel", "Notes")}
+          </label>
           <Textarea
             value={draft.notes}
             onChange={(e) =>
@@ -262,7 +314,10 @@ export function RelationshipMemoryControl({
               }))
             }
             className="min-h-[88px]"
-            placeholder="少量稳定信息即可，不要写成长档案。"
+            placeholder={t(
+              "chat.relationshipMemory.notesPlaceholder",
+              "Keep it short and stable. Do not turn it into a long profile.",
+            )}
           />
         </div>
       </div>
@@ -270,14 +325,21 @@ export function RelationshipMemoryControl({
       {error ? (
         <p className="text-sm text-status-error-text">{error}</p>
       ) : loading ? (
-        <p className="text-sm text-muted-foreground">正在读取个人记忆…</p>
+        <p className="text-sm text-muted-foreground">
+          {t("chat.relationshipMemory.loading", "Loading personal memory…")}
+        </p>
       ) : memoryRecord ? (
         <p className="text-xs text-muted-foreground">
-          最近更新：{new Date(memoryRecord.updated_at).toLocaleString()}
+          {t("chat.relationshipMemory.lastUpdated", "最近更新：{{time}}", {
+            time: new Date(memoryRecord.updated_at).toLocaleString(),
+          })}
         </p>
       ) : (
         <p className="text-xs text-muted-foreground">
-          当前还没有保存任何个人记忆。
+          {t(
+            "chat.relationshipMemory.empty",
+            "No personal memory has been saved yet.",
+          )}
         </p>
       )}
 
@@ -291,7 +353,7 @@ export function RelationshipMemoryControl({
           }}
           className="inline-flex h-9 items-center rounded-full border border-border/70 bg-background px-4 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/40"
         >
-          取消
+          {t("common.cancel", "取消")}
         </button>
         <button
           type="button"
@@ -299,7 +361,9 @@ export function RelationshipMemoryControl({
           disabled={saving}
           className="inline-flex h-9 items-center rounded-full bg-foreground px-4 text-[12px] font-medium text-background transition-colors hover:opacity-90 disabled:opacity-60"
         >
-          {saving ? "保存中..." : "保存"}
+          {saving
+            ? t("common.saving", "保存中...")
+            : t("common.save", "保存")}
         </button>
       </div>
     </div>
@@ -315,7 +379,15 @@ export function RelationshipMemoryControl({
             setOpen((prev) => !prev);
           }}
           className="flex h-8 w-8 items-center justify-center rounded-[12px] border border-[hsl(var(--sidebar-border))/0.82] bg-[hsl(var(--sidebar-surface))] text-[hsl(var(--sidebar-foreground))/0.82] transition-colors hover:border-[hsl(var(--sidebar-accent))/0.22] hover:bg-[hsl(var(--sidebar-accent))/0.08] hover:text-[hsl(var(--sidebar-foreground))]"
-          title={teamName ? `个人记忆 · ${teamName}` : "个人记忆"}
+          title={
+            teamName
+              ? t(
+                  "chat.relationshipMemory.titleWithTeam",
+                  "Personal memory · {{teamName}}",
+                  { teamName },
+                )
+              : t("chat.relationshipMemory.title", "Personal memory")
+          }
         >
           {loading ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -331,19 +403,27 @@ export function RelationshipMemoryControl({
             setOpen((prev) => !prev);
           }}
           className={cn(
-            "inline-flex h-5 items-center gap-1 rounded-full border border-transparent bg-transparent px-1 text-[9px] font-normal transition-colors",
+            "inline-flex h-5 items-center gap-1 px-0.5 text-[11px] font-semibold leading-4 transition-colors",
             hasMemory
-              ? "text-[hsl(var(--sidebar-foreground))] hover:text-[hsl(var(--sidebar-foreground))]"
-              : "text-[hsl(var(--sidebar-foreground))/0.62] hover:text-[hsl(var(--sidebar-foreground))]",
+              ? "text-[hsl(var(--sidebar-foreground))/0.84] hover:text-[hsl(var(--sidebar-foreground))]"
+              : "text-[hsl(var(--sidebar-foreground))/0.6] hover:text-[hsl(var(--sidebar-foreground))]",
           )}
-          title={teamName ? `个人记忆 · ${teamName}` : "个人记忆"}
+          title={
+            teamName
+              ? t(
+                  "chat.relationshipMemory.titleWithTeam",
+                  "Personal memory · {{teamName}}",
+                  { teamName },
+                )
+              : t("chat.relationshipMemory.title", "Personal memory")
+          }
         >
           {loading ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Sparkles className="h-3 w-3" />
+            <Sparkles className="h-3.5 w-3.5" />
           )}
-          <span>个人记忆</span>
+          <span>{t("chat.relationshipMemory.title", "Personal memory")}</span>
           {hasMemory ? (
             <span className="h-1.5 w-1.5 rounded-full bg-primary/80" />
           ) : null}
@@ -353,7 +433,7 @@ export function RelationshipMemoryControl({
       <BottomSheetPanel
         open={open}
         onOpenChange={setOpen}
-        title="个人记忆"
+        title={t("chat.relationshipMemory.title", "Personal memory")}
         description={scopeLabel}
         fullHeight={!isMobile}
       >

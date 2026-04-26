@@ -10,15 +10,22 @@ use agime::agents::final_output_tool::{
 use agime::agents::harness::{
     build_bounded_swarm_plan, build_swarm_downgrade_message, build_swarm_worker_instructions,
     build_validation_worker_instructions, classify_child_task_result, decide_bounded_swarm_outcome,
-    parse_validation_outcome, summary_indicates_material_progress, DelegationMode, TaskKind,
-    TaskResultEnvelope, TaskRuntimeHost, TaskSpec, TaskStatus as HarnessTaskStatus,
+    parse_validation_outcome, summary_indicates_material_progress, ChildExecutionExpectation,
+    DelegationMode, TaskKind, TaskResultEnvelope, TaskRuntimeHost, TaskSpec,
+    TaskStatus as HarnessTaskStatus,
 };
 use agime::agents::subagent_tool::create_subagent_tool;
 use agime::agents::types::{
     RetryConfig, SuccessCheck, DEFAULT_ON_FAILURE_TIMEOUT_SECONDS, DEFAULT_RETRY_TIMEOUT_SECONDS,
 };
-use agime::context_mgmt::{
-    compact_messages_with_strategy, ContextCompactionStrategy, DEFAULT_COMPACTION_THRESHOLD,
+use agime::agents::{
+    normalize_call_tool_result, normalize_tool_execution_error_text,
+    tool_execution_cancelled_error_text,
+};
+use agime::context_runtime::{
+    maybe_advance_runtime_state, observe_runtime_transition, project_for_provider,
+    recover_on_overflow, refresh_projection_only, should_auto_compact, ContextRuntimeAdvanceKind,
+    ContextRuntimeState,
 };
 use agime::conversation::message::{Message, MessageContent};
 use agime::conversation::{fix_conversation, Conversation};
@@ -26,6 +33,7 @@ use agime::providers::base::{Provider, ProviderUsage};
 use agime::providers::errors::ProviderError;
 use agime::providers::formats::{anthropic as anthropic_format, openai as openai_format};
 use agime::recipe::Response;
+use agime::runtime_profile::resolve_from_model_config;
 use agime::security::scanner::PromptInjectionScanner;
 use agime::subprocess::configure_command_no_window;
 use agime::token_counter::create_token_counter;
@@ -154,7 +162,10 @@ const MAX_UNIFIED_MAX_TURNS: usize = 5000;
 
 /// Maximum characters for a single tool result before truncation
 const MAX_TOOL_RESULT_CHARS: usize = 32_000;
-/// Team Server always uses legacy segmented compaction; CFPM is local-only.
+/// Compatibility path only: TaskExecutor/bridge routes still compact here.
+/// Direct chat/channel/document host traffic does not use this constant; it
+/// routes into agime harness compaction via HostExecutionRouter instead.
+/// This path intentionally stays on legacy segmented compaction.
 const SERVER_COMPACTION_MODE: &str = "legacy_segmented";
 /// If context usage reaches this ratio again soon after compaction, allow immediate re-compaction.
 const COMPACTION_REENTRY_RATIO: f64 = 0.90;
@@ -323,6 +334,17 @@ pub(crate) fn builtin_extension_configs_to_custom(
 
 pub(crate) fn builtin_extensions_to_custom(agent: &TeamAgent) -> Vec<CustomExtensionConfig> {
     builtin_extension_configs_to_custom(&agent.enabled_extensions)
+}
+
+fn extension_name_key(value: &str) -> String {
+    value.to_ascii_lowercase().replace(['_', '-', ' '], "")
+}
+
+pub(crate) fn extension_allowed_by_name(extension_name: &str, allowed: &HashSet<String>) -> bool {
+    let extension_key = extension_name_key(extension_name);
+    allowed.iter().any(|item| {
+        item.eq_ignore_ascii_case(extension_name) || extension_name_key(item) == extension_key
+    })
 }
 
 /// Find an extension config by name from the agent's full configuration
@@ -691,7 +713,7 @@ impl ApiCaller for AgentApiCaller {
                     )
                     .await
                 }
-                ApiFormat::OpenAI => {
+                ApiFormat::OpenAI | ApiFormat::LiteLLM => {
                     self.call_openai(
                         client,
                         system,
@@ -1241,8 +1263,10 @@ fn api_response_to_message(api_format: ApiFormat, response: &serde_json::Value) 
     match api_format {
         ApiFormat::Anthropic => anthropic_format::response_to_message(response)
             .map_err(|e| anyhow!("failed to parse anthropic tool-choice response: {}", e)),
-        ApiFormat::OpenAI => openai_format::response_to_message(response, None)
-            .map_err(|e| anyhow!("failed to parse openai tool-choice response: {}", e)),
+        ApiFormat::OpenAI | ApiFormat::LiteLLM => {
+            openai_format::response_to_message(response, None)
+                .map_err(|e| anyhow!("failed to parse openai tool-choice response: {}", e))
+        }
         ApiFormat::Local => Err(anyhow!(
             "tool-choice fallback is not supported for local API agents"
         )),
@@ -1261,6 +1285,21 @@ pub struct TaskExecutor {
 }
 
 impl TaskExecutor {
+    fn compaction_event_metadata(
+        initial: &ContextRuntimeState,
+        final_state: &ContextRuntimeState,
+    ) -> (Option<String>, Option<String>) {
+        let observation = observe_runtime_transition(Some(initial), final_state);
+        (
+            observation.as_ref().map(|value| value.phase.clone()),
+            observation.and_then(|value| value.reason),
+        )
+    }
+
+    fn should_check_pre_turn_compaction(turn: usize, messages: &[Message]) -> bool {
+        turn > 0 || !messages.is_empty()
+    }
+
     /// Normalize streaming chunks to true incremental deltas.
     ///
     /// Some providers emit strict deltas; others may emit cumulative text in later chunks.
@@ -1578,8 +1617,8 @@ impl TaskExecutor {
             .await?
             .ok_or_else(|| anyhow!("Task not found"))?;
 
-        if task.status != TaskStatus::Approved {
-            return Err(anyhow!("Task is not approved"));
+        if !matches!(task.status, TaskStatus::Approved | TaskStatus::Queued) {
+            return Err(anyhow!("Task is not ready to run"));
         }
 
         let mut agent = self
@@ -1922,7 +1961,7 @@ impl TaskExecutor {
 
         if let Some(allowed) = &allowed_extension_names {
             let before = all_extensions.len();
-            all_extensions.retain(|ext| allowed.contains(&ext.name.to_lowercase()));
+            all_extensions.retain(|ext| extension_allowed_by_name(&ext.name, allowed));
             tracing::info!(
                 "Portal/session extension allowlist applied: {} -> {}",
                 before,
@@ -2021,6 +2060,7 @@ impl TaskExecutor {
         let platform = PlatformExtensionRunner::create(
             &platform_enabled_extensions,
             Some(self.db.clone()),
+            None,
             Some(&task.team_id),
             Some(actor_user_id),
             session.as_ref().map(|s| s.session_source.as_str()),
@@ -2254,7 +2294,8 @@ If you need a tool, call it directly through the model tool interface.\n\
 
             // Save session
             messages.push(response_msg);
-            self.save_session_state(&session_id, &messages, 0, 0).await;
+            self.save_session_state(&session_id, &messages, 0, 0, None)
+                .await;
 
             if let Some(m) = mcp {
                 m.shutdown().await;
@@ -2478,11 +2519,59 @@ If you need a tool, call it directly through the model tool interface.\n\
                 super::mcp_connector::ToolContentBlock::Image { mime_type, .. } => {
                     format!("[Image: {}]", mime_type)
                 }
+                super::mcp_connector::ToolContentBlock::Resource { uri, mime_type, .. } => {
+                    match mime_type.as_deref() {
+                        Some(mime) => format!("[Resource: {} ({})]", uri, mime),
+                        None => format!("[Resource: {}]", uri),
+                    }
+                }
                 super::mcp_connector::ToolContentBlock::StructuredJson(_) => String::new(),
             })
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn tool_blocks_to_call_result(
+        blocks: &[super::mcp_connector::ToolContentBlock],
+    ) -> rmcp::model::CallToolResult {
+        let content = blocks
+            .iter()
+            .filter_map(|b| match b {
+                super::mcp_connector::ToolContentBlock::Text(text) => Some(
+                    rmcp::model::Content::text(Self::truncate_tool_result(text.clone())),
+                ),
+                super::mcp_connector::ToolContentBlock::Image { mime_type, data } => {
+                    Some(rmcp::model::Content::image(data.clone(), mime_type.clone()))
+                }
+                super::mcp_connector::ToolContentBlock::Resource { uri, mime_type, .. } => {
+                    Some(rmcp::model::Content::text(match mime_type.as_deref() {
+                        Some(mime) => format!("[Resource: {} ({})]", uri, mime),
+                        None => format!("[Resource: {}]", uri),
+                    }))
+                }
+                super::mcp_connector::ToolContentBlock::StructuredJson(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let structured_blocks = blocks
+            .iter()
+            .filter_map(|b| match b {
+                super::mcp_connector::ToolContentBlock::StructuredJson(value) => {
+                    Some(value.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        rmcp::model::CallToolResult {
+            content,
+            structured_content: match structured_blocks.as_slice() {
+                [] => None,
+                [value] => Some(value.clone()),
+                values => Some(serde_json::Value::Array(values.to_vec())),
+            },
+            is_error: Some(false),
+            meta: None,
+        }
     }
 
     /// Truncate a string at a UTF-8 safe byte boundary.
@@ -2538,6 +2627,30 @@ If you need a tool, call it directly through the model tool interface.\n\
         .any(|k| name.contains(k))
     }
 
+    fn child_extensions_for_targets(
+        base: Option<Vec<String>>,
+        target_artifacts: &[String],
+        result_contract: &[String],
+    ) -> Option<Vec<String>> {
+        let mut extensions = base.unwrap_or_default();
+        let needs_document_tools = target_artifacts
+            .iter()
+            .chain(result_contract.iter())
+            .any(|item| item.trim().starts_with("document:"));
+        if needs_document_tools
+            && !extensions
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case("document_tools"))
+        {
+            extensions.push("document_tools".to_string());
+        }
+        if extensions.is_empty() {
+            None
+        } else {
+            Some(extensions)
+        }
+    }
+
     /// Governance/portal write tools must run serially to avoid self-inflicted
     /// compare-and-swap conflicts on portal governance state.
     fn tool_requires_serial_write(tool_name: &str) -> bool {
@@ -2579,98 +2692,117 @@ If you need a tool, call it directly through the model tool interface.\n\
         }
 
         let started_at = Instant::now();
+        if cancel_token.is_cancelled() {
+            return (
+                started_at.elapsed().as_millis() as u64,
+                Err(tool_execution_cancelled_error_text(&name)),
+            );
+        }
         let result: Result<Vec<super::mcp_connector::ToolContentBlock>, String> =
             if let Some(timeout_secs) = tool_timeout_secs {
-                match tokio::time::timeout(Duration::from_secs(timeout_secs), async {
-                    let state = dynamic_state.read().await;
-                    if state.platform.can_handle(&name) {
-                        state.platform.call_tool_rich(&name, args).await
-                    } else if let Some(ref m) = state.mcp {
-                        let progress_task_id = task_id.clone();
-                        let progress_mgr = task_manager.clone();
-                        let progress_cb: ToolTaskProgressCallback = Arc::new(move |p| {
-                            let payload = serde_json::json!({
-                                "type": "tool_task_progress",
-                                "tool_name": p.tool_name,
-                                "server_name": p.server_name,
-                                "task_id": p.task_id,
-                                "status": p.status,
-                                "status_message": p.status_message,
-                                "poll_count": p.poll_count,
-                            })
-                            .to_string();
-                            let tm = progress_mgr.clone();
-                            let tid = progress_task_id.clone();
-                            tokio::spawn(async move {
-                                tm.broadcast(&tid, StreamEvent::Status { status: payload })
-                                    .await;
+                tokio::select! {
+                    _ = cancel_token.cancelled() => Err(tool_execution_cancelled_error_text(&name)),
+                    outcome = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
+                        let state = dynamic_state.read().await;
+                        if state.platform.can_handle(&name) {
+                            state.platform.call_tool_rich(&name, args).await
+                        } else if let Some(ref m) = state.mcp {
+                            let progress_task_id = task_id.clone();
+                            let progress_mgr = task_manager.clone();
+                            let progress_cb: ToolTaskProgressCallback = Arc::new(move |p| {
+                                let payload = serde_json::json!({
+                                    "type": "tool_task_progress",
+                                    "tool_name": p.tool_name,
+                                    "server_name": p.server_name,
+                                    "task_id": p.task_id,
+                                    "status": p.status,
+                                    "status_message": p.status_message,
+                                    "poll_count": p.poll_count,
+                                })
+                                .to_string();
+                                let tm = progress_mgr.clone();
+                                let tid = progress_task_id.clone();
+                                tokio::spawn(async move {
+                                    tm.broadcast(&tid, StreamEvent::Status { status: payload })
+                                        .await;
+                                });
                             });
-                        });
-                        m.call_tool_rich_with_progress(
-                            &name,
-                            args,
-                            Some(progress_cb),
-                            cancel_token.clone(),
-                        )
-                        .await
-                    } else {
-                        Err(anyhow!("No handler for tool: {}", name))
+                            m.call_tool_rich_with_progress(
+                                &name,
+                                args,
+                                Some(progress_cb),
+                                cancel_token.clone(),
+                            )
+                            .await
+                        } else {
+                            Err(anyhow!("No handler for tool: {}", name))
+                        }
+                    }) => {
+                        match outcome {
+                            Ok(Ok(blocks)) => Ok(blocks),
+                            Ok(Err(e)) => Err(tag_tool_error(format!("Error: {}", e))),
+                            Err(_) => Err(format!(
+                                "[step:tool_execution] Error: tool '{}' timed out after {}s",
+                                name, timeout_secs
+                            )),
+                        }
                     }
-                })
-                .await
-                {
-                    Ok(Ok(blocks)) => Ok(blocks),
-                    Ok(Err(e)) => Err(tag_tool_error(format!("Error: {}", e))),
-                    Err(_) => Err(format!(
-                        "[step:tool_execution] Error: tool '{}' timed out after {}s",
-                        name, timeout_secs
-                    )),
                 }
             } else {
-                let state = dynamic_state.read().await;
-                if state.platform.can_handle(&name) {
-                    state
-                        .platform
-                        .call_tool_rich(&name, args)
-                        .await
-                        .map_err(|e| tag_tool_error(format!("Error: {}", e)))
-                } else if let Some(ref m) = state.mcp {
-                    let progress_task_id = task_id.clone();
-                    let progress_mgr = task_manager.clone();
-                    let progress_cb: ToolTaskProgressCallback = Arc::new(move |p| {
-                        let payload = serde_json::json!({
-                            "type": "tool_task_progress",
-                            "tool_name": p.tool_name,
-                            "server_name": p.server_name,
-                            "task_id": p.task_id,
-                            "status": p.status,
-                            "status_message": p.status_message,
-                            "poll_count": p.poll_count,
-                        })
-                        .to_string();
-                        let tm = progress_mgr.clone();
-                        let tid = progress_task_id.clone();
-                        tokio::spawn(async move {
-                            tm.broadcast(&tid, StreamEvent::Status { status: payload })
-                                .await;
-                        });
-                    });
-                    m.call_tool_rich_with_progress(
-                        &name,
-                        args,
-                        Some(progress_cb),
-                        cancel_token.clone(),
-                    )
-                    .await
-                    .map_err(|e| tag_tool_error(format!("Error: {}", e)))
-                } else {
-                    Err(tag_tool_error(format!(
-                        "Error: No handler for tool: {}",
-                        name
-                    )))
+                tokio::select! {
+                    _ = cancel_token.cancelled() => Err(tool_execution_cancelled_error_text(&name)),
+                    outcome = async {
+                        let state = dynamic_state.read().await;
+                        if state.platform.can_handle(&name) {
+                            state
+                                .platform
+                                .call_tool_rich(&name, args)
+                                .await
+                                .map_err(|e| tag_tool_error(format!("Error: {}", e)))
+                        } else if let Some(ref m) = state.mcp {
+                            let progress_task_id = task_id.clone();
+                            let progress_mgr = task_manager.clone();
+                            let progress_cb: ToolTaskProgressCallback = Arc::new(move |p| {
+                                let payload = serde_json::json!({
+                                    "type": "tool_task_progress",
+                                    "tool_name": p.tool_name,
+                                    "server_name": p.server_name,
+                                    "task_id": p.task_id,
+                                    "status": p.status,
+                                    "status_message": p.status_message,
+                                    "poll_count": p.poll_count,
+                                })
+                                .to_string();
+                                let tm = progress_mgr.clone();
+                                let tid = progress_task_id.clone();
+                                tokio::spawn(async move {
+                                    tm.broadcast(&tid, StreamEvent::Status { status: payload })
+                                        .await;
+                                });
+                            });
+                            m.call_tool_rich_with_progress(
+                                &name,
+                                args,
+                                Some(progress_cb),
+                                cancel_token.clone(),
+                            )
+                            .await
+                            .map_err(|e| tag_tool_error(format!("Error: {}", e)))
+                        } else {
+                            Err(tag_tool_error(format!(
+                                "Error: No handler for tool: {}",
+                                name
+                            )))
+                        }
+                    } => outcome
                 }
             };
         let duration_ms = started_at.elapsed().as_millis() as u64;
+        let result = if cancel_token.is_cancelled() && result.is_ok() {
+            Err(tool_execution_cancelled_error_text(&name))
+        } else {
+            result
+        };
         match result {
             Ok(blocks) => (duration_ms, Ok(blocks)),
             Err(err) => {
@@ -2950,7 +3082,11 @@ If you need a tool, call it directly through the model tool interface.\n\
         match result {
             Ok(output) => {
                 let classification = classify_child_task_result(
-                    kind,
+                    if effective_write_scope.is_empty() {
+                        ChildExecutionExpectation::ReadOnlyInspection
+                    } else {
+                        ChildExecutionExpectation::MaterializingChange
+                    },
                     &child_request.target_artifacts,
                     &effective_write_scope,
                     &output.summary,
@@ -3077,7 +3213,11 @@ If you need a tool, call it directly through the model tool interface.\n\
                 let workspace_path = workspace_path.clone();
                 let cancel_token = cancel_token.clone();
                 let subagent_runtime = subagent_runtime.clone();
-                let requested_extensions = child_request.requested_extensions.clone();
+                let requested_extensions = Self::child_extensions_for_targets(
+                    child_request.requested_extensions.clone(),
+                    std::slice::from_ref(&worker.target_artifact),
+                    &worker.result_contract,
+                );
                 let worker_target = worker.target_artifact.clone();
                 let worker_scope = worker.write_scope.clone();
                 let worker_contract = worker.result_contract.clone();
@@ -3202,7 +3342,11 @@ If you need a tool, call it directly through the model tool interface.\n\
                     let workspace_path = workspace_path.clone();
                     let cancel_token = cancel_token.clone();
                     let subagent_runtime = subagent_runtime.clone();
-                    let requested_extensions = child_request.requested_extensions.clone();
+                    let requested_extensions = Self::child_extensions_for_targets(
+                        child_request.requested_extensions.clone(),
+                        std::slice::from_ref(&worker.target_artifact),
+                        &worker.result_contract,
+                    );
                     let worker_target = worker.target_artifact.clone();
                     let worker_scope = worker.write_scope.clone();
                     let worker_contract = worker.result_contract.clone();
@@ -3687,11 +3831,18 @@ If you need a tool, call it directly through the model tool interface.\n\
         max_portal_retry_rounds: Option<usize>,
         shell_security_mode: ShellSecurityMode,
     ) -> Result<()> {
-        let compaction_mode = ContextCompactionStrategy::LegacySegmented;
         let max_turns = max_turns_override.or_else(Self::unified_max_turns);
         let tool_timeout_secs = tool_timeout_secs_override.or_else(Self::tool_timeout_seconds);
         let mut subagent_runtime = subagent_runtime;
         let mut messages = initial_messages;
+        let mut context_runtime_state = self
+            .agent_service
+            .get_session(session_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|session| session.context_runtime_state)
+            .unwrap_or_default();
         let mut all_text = String::new();
         let mut repetition_detector = RepetitionDetector::new();
         let mut completed_due_to_max_turns = false;
@@ -3712,7 +3863,6 @@ If you need a tool, call it directly through the model tool interface.\n\
         let consecutive_failure_reflection_threshold = 3usize;
         let mut accumulated_input: i32 = 0;
         let mut accumulated_output: i32 = 0;
-        let mut last_compaction_turn: Option<usize> = None;
         /// Max recovery compaction attempts before giving up (same as local agent)
         const MAX_RECOVERY_COMPACTION_ATTEMPTS: i32 = 3;
         let mut recovery_compaction_attempts: i32 = 0;
@@ -3782,66 +3932,73 @@ If you need a tool, call it directly through the model tool interface.\n\
                 t
             }; // read lock released here
 
-            // Context compaction check (skip first turn)
-            if turn > 0 {
-                if let Ok((threshold_hit, before_tokens, ratio)) = self
-                    .check_compaction_needed(provider, &effective_system_prompt, &messages, &tools)
-                    .await
+            // Match direct-chat/harness semantics: when a task resumes an existing
+            // hidden session, the first provider turn of this task still needs a
+            // pre-turn compaction check against the accumulated history.
+            if Self::should_check_pre_turn_compaction(turn, &messages) {
+                let conversation = Conversation::new_unvalidated(messages.clone());
+                let runtime_profile = resolve_from_model_config(&provider.get_model_config());
+                if should_auto_compact(
+                    provider.as_ref(),
+                    &conversation,
+                    &context_runtime_state,
+                    Some(runtime_profile.auto_compact_threshold),
+                )
+                .await
+                .unwrap_or(false)
                 {
-                    if threshold_hit && Self::should_compact_now(turn, ratio, last_compaction_turn)
+                    let before_tokens = match create_token_counter().await {
+                        Ok(counter) => {
+                            counter.count_chat_tokens(&effective_system_prompt, &messages, &tools)
+                        }
+                        Err(_) => 0,
+                    };
+                    let initial_runtime_state = context_runtime_state.clone();
+                    match maybe_advance_runtime_state(
+                        provider.as_ref(),
+                        &conversation,
+                        &mut context_runtime_state,
+                        false,
+                        Some(runtime_profile.auto_compact_threshold),
+                    )
+                    .await
                     {
-                        let conversation = Conversation::new_unvalidated(messages.clone());
-                        match compact_messages_with_strategy(
-                            provider.as_ref(),
-                            &conversation,
-                            false,
-                            compaction_mode,
-                        )
-                        .await
-                        {
-                            Ok((compacted, _usage)) => {
-                                messages = compacted.messages().to_vec();
-                                // Recount actual tokens after compaction (usage.total_tokens is often None)
-                                let after_tokens = match create_token_counter().await {
-                                    Ok(counter) => counter.count_chat_tokens(
-                                        &effective_system_prompt,
-                                        &messages,
-                                        &tools,
-                                    ),
-                                    Err(_) => 0,
-                                };
-                                self.task_manager
-                                    .broadcast(
-                                        task_id,
-                                        StreamEvent::Compaction {
-                                            strategy: SERVER_COMPACTION_MODE.to_string(),
-                                            before_tokens,
-                                            after_tokens,
-                                        },
-                                    )
-                                    .await;
-                                let _ = self
-                                    .agent_service
-                                    .increment_compaction_count(session_id)
-                                    .await;
-                                last_compaction_turn = Some(turn);
+                        Ok(outcome) if !matches!(outcome.kind, ContextRuntimeAdvanceKind::Noop) => {
+                            let after_tokens = context_runtime_state
+                                .last_projection_stats
+                                .as_ref()
+                                .map(|stats| stats.projected_token_estimate)
+                                .unwrap_or(before_tokens);
+                            let (phase, reason) = Self::compaction_event_metadata(
+                                &initial_runtime_state,
+                                &context_runtime_state,
+                            );
+                            self.task_manager
+                                .broadcast(
+                                    task_id,
+                                    StreamEvent::Compaction {
+                                        strategy: "context_runtime".to_string(),
+                                        before_tokens,
+                                        after_tokens,
+                                        phase,
+                                        reason,
+                                    },
+                                )
+                                .await;
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            if e.to_string()
+                                .contains("not enough prefix messages to build session memory")
+                            {
                                 tracing::info!(
-                                    "Compaction done: {} -> {} tokens",
-                                    before_tokens,
-                                    after_tokens
+                                    "Context runtime update skipped expected session-memory no-op: {}",
+                                    e
                                 );
-                            }
-                            Err(e) => {
-                                tracing::warn!("Compaction failed: {}, continuing", e);
+                            } else {
+                                tracing::warn!("Context runtime update failed: {}, continuing", e);
                             }
                         }
-                    } else if threshold_hit {
-                        tracing::debug!(
-                            "Compaction deferred by hysteresis: turn={}, ratio={:.3}, last_compaction_turn={:?}",
-                            turn + 1,
-                            ratio,
-                            last_compaction_turn
-                        );
                     }
                 }
             }
@@ -3879,10 +4036,19 @@ If you need a tool, call it directly through the model tool interface.\n\
             } else {
                 messages.clone()
             };
+            let _ = refresh_projection_only(
+                &Conversation::new_unvalidated(messages_for_llm.clone()),
+                &mut context_runtime_state,
+            );
 
             // Fix conversation format before sending to LLM (same as local agent).
             // Ensures first/last messages are from user, merges consecutive same-role messages, etc.
-            let conversation_for_llm = Conversation::new_unvalidated(messages_for_llm);
+            let projected_for_llm = project_for_provider(
+                &Conversation::new_unvalidated(messages_for_llm),
+                &context_runtime_state,
+            );
+            let conversation_for_llm =
+                Conversation::new_unvalidated(projected_for_llm.messages().to_vec());
             let (fixed_conversation, fix_issues) = fix_conversation(conversation_for_llm);
             if !fix_issues.is_empty() {
                 tracing::debug!("Conversation fixes applied: {:?}", fix_issues);
@@ -3933,6 +4099,7 @@ If you need a tool, call it directly through the model tool interface.\n\
                                 &messages,
                                 accumulated_input,
                                 accumulated_output,
+                                Some(&context_runtime_state),
                             )
                             .await;
                             break;
@@ -3945,7 +4112,6 @@ If you need a tool, call it directly through the model tool interface.\n\
                             MAX_RECOVERY_COMPACTION_ATTEMPTS
                         );
 
-                        // Perform recovery compaction
                         let before_tokens = match create_token_counter().await {
                             Ok(counter) => counter.count_chat_tokens(
                                 &effective_system_prompt,
@@ -3955,43 +4121,43 @@ If you need a tool, call it directly through the model tool interface.\n\
                             Err(_) => 0,
                         };
                         let conversation = Conversation::new_unvalidated(messages.clone());
-                        match compact_messages_with_strategy(
+                        let initial_runtime_state = context_runtime_state.clone();
+                        match recover_on_overflow(
                             provider.as_ref(),
                             &conversation,
-                            false,
-                            compaction_mode,
+                            &mut context_runtime_state,
                         )
                         .await
                         {
-                            Ok((compacted, _usage)) => {
-                                messages = compacted.messages().to_vec();
-                                // Recount actual tokens after recovery compaction
-                                let after_tokens = match create_token_counter().await {
-                                    Ok(counter) => counter.count_chat_tokens(
-                                        &effective_system_prompt,
-                                        &messages,
-                                        &tools,
-                                    ) as i32,
-                                    Err(_) => 0,
-                                };
+                            Ok(_recovery) => {
+                                let after_tokens = context_runtime_state
+                                    .last_projection_stats
+                                    .as_ref()
+                                    .map(|stats| stats.projected_token_estimate)
+                                    .unwrap_or(before_tokens);
+                                let (phase, reason) = Self::compaction_event_metadata(
+                                    &initial_runtime_state,
+                                    &context_runtime_state,
+                                );
                                 self.task_manager
                                     .broadcast(
                                         task_id,
                                         StreamEvent::Compaction {
-                                            strategy: SERVER_COMPACTION_MODE.to_string(),
+                                            strategy: "context_runtime".to_string(),
                                             before_tokens,
-                                            after_tokens: after_tokens as usize,
+                                            after_tokens,
+                                            phase,
+                                            reason,
                                         },
                                     )
                                     .await;
-                                last_compaction_turn = Some(turn);
-                                tracing::info!("Recovery compaction done, retrying LLM call");
+                                tracing::info!("Context runtime recovery done, retrying LLM call");
                                 continue; // Retry the turn
                             }
                             Err(compact_err) => {
                                 tracing::error!("Recovery compaction failed: {}", compact_err);
                                 return Err(anyhow!(
-                                    "Context length exceeded and compaction failed: {}",
+                                    "Context length exceeded and runtime recovery failed: {}",
                                     compact_err
                                 ));
                             }
@@ -4753,13 +4919,15 @@ If coding work is complete, provide a structured final report with: 1) changed f
 
             // Add denied tool responses (repetition + security)
             for (id, name, reason) in &denied {
+                let normalized =
+                    normalize_tool_execution_error_text(Some(name.as_str()), None, reason);
                 self.task_manager
                     .broadcast(
                         task_id,
                         StreamEvent::ToolResult {
                             id: id.clone(),
-                            success: false,
-                            content: reason.clone(),
+                            success: normalized.success,
+                            content: normalized.display_text.clone(),
                             name: Some(name.clone()),
                             duration_ms: None,
                         },
@@ -4769,8 +4937,8 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     id.clone(),
                     Err(rmcp::ErrorData::new(
                         rmcp::model::ErrorCode::INTERNAL_ERROR,
-                        reason.clone(),
-                        None,
+                        normalized.display_text,
+                        normalized.structured_output,
                     )),
                 );
             }
@@ -4780,6 +4948,9 @@ If coding work is complete, provide a structured final report with: 1) changed f
                 match result {
                     Ok(blocks) => {
                         let tool_name = tool_name_by_id.get(&id).cloned();
+                        let call_result = Self::tool_blocks_to_call_result(&blocks);
+                        let normalized =
+                            normalize_call_tool_result(tool_name.as_deref(), None, &call_result);
                         if portal_restricted {
                             let is_final_output = tool_name
                                 .as_ref()
@@ -4789,20 +4960,24 @@ If coding work is complete, provide a structured final report with: 1) changed f
                                 portal_successful_tool_calls += 1;
                             }
                         }
-                        let text_repr = Self::tool_blocks_to_text(&blocks);
+                        let text_repr = normalized.display_text.clone();
                         let looks_empty_tool_success = tool_name.as_deref().is_some_and(|name| {
                             matches!(name, "developer__shell" | "developer__text_editor")
                         }) && text_repr.trim().is_empty();
                         if looks_empty_tool_success {
                             this_turn_had_tool_failure = true;
-                            let err_text = "Tool reported success but produced no output and no verifiable file effect".to_string();
+                            let normalized = normalize_tool_execution_error_text(
+                                tool_name.as_deref(),
+                                None,
+                                "Tool reported success but produced no output and no verifiable file effect",
+                            );
                             self.task_manager
                                 .broadcast(
                                     task_id,
                                     StreamEvent::ToolResult {
                                         id: id.clone(),
-                                        success: false,
-                                        content: err_text.clone(),
+                                        success: normalized.success,
+                                        content: normalized.display_text.clone(),
                                         name: tool_name.clone(),
                                         duration_ms: Some(duration_ms),
                                     },
@@ -4812,8 +4987,8 @@ If coding work is complete, provide a structured final report with: 1) changed f
                                 id,
                                 Err(rmcp::ErrorData::new(
                                     rmcp::model::ErrorCode::INTERNAL_ERROR,
-                                    err_text,
-                                    None,
+                                    normalized.display_text,
+                                    normalized.structured_output,
                                 )),
                             );
                             continue;
@@ -4829,7 +5004,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
                                 task_id,
                                 StreamEvent::ToolResult {
                                     id: id.clone(),
-                                    success: true,
+                                    success: normalized.success,
                                     content: sse_content,
                                     name: tool_name_by_id.get(&id).cloned(),
                                     duration_ms: Some(duration_ms),
@@ -4850,35 +5025,16 @@ If coding work is complete, provide a structured final report with: 1) changed f
                             }
                         }
 
-                        // Convert ToolContentBlocks to rmcp Content items
-                        let content_items: Vec<rmcp::model::Content> = blocks
-                            .iter()
-                            .filter_map(|b| match b {
-                                super::mcp_connector::ToolContentBlock::Text(text) => {
-                                    let truncated = Self::truncate_tool_result(text.clone());
-                                    Some(rmcp::model::Content::text(truncated))
-                                }
-                                super::mcp_connector::ToolContentBlock::Image {
-                                    mime_type,
-                                    data,
-                                } => Some(rmcp::model::Content::image(
-                                    data.clone(),
-                                    mime_type.clone(),
-                                )),
-                                super::mcp_connector::ToolContentBlock::StructuredJson(_) => None,
-                            })
-                            .collect();
-
-                        let call_result = rmcp::model::CallToolResult {
-                            content: content_items,
-                            structured_content: None,
-                            is_error: Some(false),
-                            meta: None,
-                        };
                         tool_response_msg =
                             tool_response_msg.with_tool_response(id, Ok(call_result));
                     }
                     Err(err_text) => {
+                        let tool_name = tool_name_by_id.get(&id).cloned();
+                        let normalized = normalize_tool_execution_error_text(
+                            tool_name.as_deref(),
+                            None,
+                            &err_text,
+                        );
                         this_turn_had_tool_failure = true;
                         if tool_name_by_id
                             .get(&id)
@@ -4889,19 +5045,19 @@ If coding work is complete, provide a structured final report with: 1) changed f
                             swarm_failure_reminder =
                                 Some(build_swarm_downgrade_message(None, &[], &err_text));
                         }
-                        let sse_content = if err_text.len() > 2000 {
-                            format!("{}...", Self::safe_truncate(&err_text, 2000))
+                        let sse_content = if normalized.display_text.len() > 2000 {
+                            format!("{}...", Self::safe_truncate(&normalized.display_text, 2000))
                         } else {
-                            err_text.clone()
+                            normalized.display_text.clone()
                         };
                         self.task_manager
                             .broadcast(
                                 task_id,
                                 StreamEvent::ToolResult {
                                     id: id.clone(),
-                                    success: false,
+                                    success: normalized.success,
                                     content: sse_content,
-                                    name: tool_name_by_id.get(&id).cloned(),
+                                    name: tool_name,
                                     duration_ms: Some(duration_ms),
                                 },
                             )
@@ -4911,8 +5067,8 @@ If coding work is complete, provide a structured final report with: 1) changed f
                             id,
                             Err(rmcp::ErrorData::new(
                                 rmcp::model::ErrorCode::INTERNAL_ERROR,
-                                Self::truncate_tool_result(err_text),
-                                None,
+                                Self::truncate_tool_result(normalized.display_text),
+                                normalized.structured_output,
                             )),
                         );
                     }
@@ -4968,6 +5124,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
                     &messages,
                     accumulated_input,
                     accumulated_output,
+                    Some(&context_runtime_state),
                 )
                 .await;
             }
@@ -4999,8 +5156,14 @@ If coding work is complete, provide a structured final report with: 1) changed f
         }
 
         // Save session state
-        self.save_session_state(session_id, &messages, accumulated_input, accumulated_output)
-            .await;
+        self.save_session_state(
+            session_id,
+            &messages,
+            accumulated_input,
+            accumulated_output,
+            Some(&context_runtime_state),
+        )
+        .await;
 
         Ok(())
     }
@@ -5309,8 +5472,9 @@ If coding work is complete, provide a structured final report with: 1) changed f
         messages: &[Message],
         tools: &[rmcp::model::Tool],
     ) -> Result<(bool, usize, f64)> {
-        let context_limit = provider.get_model_config().context_limit();
-        let threshold = DEFAULT_COMPACTION_THRESHOLD;
+        let runtime_profile = resolve_from_model_config(&provider.get_model_config());
+        let context_limit = runtime_profile.context_limit;
+        let threshold = runtime_profile.auto_compact_threshold;
 
         let counter = create_token_counter()
             .await
@@ -5335,6 +5499,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
         messages: &[Message],
         input_tokens: i32,
         output_tokens: i32,
+        context_runtime_state: Option<&ContextRuntimeState>,
     ) {
         let messages_json = match serde_json::to_string(messages) {
             Ok(j) => j,
@@ -5367,6 +5532,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
                 } else {
                     None
                 },
+                context_runtime_state,
             )
             .await
         {
@@ -5414,7 +5580,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
 
         // Determine valid prior statuses for this transition
         let allowed_from = match status {
-            TaskStatus::Running => vec!["approved"],
+            TaskStatus::Running => vec!["approved", "queued"],
             TaskStatus::Completed | TaskStatus::Failed => vec!["running"],
             _ => vec![],
         };
@@ -5462,7 +5628,7 @@ If coding work is complete, provide a structured final report with: 1) changed f
         let result = self
             .tasks()
             .update_one(
-                doc! { "task_id": task_id, "status": { "$in": ["running", "approved"] } },
+                doc! { "task_id": task_id, "status": { "$in": ["running", "approved", "queued"] } },
                 doc! { "$set": {
                     "status": "failed",
                     "error_message": error,
@@ -5508,14 +5674,30 @@ If coding work is complete, provide a structured final report with: 1) changed f
 
 #[cfg(test)]
 mod tests {
-    use super::{RepetitionDetector, TaskExecutor};
+    use super::{extension_allowed_by_name, RepetitionDetector, TaskExecutor};
     use agime::agents::harness::{parse_validation_outcome, TaskRuntime};
+    use agime::conversation::message::Message;
     use agime::security::scanner::PromptInjectionScanner;
     use agime_team::models::{AgentTask, TaskStatus, TaskType};
     use chrono::Utc;
+    use std::collections::HashSet;
 
     use crate::agent::harness_adapter::ServerHarnessAdapter;
     use crate::agent::harness_core::HarnessDelegationMode;
+
+    #[test]
+    fn extension_allowlist_matches_runtime_and_config_names() {
+        let allowed = HashSet::from([
+            "auto_visualiser".to_string(),
+            "computer_controller".to_string(),
+        ]);
+
+        assert!(extension_allowed_by_name("autovisualiser", &allowed));
+        assert!(extension_allowed_by_name("auto_visualiser", &allowed));
+        assert!(extension_allowed_by_name("computercontroller", &allowed));
+        assert!(extension_allowed_by_name("computer_controller", &allowed));
+        assert!(!extension_allowed_by_name("memory", &allowed));
+    }
 
     #[test]
     fn strip_heredoc_bodies_preserves_shell_prefix_and_marker() {
@@ -5690,5 +5872,13 @@ mod tests {
     fn validation_summary_requires_pass_prefix() {
         assert!(parse_validation_outcome("PASS: artifact matches contract").passed());
         assert!(!parse_validation_outcome("FAIL: missing section").passed());
+    }
+
+    #[test]
+    fn resumed_task_checks_compaction_on_first_provider_turn() {
+        let messages = vec![Message::user().with_text("existing history")];
+        assert!(TaskExecutor::should_check_pre_turn_compaction(0, &messages));
+        assert!(TaskExecutor::should_check_pre_turn_compaction(1, &messages));
+        assert!(!TaskExecutor::should_check_pre_turn_compaction(0, &[]));
     }
 }

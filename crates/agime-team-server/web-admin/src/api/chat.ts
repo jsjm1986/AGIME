@@ -47,6 +47,44 @@ export interface SessionHarnessCapabilities {
   document_write_mode?: string | null;
 }
 
+export type DelegationRuntimeStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed";
+
+export type DelegationRuntimeMode = "subagent" | "swarm";
+
+export interface DelegationRuntimeWorker {
+  worker_id: string;
+  role: string;
+  title: string;
+  status: DelegationRuntimeStatus;
+  summary?: string | null;
+  last_update_at?: string | null;
+  result_summary?: string | null;
+  error?: string | null;
+}
+
+export interface DelegationRuntime {
+  active_run: boolean;
+  mode: DelegationRuntimeMode;
+  status: DelegationRuntimeStatus;
+  summary?: string | null;
+  leader?: DelegationRuntimeWorker | null;
+  workers: DelegationRuntimeWorker[];
+}
+
+export interface DelegationRuntimeEventPayload {
+  event: string;
+  mode?: DelegationRuntimeMode | null;
+  status?: DelegationRuntimeStatus | null;
+  summary?: string | null;
+  worker?: DelegationRuntimeWorker | null;
+  thread_root_id?: string | null;
+  root_message_id?: string | null;
+}
+
 export interface ChatSession {
   session_id: string;
   agent_id: string;
@@ -70,7 +108,6 @@ export interface ChatSessionDetail {
   total_tokens?: number;
   input_tokens?: number;
   output_tokens?: number;
-  compaction_count?: number;
   disabled_extensions: string[];
   enabled_extensions: string[];
   status: string;
@@ -105,10 +142,26 @@ export interface ChatSessionDetail {
   capability_snapshot?: Record<string, unknown> | null;
   delegation_snapshot?: Record<string, unknown> | null;
   harness_capabilities?: SessionHarnessCapabilities | null;
+  delegation_runtime?: DelegationRuntime | null;
   subagent_enabled?: boolean;
   swarm_enabled?: boolean;
   worker_peer_messaging_enabled?: boolean;
   validation_worker_enabled?: boolean;
+  context_runtime_state?: Record<string, unknown> | null;
+  context_runtime_summary?: {
+    schemaVersion: number;
+    runtimeCompactions: number;
+    committedCollapseCount: number;
+    stagedCollapseCount: number;
+    snipRemovedCount: number;
+    microcompactedCount: number;
+    sessionMemoryActive: boolean;
+    preservedSegment?: Record<string, unknown> | null;
+    compactBoundary?: Record<string, unknown> | null;
+    lastProjectionStats?: Record<string, unknown> | null;
+    lastCompactReason?: string | null;
+    lastRecoveryResult?: string | null;
+  } | null;
   created_at: string;
   updated_at: string;
 }
@@ -126,6 +179,26 @@ export interface ChatSessionEvent {
   event_type: string;
   payload: Record<string, unknown>;
   created_at: string;
+}
+
+export interface ChatWorkspaceFileBlock {
+  type: "workspace_file";
+  path: string;
+  label: string;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  preview_supported: boolean;
+}
+
+export interface SessionWorkspaceShare {
+  share_id: string;
+  path: string;
+  label: string;
+  content_type: string;
+  preview_supported: boolean;
+  preview_url: string;
+  download_url: string;
+  content_url: string;
 }
 
 export interface ComposerCapabilitySkill {
@@ -190,10 +263,10 @@ export type ChatChannelVisibility = "team_public" | "team_private";
 export type ChatChannelMemberRole = "owner" | "manager" | "member";
 export type ChatChannelAuthorType = "user" | "agent" | "system";
 export type ChatChannelMessageSurface = "issue" | "temporary" | "activity";
-export type ChatChannelInteractionMode = "conversation" | "execution";
 export type ChatChannelThreadState = "active" | "archived";
 export type ChatChannelDisplayKind =
   | "discussion"
+  | "onboarding"
   | "suggestion"
   | "result"
   | "collaboration";
@@ -209,6 +282,59 @@ export type ChatChannelAgentAutonomyMode =
   | "proactive"
   | "agent_lead";
 export type ChatChannelDeleteMode = "full_delete" | "preserve_documents";
+export type ChatChannelRepoStorageMode = "bare_repo_worktree";
+export type ChatChannelType = "general" | "coding" | "scheduled_task";
+export type ChatChannelWorkspaceLifecycleState =
+  | "active_bound"
+  | "detached"
+  | "archived"
+  | "pending_delete"
+  | "deleted";
+
+export interface ChatChannelWorkspaceGovernanceSummary {
+  has_detached_workspace: boolean;
+  detached_workspace_id?: string | null;
+  lifecycle_state?: ChatChannelWorkspaceLifecycleState | null;
+  workspace_display_name?: string | null;
+  workspace_path?: string | null;
+  repo_path?: string | null;
+  main_checkout_path?: string | null;
+  repo_default_branch?: string | null;
+  last_detached_at?: string | null;
+  retention_until?: string | null;
+}
+
+export interface ChannelProjectWorkspaceDoc {
+  workspace_id: string;
+  team_id: string;
+  channel_id: string;
+  channel_name_snapshot: string;
+  workspace_display_name?: string | null;
+  workspace_path: string;
+  repo_path: string;
+  main_checkout_path: string;
+  bare_repo_path: string;
+  repo_default_branch: string;
+  repo_storage_mode: ChatChannelRepoStorageMode;
+  channel_type_snapshot: ChatChannelType;
+  lifecycle_state: ChatChannelWorkspaceLifecycleState;
+  created_at: string;
+  updated_at: string;
+  last_bound_at?: string | null;
+  last_activity_at?: string | null;
+  detached_at?: string | null;
+  archived_at?: string | null;
+  pending_delete_at?: string | null;
+  deleted_at?: string | null;
+  retention_until?: string | null;
+  last_detach_reason?: string | null;
+}
+
+export interface ChatChannelWorkspaceFilesResponse {
+  root_path?: string | null;
+  code_files: string[];
+  truncated?: boolean;
+}
 
 export interface ChatChannelSummary {
   channel_id: string;
@@ -216,9 +342,19 @@ export interface ChatChannelSummary {
   name: string;
   description?: string | null;
   visibility: ChatChannelVisibility;
+  channel_type: ChatChannelType;
   default_agent_id: string;
   default_agent_name: string;
   document_folder_path?: string | null;
+  workspace_id?: string | null;
+  workspace_path?: string | null;
+  workspace_kind?: string | null;
+  workspace_display_name?: string | null;
+  repo_path?: string | null;
+  main_checkout_path?: string | null;
+  repo_root?: string | null;
+  repo_default_branch?: string | null;
+  repo_storage_mode?: ChatChannelRepoStorageMode | null;
   created_by_user_id: string;
   status: "active" | "archived";
   last_message_preview?: string | null;
@@ -245,9 +381,19 @@ export interface ChatChannelDetail {
   name: string;
   description?: string | null;
   visibility: ChatChannelVisibility;
+  channel_type: ChatChannelType;
   default_agent_id: string;
   default_agent_name: string;
   document_folder_path?: string | null;
+  workspace_id?: string | null;
+  workspace_path?: string | null;
+  workspace_kind?: string | null;
+  workspace_display_name?: string | null;
+  repo_path?: string | null;
+  main_checkout_path?: string | null;
+  repo_root?: string | null;
+  repo_default_branch?: string | null;
+  repo_storage_mode?: ChatChannelRepoStorageMode | null;
   created_by_user_id: string;
   status: "active" | "archived";
   last_message_preview?: string | null;
@@ -267,6 +413,7 @@ export interface ChatChannelDetail {
   created_at: string;
   updated_at: string;
   current_user_role: ChatChannelMemberRole;
+  workspace_governance?: ChatChannelWorkspaceGovernanceSummary | null;
   orchestrator_state?: {
     channel_id: string;
     team_id: string;
@@ -326,9 +473,31 @@ export interface ChatChannelMessage {
   reply_count: number;
 }
 
+export interface ChatWorkspaceFileBlock {
+  type: "workspace_file";
+  path: string;
+  label: string;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  preview_supported: boolean;
+}
+
 export interface ChatChannelThread {
   root_message: ChatChannelMessage;
   messages: ChatChannelMessage[];
+  thread_runtime?: {
+    runtime_session_id?: string | null;
+    workspace_path?: string | null;
+    workspace_id?: string | null;
+    workspace_kind?: string | null;
+    thread_worktree_path?: string | null;
+    thread_branch?: string | null;
+    thread_repo_ref?: string | null;
+    last_execution_status?: string | null;
+    last_execution_error?: string | null;
+    last_execution_finished_at?: string | null;
+  } | null;
+  delegation_runtime?: DelegationRuntime | null;
 }
 
 export interface ChatChannelRead {
@@ -696,6 +865,64 @@ export const chatApi = {
     });
   },
 
+  getSessionWorkspaceFileContentUrl(
+    sessionId: string,
+    filePath: string,
+  ): string {
+    const params = new URLSearchParams({ path: filePath });
+    return `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/workspace/files/content?${params.toString()}`;
+  },
+
+  getSessionWorkspacePreviewUrl(
+    sessionId: string,
+    filePath: string,
+  ): string {
+    const encodedPath = filePath
+      .split('/')
+      .filter(Boolean)
+      .map((part) => encodeURIComponent(part))
+      .join('/');
+    return `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/workspace/preview/${encodedPath}`;
+  },
+
+  getSessionWorkspaceAppPreviewUrl(
+    sessionId: string,
+    filePath: string,
+    options?: {
+      label?: string | null;
+      contentType?: string | null;
+    },
+  ): string {
+    const params = new URLSearchParams({
+      session: sessionId,
+      path: filePath,
+    });
+    if (options?.label) {
+      params.set("label", options.label);
+    }
+    if (options?.contentType) {
+      params.set("contentType", options.contentType);
+    }
+    return `/admin/chat/workspace-preview?${params.toString()}`;
+  },
+
+  async createSessionWorkspaceShare(
+    sessionId: string,
+    filePath: string,
+    label?: string | null,
+  ): Promise<SessionWorkspaceShare> {
+    return fetchApi<SessionWorkspaceShare>(
+      `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/workspace/shares`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          path: filePath,
+          label: label?.trim() ? label.trim() : undefined,
+        }),
+      },
+    );
+  },
+
   async listChannels(teamId: string): Promise<ChatChannelSummary[]> {
     const res = await fetchApi<{ channels?: ChatChannelSummary[] }>(
       `${API_BASE}/channels?team_id=${encodeURIComponent(teamId)}`,
@@ -707,10 +934,13 @@ export const chatApi = {
     teamId: string,
     payload: {
       name: string;
-      description?: string | null;
-      visibility?: ChatChannelVisibility;
-      default_agent_id: string;
+        description?: string | null;
+        visibility?: ChatChannelVisibility;
+        channel_type?: ChatChannelType;
+        default_agent_id: string;
       member_user_ids?: string[];
+      workspace_display_name?: string | null;
+      repo_default_branch?: string | null;
     },
   ): Promise<ChatChannelDetail> {
     const res = await fetchApi<{ channel: ChatChannelDetail }>(
@@ -730,18 +960,63 @@ export const chatApi = {
     return res.channel;
   },
 
+  async getChannelWorkspaceFiles(
+    channelId: string,
+    threadRootId?: string | null,
+  ): Promise<ChatChannelWorkspaceFilesResponse> {
+    const params = new URLSearchParams();
+    if (threadRootId) {
+      params.set("thread_root_id", threadRootId);
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return fetchApi<ChatChannelWorkspaceFilesResponse>(
+      `${API_BASE}/channels/${channelId}/workspace/files${suffix}`,
+    );
+  },
+
+  getChannelWorkspaceFileContentUrl(
+    channelId: string,
+    filePath: string,
+    threadRootId?: string | null,
+  ): string {
+    const params = new URLSearchParams({ path: filePath });
+    if (threadRootId) {
+      params.set("thread_root_id", threadRootId);
+    }
+    return `${API_BASE}/channels/${channelId}/workspace/files/content?${params.toString()}`;
+  },
+
+  getChannelWorkspacePreviewUrl(
+    channelId: string,
+    filePath: string,
+    threadRootId?: string | null,
+  ): string {
+    const encodedPath = filePath
+      .split('/')
+      .filter(Boolean)
+      .map((part) => encodeURIComponent(part))
+      .join('/');
+    if (threadRootId) {
+      return `${API_BASE}/channels/${encodeURIComponent(channelId)}/workspace/preview/thread/${encodeURIComponent(threadRootId)}/${encodedPath}`;
+    }
+    return `${API_BASE}/channels/${encodeURIComponent(channelId)}/workspace/preview/main/${encodedPath}`;
+  },
+
   async updateChannel(
     channelId: string,
     payload: {
       name?: string;
-      description?: string | null;
-      visibility?: ChatChannelVisibility;
-      default_agent_id?: string;
+        description?: string | null;
+        visibility?: ChatChannelVisibility;
+        channel_type?: ChatChannelType;
+        default_agent_id?: string;
       agent_autonomy_mode?: ChatChannelAgentAutonomyMode;
       channel_goal?: string | null;
       participant_notes?: string | null;
       expected_outputs?: string | null;
       collaboration_style?: string | null;
+      workspace_display_name?: string | null;
+      repo_default_branch?: string | null;
     },
   ): Promise<ChatChannelDetail> {
     const res = await fetchApi<{ channel: ChatChannelDetail }>(
@@ -752,6 +1027,40 @@ export const chatApi = {
       },
     );
     return res.channel;
+  },
+
+  async listChannelWorkspaces(
+    teamId: string,
+    lifecycleState?: ChatChannelWorkspaceLifecycleState,
+  ): Promise<ChannelProjectWorkspaceDoc[]> {
+    const params = new URLSearchParams({ team_id: teamId });
+    if (lifecycleState) {
+      params.set("lifecycle_state", lifecycleState);
+    }
+    const res = await fetchApi<{ workspaces?: ChannelProjectWorkspaceDoc[] }>(
+      `${API_BASE}/channels/workspaces?${params.toString()}`,
+    );
+    return res.workspaces || [];
+  },
+
+  async restoreChannelWorkspace(workspaceId: string): Promise<ChatChannelDetail> {
+    const res = await fetchApi<{ channel: ChatChannelDetail }>(
+      `${API_BASE}/channels/workspaces/${workspaceId}/restore`,
+      { method: "POST" },
+    );
+    return res.channel;
+  },
+
+  async archiveChannelWorkspace(workspaceId: string): Promise<void> {
+    await fetchApi(`${API_BASE}/channels/workspaces/${workspaceId}/archive`, {
+      method: "POST",
+    });
+  },
+
+  async deleteChannelWorkspace(workspaceId: string): Promise<void> {
+    await fetchApi(`${API_BASE}/channels/workspaces/${workspaceId}/delete`, {
+      method: "POST",
+    });
   },
 
   async archiveChannel(channelId: string): Promise<void> {
@@ -868,7 +1177,6 @@ export const chatApi = {
     payload: {
       content: string;
       surface?: ChatChannelMessageSurface;
-      interaction_mode?: ChatChannelInteractionMode;
       agent_id?: string | null;
       thread_root_id?: string | null;
       parent_message_id?: string | null;
@@ -888,7 +1196,6 @@ export const chatApi = {
     payload: {
       content: string;
       surface?: ChatChannelMessageSurface;
-      interaction_mode?: ChatChannelInteractionMode;
       agent_id?: string | null;
       parent_message_id?: string | null;
       attached_document_ids?: string[];

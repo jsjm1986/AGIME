@@ -4,6 +4,7 @@ use chrono::Utc;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::agents::extension::ExtensionInfo;
 use crate::agents::router_tools::llm_search_tool_prompt;
@@ -60,6 +61,17 @@ pub struct SystemPromptBuilder<'a, M> {
 }
 
 impl<'a> SystemPromptBuilder<'a, PromptManager> {
+    fn normalize_system_prompt_extras(extras: Vec<String>) -> Vec<String> {
+        let mut seen = HashSet::new();
+        extras
+            .into_iter()
+            .map(|extra| sanitize_unicode_tags(&extra))
+            .map(|extra| extra.trim().to_string())
+            .filter(|extra| !extra.is_empty())
+            .filter(|extra| seen.insert(extra.clone()))
+            .collect()
+    }
+
     pub fn with_extension(mut self, extension: ExtensionInfo) -> Self {
         self.extensions_info.push(extension);
         self
@@ -198,10 +210,8 @@ impl<'a> SystemPromptBuilder<'a, PromptManager> {
             );
         }
 
-        let sanitized_system_prompt_extras: Vec<String> = system_prompt_extras
-            .into_iter()
-            .map(|extra| sanitize_unicode_tags(&extra))
-            .collect();
+        let sanitized_system_prompt_extras =
+            Self::normalize_system_prompt_extras(system_prompt_extras);
 
         if sanitized_system_prompt_extras.is_empty() {
             base_prompt
@@ -314,6 +324,20 @@ mod tests {
         assert!(result.contains("Firstinstruction"));
         assert!(result.contains("Secondinstruction"));
         assert!(result.contains("Thirdinstruction"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_deduplicates_and_trims_extras() {
+        let mut manager = PromptManager::new();
+        manager.add_system_prompt_extra("  same extra  ".to_string());
+        manager.add_system_prompt_extra("same extra".to_string());
+        manager.add_system_prompt_extra("".to_string());
+        manager.add_system_prompt_extra("   ".to_string());
+        manager.add_system_prompt_extra("another extra".to_string());
+
+        let result = manager.builder("gpt-4o").build();
+        assert_eq!(result.matches("same extra").count(), 1);
+        assert_eq!(result.matches("another extra").count(), 1);
     }
 
     #[test]

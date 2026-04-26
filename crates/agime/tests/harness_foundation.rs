@@ -277,7 +277,7 @@ fn harness_session_state_snapshot_tracks_runtime_fields() {
     let state = HarnessSessionState::snapshot(HarnessMode::Execute, 5, 2, 1);
     assert_eq!(state.mode, HarnessMode::Execute);
     assert_eq!(state.turns_taken, 5);
-    assert_eq!(state.compaction_count, 2);
+    assert_eq!(state.runtime_compaction_count, 2);
     assert_eq!(state.delegation_depth, 1);
 }
 

@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use agime_team::MongoDb;
 
+use super::contract::{assess_draft_publish_readiness, summarize_verification_quality};
 use super::models::{
     ArtifactKind, AutomationArtifactDoc, AutomationIntegrationDoc, AutomationModuleDoc,
     AutomationProjectDoc, AutomationRunDoc, AutomationScheduleDoc, AutomationTaskDraftDoc,
@@ -230,38 +231,32 @@ impl AutomationService {
     pub async fn delete_project(&self, team_id: &str, project_id: &str) -> Result<bool> {
         let result = self
             .projects()
-            .update_one(
+            .delete_one(
                 doc! { "team_id": team_id, "project_id": project_id, "archived": false },
-                doc! { "$set": { "archived": true, "updated_at": bson::DateTime::now() } },
                 None,
             )
             .await?;
+        if result.deleted_count == 0 {
+            return Ok(false);
+        }
         let project_filter = doc! { "team_id": team_id, "project_id": project_id };
         self.integrations()
-            .update_many(
-                project_filter.clone(),
-                doc! { "$set": { "archived": true, "updated_at": bson::DateTime::now() } },
-                None,
-            )
+            .delete_many(project_filter.clone(), None)
             .await?;
         self.drafts()
-            .update_many(
-                project_filter.clone(),
-                doc! { "$set": { "archived": true, "updated_at": bson::DateTime::now() } },
-                None,
-            )
+            .delete_many(project_filter.clone(), None)
             .await?;
         self.modules()
-            .update_many(
-                project_filter.clone(),
-                doc! { "$set": { "archived": true, "updated_at": bson::DateTime::now() } },
-                None,
-            )
+            .delete_many(project_filter.clone(), None)
             .await?;
-        self.schedules()
-            .update_many(project_filter, doc! { "$set": { "status": bson::to_bson(&ScheduleStatus::Deleted)?, "updated_at": bson::DateTime::now() } }, None)
+        self.runs()
+            .delete_many(project_filter.clone(), None)
             .await?;
-        Ok(result.matched_count > 0)
+        self.artifacts()
+            .delete_many(project_filter.clone(), None)
+            .await?;
+        self.schedules().delete_many(project_filter, None).await?;
+        Ok(true)
     }
 
     async fn project_to_value(&self, project: &AutomationProjectDoc) -> Result<Value> {
@@ -726,6 +721,59 @@ impl AutomationService {
             )
             .await?;
         self.get_module(team_id, module_id).await
+    }
+
+    pub async fn delete_module(&self, team_id: &str, module_id: &str) -> Result<bool> {
+        let now = bson::DateTime::now();
+        let result = self
+            .modules()
+            .delete_one(
+                doc! { "team_id": team_id, "module_id": module_id, "archived": false },
+                None,
+            )
+            .await?;
+        if result.deleted_count == 0 {
+            return Ok(false);
+        }
+
+        self.drafts()
+            .update_many(
+                doc! { "team_id": team_id, "linked_module_id": module_id },
+                doc! {
+                    "$set": {
+                        "linked_module_id": bson::Bson::Null,
+                        "updated_at": now,
+                    }
+                },
+                None,
+            )
+            .await?;
+
+        let run_ids: Vec<String> = self
+            .list_runs_for_module(team_id, module_id)
+            .await?
+            .into_iter()
+            .map(|run| run.run_id)
+            .collect();
+
+        if !run_ids.is_empty() {
+            self.artifacts()
+                .delete_many(
+                    doc! { "team_id": team_id, "run_id": { "$in": &run_ids } },
+                    None,
+                )
+                .await?;
+        }
+
+        self.runs()
+            .delete_many(doc! { "team_id": team_id, "module_id": module_id }, None)
+            .await?;
+
+        self.schedules()
+            .delete_many(doc! { "team_id": team_id, "module_id": module_id }, None)
+            .await?;
+
+        Ok(true)
     }
 
     pub async fn create_run(
@@ -1328,13 +1376,7 @@ pub fn task_draft_to_compact_value(draft: &AutomationTaskDraftDoc) -> Value {
 }
 
 fn task_draft_to_value_with_mode(draft: &AutomationTaskDraftDoc, compact: bool) -> Value {
-    let publish_ready = matches!(draft.status, DraftStatus::Ready);
-    let verified_http_actions = draft
-        .candidate_plan
-        .get("verified_http_actions")
-        .and_then(|value| value.as_array())
-        .map(|items| items.len())
-        .unwrap_or(0);
+    let publish_readiness = assess_draft_publish_readiness(draft);
     let candidate_plan = if compact {
         compact_candidate_plan(&draft.candidate_plan)
     } else {
@@ -1364,11 +1406,7 @@ fn task_draft_to_value_with_mode(draft: &AutomationTaskDraftDoc, compact: bool) 
         "candidate_endpoints": draft.candidate_endpoints,
         "latest_probe_prompt": draft.latest_probe_prompt,
         "linked_module_id": draft.linked_module_id,
-        "publish_readiness": {
-            "ready": publish_ready,
-            "state": draft.status,
-            "label": if publish_ready { "ready_to_publish" } else { "needs_builder_work" },
-        },
+        "publish_readiness": publish_readiness,
         "agent_app": {
             "kind": "draft",
             "builder_session_id": draft.builder_session_id,
@@ -1378,7 +1416,9 @@ fn task_draft_to_value_with_mode(draft: &AutomationTaskDraftDoc, compact: bool) 
             "has_builder_session": draft.builder_session_id.is_some(),
             "has_candidate_plan": draft.candidate_plan != json!({}),
             "has_probe_report": draft.probe_report != json!({}),
-            "verified_http_actions": verified_http_actions,
+            "verified_http_actions": publish_readiness.verification.valid_actions,
+            "structured_verified_http_actions": publish_readiness.verification.structured_actions,
+            "shell_fallback_verified_http_actions": publish_readiness.verification.shell_fallback_actions,
         },
         "created_by": draft.created_by,
         "created_at": draft.created_at.to_chrono().to_rfc3339(),
@@ -1400,12 +1440,15 @@ fn module_to_value_with_mode(module: &AutomationModuleDoc, compact: bool) -> Val
         .get("native_execution_ready")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
-    let verified_http_actions = module
+    let verified_http_actions: Vec<super::contract::VerifiedHttpAction> = module
         .execution_contract
         .get("verified_http_actions")
-        .and_then(|value| value.as_array())
-        .map(|items| items.len())
-        .unwrap_or(0);
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<Vec<super::contract::VerifiedHttpAction>>(value).ok()
+        })
+        .unwrap_or_default();
+    let verification = summarize_verification_quality(&verified_http_actions);
     let intent_snapshot = if compact {
         json!({
             "goal": module.intent_snapshot.get("goal"),
@@ -1449,7 +1492,9 @@ fn module_to_value_with_mode(module: &AutomationModuleDoc, compact: bool) -> Val
             "integration_count": module.integration_ids.len(),
             "has_execution_contract": module.execution_contract != json!({}),
             "native_execution_ready": native_execution_ready,
-            "verified_http_actions": verified_http_actions,
+            "verified_http_actions": verification.valid_actions,
+            "structured_verified_http_actions": verification.structured_actions,
+            "shell_fallback_verified_http_actions": verification.shell_fallback_actions,
         },
         "created_by": module.created_by,
         "created_at": module.created_at.to_chrono().to_rfc3339(),

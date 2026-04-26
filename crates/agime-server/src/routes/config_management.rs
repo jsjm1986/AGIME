@@ -5,7 +5,7 @@ use agime::config::declarative_providers::LoadedProvider;
 use agime::config::paths::Paths;
 use agime::config::ExtensionEntry;
 use agime::config::{env_compat_exists, get_env_compat, Config, ConfigError};
-use agime::model::ModelConfig;
+use agime::model::{ModelConfig, ModelLimitConfig};
 use agime::providers::auto_detect::detect_provider_from_api_key;
 use agime::providers::base::{ProviderMetadata, ProviderType};
 use agime::providers::create_with_default_model;
@@ -245,7 +245,7 @@ pub async fn read_config(
     Json(query): Json<ConfigKeyQuery>,
 ) -> Result<Json<ConfigValueResponse>, StatusCode> {
     if query.key == "model-limits" {
-        let limits = ModelConfig::get_all_model_limits();
+        let limits = capabilities::get_model_limit_hints();
         return Ok(Json(ConfigValueResponse::Value(
             serde_json::to_value(limits).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
         )));
@@ -1351,7 +1351,7 @@ mod tests {
             ConfigValueResponse::MaskedValue(_) => panic!("unexpected secret"),
         };
 
-        let limits: Vec<agime::model::ModelLimitConfig> = serde_json::from_value(response).unwrap();
+        let limits: Vec<ModelLimitConfig> = serde_json::from_value(response).unwrap();
         assert!(!limits.is_empty());
 
         let gpt4_limit = limits.iter().find(|l| l.pattern == "gpt-4o");

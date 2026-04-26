@@ -2,13 +2,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use serde_json::Value;
 use tracing::{info, warn};
 
 use agime_team::MongoDb;
 
+use super::channel_coding_cards::{attach_card_domain_metadata, build_thread_coding_payload};
 use super::chat_channels::{
-    ChatChannelAgentAutonomyMode, ChatChannelAuthorType, ChatChannelDisplayStatus,
-    ChatChannelMessageDoc, ChatChannelMessageSurface, ChatChannelService, ChatChannelThreadState,
+    ChatChannelAgentAutonomyMode, ChatChannelAuthorType, ChatChannelCardEmissionFamily,
+    ChatChannelCardEmissionRegistry, ChatChannelDisplayStatus, ChatChannelMessageDoc,
+    ChatChannelMessageResponse, ChatChannelMessageSurface, ChatChannelOrchestratorStateDoc,
+    ChatChannelService, ChatChannelThreadState,
 };
 use super::service_mongo::AgentService;
 
@@ -16,7 +20,12 @@ struct FormalProgressSnapshot {
     latest_actor: String,
     latest_activity_at: chrono::DateTime<Utc>,
     latest_activity_label: String,
+    latest_activity_message_id: String,
     summary: String,
+    summary_revision: String,
+    progress_revision: String,
+    result_revision: String,
+    coding_payload: Option<Value>,
 }
 
 pub struct ChatChannelOrchestratorService {
@@ -79,106 +88,142 @@ impl ChatChannelOrchestratorService {
             .unwrap_or(true)
     }
 
-    fn recent_result_card_exists(messages: &[ChatChannelMessageDoc], root_id: &str) -> bool {
-        messages.iter().any(|message| {
-            matches!(message.surface, ChatChannelMessageSurface::Activity)
-                && message
-                    .metadata
-                    .as_object()
-                    .and_then(|meta| meta.get("card_purpose"))
-                    .and_then(|value| value.as_str())
-                    == Some("collaboration_result_sync")
-                && message
-                    .metadata
-                    .as_object()
-                    .and_then(|meta| meta.get("linked_collaboration_id"))
-                    .and_then(|value| value.as_str())
-                    == Some(root_id)
-        })
-    }
-
-    fn recent_card_exists(
-        messages: &[ChatChannelMessageDoc],
-        purpose: &str,
-        root_id: Option<&str>,
-        within: chrono::Duration,
+    fn registry_matches(
+        state: &ChatChannelOrchestratorStateDoc,
+        family: ChatChannelCardEmissionFamily,
+        key: &str,
+        revision: &str,
     ) -> bool {
-        let cutoff = Utc::now() - within;
-        messages.iter().any(|message| {
-            if message.created_at.to_chrono() < cutoff
-                || !matches!(message.surface, ChatChannelMessageSurface::Activity)
-            {
-                return false;
+        let normalized_key = ChatChannelCardEmissionRegistry::normalized_key(key);
+        match family {
+            ChatChannelCardEmissionFamily::Onboarding => {
+                state.card_emission_registry.onboarding_revision.as_deref() == Some(revision)
             }
-            let Some(meta) = message.metadata.as_object() else {
-                return false;
-            };
-            if meta.get("card_purpose").and_then(|value| value.as_str()) != Some(purpose) {
-                return false;
-            }
-            if let Some(root_id) = root_id {
-                return meta
-                    .get("linked_collaboration_id")
-                    .and_then(|value| value.as_str())
-                    == Some(root_id);
-            }
-            true
-        })
+            ChatChannelCardEmissionFamily::Suggestion => state
+                .card_emission_registry
+                .suggestion_revisions
+                .get(&normalized_key)
+                .is_some_and(|value| value == revision),
+            ChatChannelCardEmissionFamily::Progress => state
+                .card_emission_registry
+                .progress_revisions
+                .get(&normalized_key)
+                .is_some_and(|value| value == revision),
+            ChatChannelCardEmissionFamily::Result => state
+                .card_emission_registry
+                .result_revisions
+                .get(&normalized_key)
+                .is_some_and(|value| value == revision),
+            ChatChannelCardEmissionFamily::Reminder => state
+                .card_emission_registry
+                .reminder_revisions
+                .get(&normalized_key)
+                .is_some_and(|value| value == revision),
+        }
     }
 
-    fn recent_reminder_exists(
-        messages: &[ChatChannelMessageDoc],
-        root_id: &str,
-        purpose: &str,
-    ) -> bool {
-        Self::recent_card_exists(messages, purpose, Some(root_id), chrono::Duration::hours(6))
-    }
-
-    fn recent_summary_exists(messages: &[ChatChannelMessageDoc]) -> bool {
-        Self::recent_card_exists(
-            messages,
-            "discussion_summary",
-            None,
-            chrono::Duration::minutes(15),
+    fn normalize_revision_component(value: &str, max_chars: usize) -> String {
+        Self::clamp_summary(
+            &value.split_whitespace().collect::<Vec<_>>().join(" "),
+            max_chars,
         )
     }
 
-    fn recent_suggestion_exists(messages: &[ChatChannelMessageDoc]) -> bool {
-        [
-            "manager_suggestion",
-            "discussion_suggestion",
-            "auto_started_notice",
-            "auto_started_collaboration",
-        ]
-        .iter()
-        .any(|purpose| {
-            Self::recent_card_exists(messages, purpose, None, chrono::Duration::minutes(15))
-        })
+    fn is_template_summary_line(line: &str) -> bool {
+        let normalized = line
+            .trim()
+            .trim_matches('#')
+            .trim_matches('：')
+            .trim_matches(':')
+            .trim();
+        matches!(normalized, "正式协作进度" | "协作结果同步")
     }
 
-    fn has_recent_formal_progress_card(
-        messages: &[ChatChannelMessageDoc],
-        root_id: &str,
-        source_last_activity_at: &str,
-    ) -> bool {
-        messages.iter().any(|message| {
-            if !matches!(message.surface, ChatChannelMessageSurface::Activity) {
-                return false;
+    fn normalize_card_summary(value: &str, max_chars: usize) -> String {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut lines = Vec::new();
+        for raw in trimmed.lines() {
+            let line = raw.trim();
+            if line.is_empty() || Self::is_template_summary_line(line) {
+                continue;
             }
-            let Some(meta) = message.metadata.as_object() else {
-                return false;
-            };
-            meta.get("card_purpose").and_then(|value| value.as_str())
-                == Some("formal_collaboration_progress_sync")
-                && meta
-                    .get("linked_collaboration_id")
-                    .and_then(|value| value.as_str())
-                    == Some(root_id)
-                && meta
-                    .get("source_last_activity_at")
-                    .and_then(|value| value.as_str())
-                    == Some(source_last_activity_at)
-        })
+            let normalized_line = line.trim_start_matches('#').trim();
+            if normalized_line.is_empty() || Self::is_template_summary_line(normalized_line) {
+                continue;
+            }
+            if seen.insert(normalized_line.to_string()) {
+                lines.push(normalized_line.to_string());
+            }
+        }
+        let normalized = if lines.is_empty() {
+            trimmed.to_string()
+        } else {
+            lines.join("\n")
+        };
+        Self::clamp_summary(&normalized, max_chars)
+    }
+
+    fn coding_payload_signature(payload: Option<&Value>) -> String {
+        let Some(payload) = payload.and_then(Value::as_object) else {
+            return "general".to_string();
+        };
+        let list = |key: &str| {
+            payload
+                .get(key)
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("|")
+                })
+                .unwrap_or_default()
+        };
+        let next_action = payload
+            .get("next_action")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+        format!(
+            "files={};blockers={};next={}",
+            list("changed_files"),
+            list("blockers"),
+            next_action
+        )
+    }
+
+    fn latest_non_system_message<'a>(
+        thread: &'a super::chat_channels::ChatChannelThreadResponse,
+    ) -> &'a ChatChannelMessageResponse {
+        thread
+            .messages
+            .iter()
+            .rev()
+            .find(|item| item.author_type != ChatChannelAuthorType::System)
+            .unwrap_or(&thread.root_message)
+    }
+
+    fn reminder_revision(
+        root: &ChatChannelMessageDoc,
+        purpose: &str,
+        latest_activity_message_id: &str,
+    ) -> String {
+        format!(
+            "{}:{}:{}",
+            purpose,
+            root.collaboration_status
+                .map(|status| format!("{status:?}"))
+                .unwrap_or_else(|| "none".to_string()),
+            latest_activity_message_id
+        )
     }
 
     fn relative_activity_label(now: chrono::DateTime<Utc>, at: chrono::DateTime<Utc>) -> String {
@@ -195,16 +240,13 @@ impl ChatChannelOrchestratorService {
         format!("{} 天前", elapsed.num_days())
     }
 
-    fn formal_progress_snapshot(
+    async fn formal_progress_snapshot(
+        &self,
+        channel: &super::chat_channels::ChatChannelDoc,
         root: &ChatChannelMessageDoc,
         thread: &super::chat_channels::ChatChannelThreadResponse,
     ) -> FormalProgressSnapshot {
-        let latest_dialogue = thread
-            .messages
-            .iter()
-            .rev()
-            .find(|item| item.author_type != ChatChannelAuthorType::System)
-            .unwrap_or(&thread.root_message);
+        let latest_dialogue = Self::latest_non_system_message(thread);
         let latest_activity_at = chrono::DateTime::parse_from_rfc3339(&latest_dialogue.created_at)
             .map(|value| value.with_timezone(&Utc))
             .unwrap_or_else(|_| root.created_at.to_chrono());
@@ -217,12 +259,37 @@ impl ChatChannelOrchestratorService {
         } else {
             root.content_text.as_str()
         };
+        let summary = Self::normalize_card_summary(summary_source, 160);
+        let summary_revision = Self::normalize_revision_component(&summary, 180);
+        let coding_payload = build_thread_coding_payload(
+            self.agent_service.as_ref(),
+            channel,
+            &root.message_id,
+            Some(thread),
+        )
+        .await;
+        let coding_signature = Self::coding_payload_signature(coding_payload.as_ref());
+        let status_token = root
+            .collaboration_status
+            .map(|status| format!("{status:?}"))
+            .unwrap_or_else(|| "none".to_string());
 
         FormalProgressSnapshot {
             latest_actor,
             latest_activity_at,
             latest_activity_label: Self::relative_activity_label(Utc::now(), latest_activity_at),
-            summary: Self::clamp_summary(summary_source, 160),
+            latest_activity_message_id: latest_dialogue.message_id.clone(),
+            summary,
+            summary_revision: summary_revision.clone(),
+            progress_revision: format!(
+                "progress:{}:{}:{}:{}",
+                root.message_id, latest_dialogue.message_id, status_token, coding_signature
+            ),
+            result_revision: format!(
+                "result:{}:{}:{}:{}",
+                root.message_id, latest_dialogue.message_id, summary_revision, coding_signature
+            ),
+            coding_payload,
         }
     }
 
@@ -231,6 +298,7 @@ impl ChatChannelOrchestratorService {
         channel_service: &ChatChannelService,
         channel: &super::chat_channels::ChatChannelDoc,
         root: &ChatChannelMessageDoc,
+        _thread: &super::chat_channels::ChatChannelThreadResponse,
         snapshot: &FormalProgressSnapshot,
     ) -> Result<(), mongodb::error::Error> {
         let default_agent_name = self
@@ -250,10 +318,7 @@ impl ChatChannelOrchestratorService {
         };
         let text = format!(
             "正式协作进度\n{}\n当前状态：{}\n最近推进：{} · {}\n这里先同步阶段进展，查看协作项可继续推进。",
-            snapshot.summary,
-            status_label,
-            snapshot.latest_actor,
-            snapshot.latest_activity_label,
+            snapshot.summary, status_label, snapshot.latest_actor, snapshot.latest_activity_label,
         );
         let _ = channel_service
             .create_message(
@@ -270,23 +335,34 @@ impl ChatChannelOrchestratorService {
                 root.agent_id.clone(),
                 text.clone(),
                 serde_json::json!([{ "type": "text", "text": text }]),
-                serde_json::json!({
-                    "discussion_card_kind": "progress",
-                    "card_purpose": "formal_collaboration_progress_sync",
-                    "linked_collaboration_id": root.message_id,
-                    "summary_text": snapshot.summary,
-                    "status_label": status_label,
-                    "latest_actor": snapshot.latest_actor,
-                    "source_last_activity_at": snapshot.latest_activity_at.to_rfc3339(),
-                    "activity_age_minutes": (Utc::now() - snapshot.latest_activity_at).num_minutes(),
-                }),
+                attach_card_domain_metadata(
+                    channel,
+                    serde_json::json!({
+                        "discussion_card_kind": "progress",
+                        "card_purpose": "formal_collaboration_progress_sync",
+                        "linked_collaboration_id": root.message_id,
+                        "summary_text": snapshot.summary,
+                        "status_label": status_label,
+                        "latest_actor": snapshot.latest_actor,
+                        "source_message_id": snapshot.latest_activity_message_id,
+                        "source_last_activity_id": snapshot.latest_activity_message_id,
+                        "source_last_activity_at": snapshot.latest_activity_at.to_rfc3339(),
+                        "source_revision": snapshot.progress_revision,
+                        "summary_revision": snapshot.summary_revision,
+                        "activity_age_minutes": (Utc::now() - snapshot.latest_activity_at).num_minutes(),
+                    }),
+                    snapshot.coding_payload.clone(),
+                ),
             )
             .await?;
         let _ = channel_service
-            .record_orchestrator_heartbeat(
+            .record_orchestrator_card_emission(
                 channel,
                 "scheduled_formal_progress_sync",
-                Some(format!("progress:{}", root.message_id)),
+                ChatChannelCardEmissionFamily::Progress,
+                &root.message_id,
+                &snapshot.progress_revision,
+                None,
             )
             .await;
         Ok(())
@@ -304,18 +380,7 @@ impl ChatChannelOrchestratorService {
         let Some(thread) = thread else {
             return Ok(());
         };
-        let summary = if !thread.root_message.summary_text.trim().is_empty() {
-            thread.root_message.summary_text.clone()
-        } else {
-            Self::clamp_summary(&thread.root_message.content_text, 160)
-        };
-        let latest_actor = thread
-            .messages
-            .iter()
-            .rev()
-            .find(|item| item.author_type != ChatChannelAuthorType::System)
-            .map(|item| item.author_name.clone())
-            .unwrap_or_else(|| thread.root_message.author_name.clone());
+        let snapshot = self.formal_progress_snapshot(channel, root, &thread).await;
         let default_agent_name = self
             .agent_service
             .get_agent(&channel.default_agent_id)
@@ -326,7 +391,7 @@ impl ChatChannelOrchestratorService {
             .unwrap_or_else(|| channel.default_agent_id.clone());
         let text = format!(
             "协作结果同步\n{}\n当前状态：已采用\n最近推进者：{}",
-            summary, latest_actor
+            snapshot.summary, snapshot.latest_actor
         );
         let _ = channel_service
             .create_message(
@@ -343,21 +408,32 @@ impl ChatChannelOrchestratorService {
                 root.agent_id.clone(),
                 text.clone(),
                 serde_json::json!([{ "type": "text", "text": text }]),
-                serde_json::json!({
-                    "discussion_card_kind": "result",
-                    "card_purpose": "collaboration_result_sync",
-                    "linked_collaboration_id": root.message_id,
-                    "summary_text": summary,
-                    "status_label": "已采用",
-                    "latest_actor": latest_actor,
-                }),
+                attach_card_domain_metadata(
+                    channel,
+                    serde_json::json!({
+                        "discussion_card_kind": "result",
+                        "card_purpose": "collaboration_result_sync",
+                        "linked_collaboration_id": root.message_id,
+                        "summary_text": snapshot.summary,
+                        "status_label": "已采用",
+                        "latest_actor": snapshot.latest_actor,
+                        "source_message_id": snapshot.latest_activity_message_id,
+                        "source_last_activity_id": snapshot.latest_activity_message_id,
+                        "source_revision": snapshot.result_revision,
+                        "summary_revision": snapshot.summary_revision,
+                    }),
+                    snapshot.coding_payload.clone(),
+                ),
             )
             .await?;
         let _ = channel_service
-            .record_orchestrator_heartbeat(
+            .record_orchestrator_card_emission(
                 channel,
                 "scheduled_result_sync",
-                Some(format!("result:{}", root.message_id)),
+                ChatChannelCardEmissionFamily::Result,
+                &root.message_id,
+                &snapshot.result_revision,
+                None,
             )
             .await;
         Ok(())
@@ -368,6 +444,8 @@ impl ChatChannelOrchestratorService {
         channel_service: &ChatChannelService,
         channel: &super::chat_channels::ChatChannelDoc,
         discussion_messages: &[&ChatChannelMessageDoc],
+        trigger_message_id: &str,
+        revision: &str,
     ) -> Result<(), mongodb::error::Error> {
         if discussion_messages.is_empty() {
             return Ok(());
@@ -421,13 +499,12 @@ impl ChatChannelOrchestratorService {
                     "discussion_card_kind": "summary",
                     "card_purpose": "discussion_summary",
                     "linked_message_ids": linked_ids,
+                    "source_message_id": trigger_message_id,
+                    "source_revision": revision,
                     "next_actions": ["开始协作"],
                 }),
             )
             .await?;
-        let _ = channel_service
-            .record_orchestrator_heartbeat(channel, "discussion_summary", None)
-            .await;
         Ok(())
     }
 
@@ -436,6 +513,8 @@ impl ChatChannelOrchestratorService {
         channel_service: &ChatChannelService,
         channel: &super::chat_channels::ChatChannelDoc,
         root: &ChatChannelMessageDoc,
+        latest_activity_message_id: &str,
+        revision: &str,
         purpose: &str,
         text: String,
         display_status: ChatChannelDisplayStatus,
@@ -467,14 +546,19 @@ impl ChatChannelOrchestratorService {
                     "discussion_card_kind": "summary",
                     "card_purpose": purpose,
                     "linked_collaboration_id": root.message_id,
+                    "source_last_activity_id": latest_activity_message_id,
+                    "source_revision": revision,
                 }),
             )
             .await?;
         let _ = channel_service
-            .record_orchestrator_heartbeat(
+            .record_orchestrator_card_emission(
                 channel,
                 purpose,
-                Some(format!("reminder:{}", root.message_id)),
+                ChatChannelCardEmissionFamily::Reminder,
+                &format!("{purpose}:{}", root.message_id),
+                revision,
+                None,
             )
             .await;
         Ok(())
@@ -503,6 +587,9 @@ impl ChatChannelOrchestratorService {
             .iter()
             .filter(|item| !matches!(item.surface, ChatChannelMessageSurface::Activity))
         {
+            let thread = channel_service
+                .list_thread_messages(&channel.channel_id, &root.message_id)
+                .await?;
             if matches!(root.surface, ChatChannelMessageSurface::Issue)
                 && matches!(root.thread_state, ChatChannelThreadState::Active)
                 && !matches!(
@@ -510,40 +597,71 @@ impl ChatChannelOrchestratorService {
                     Some(ChatChannelDisplayStatus::Adopted | ChatChannelDisplayStatus::Rejected)
                 )
             {
-                if let Some(thread) = channel_service
-                    .list_thread_messages(&channel.channel_id, &root.message_id)
-                    .await?
-                {
-                    let snapshot = Self::formal_progress_snapshot(root, &thread);
+                if let Some(thread) = thread.as_ref() {
+                    let snapshot = self.formal_progress_snapshot(channel, root, thread).await;
                     let silence = now - snapshot.latest_activity_at;
-                    let source_last_activity_at = snapshot.latest_activity_at.to_rfc3339();
                     if silence >= Self::formal_progress_quiet_window()
-                        && !Self::has_recent_formal_progress_card(
-                            &recent_roots,
+                        && !Self::registry_matches(
+                            &state,
+                            ChatChannelCardEmissionFamily::Progress,
                             &root.message_id,
-                            &source_last_activity_at,
+                            &snapshot.progress_revision,
                         )
                     {
                         let _ = self
-                            .emit_formal_progress_card(channel_service, channel, root, &snapshot)
+                            .emit_formal_progress_card(
+                                channel_service,
+                                channel,
+                                root,
+                                &thread,
+                                &snapshot,
+                            )
                             .await;
                         continue;
                     }
                 }
             }
-            let age = now - root.updated_at.to_chrono();
-            if root.collaboration_status == Some(ChatChannelDisplayStatus::Adopted)
-                && !Self::recent_result_card_exists(&recent_roots, &root.message_id)
-            {
-                let _ = self.emit_result_card(channel_service, channel, root).await;
-                continue;
+            let latest_activity_message_id = thread
+                .as_ref()
+                .map(Self::latest_non_system_message)
+                .map(|item| item.message_id.clone())
+                .unwrap_or_else(|| root.message_id.clone());
+            let latest_activity_at = thread
+                .as_ref()
+                .map(Self::latest_non_system_message)
+                .and_then(|item| chrono::DateTime::parse_from_rfc3339(&item.created_at).ok())
+                .map(|value| value.with_timezone(&Utc))
+                .unwrap_or_else(|| root.updated_at.to_chrono());
+            let age = now - latest_activity_at;
+            if root.collaboration_status == Some(ChatChannelDisplayStatus::Adopted) {
+                if let Some(thread) = thread.as_ref() {
+                    let snapshot = self.formal_progress_snapshot(channel, root, thread).await;
+                    if !Self::registry_matches(
+                        &state,
+                        ChatChannelCardEmissionFamily::Result,
+                        &root.message_id,
+                        &snapshot.result_revision,
+                    ) {
+                        let _ = self.emit_result_card(channel_service, channel, root).await;
+                        continue;
+                    }
+                }
             }
+            let awaiting_revision = Self::reminder_revision(
+                root,
+                "collaboration_awaiting_judgement_reminder",
+                &latest_activity_message_id,
+            );
             if root.collaboration_status == Some(ChatChannelDisplayStatus::AwaitingConfirmation)
                 && age.num_minutes() >= 20
-                && !Self::recent_reminder_exists(
-                    &recent_roots,
-                    &root.message_id,
-                    "collaboration_awaiting_judgement_reminder",
+                && !Self::registry_matches(
+                    &state,
+                    ChatChannelCardEmissionFamily::Reminder,
+                    &format!(
+                        "{}:{}",
+                        "collaboration_awaiting_judgement_reminder", root.message_id
+                    ),
+                    &awaiting_revision,
                 )
             {
                 let text = format!(
@@ -555,6 +673,8 @@ impl ChatChannelOrchestratorService {
                         channel_service,
                         channel,
                         root,
+                        &latest_activity_message_id,
+                        &awaiting_revision,
                         "collaboration_awaiting_judgement_reminder",
                         text,
                         ChatChannelDisplayStatus::AwaitingConfirmation,
@@ -562,12 +682,18 @@ impl ChatChannelOrchestratorService {
                     .await;
                 continue;
             }
+            let stalled_revision = Self::reminder_revision(
+                root,
+                "collaboration_stalled_reminder",
+                &latest_activity_message_id,
+            );
             if root.collaboration_status == Some(ChatChannelDisplayStatus::Active)
                 && age >= Self::stalled_threshold_for(state.agent_autonomy_mode)
-                && !Self::recent_reminder_exists(
-                    &recent_roots,
-                    &root.message_id,
-                    "collaboration_stalled_reminder",
+                && !Self::registry_matches(
+                    &state,
+                    ChatChannelCardEmissionFamily::Reminder,
+                    &format!("{}:{}", "collaboration_stalled_reminder", root.message_id),
+                    &stalled_revision,
                 )
             {
                 let text = format!(
@@ -579,6 +705,8 @@ impl ChatChannelOrchestratorService {
                         channel_service,
                         channel,
                         root,
+                        &latest_activity_message_id,
+                        &stalled_revision,
                         "collaboration_stalled_reminder",
                         text,
                         ChatChannelDisplayStatus::Active,
@@ -589,7 +717,7 @@ impl ChatChannelOrchestratorService {
         }
         if let Some(trigger_message_id) = state.last_seen_discussion_message_id.as_deref() {
             let _ = self
-                .maybe_emit_quiet_summary(channel_service, channel, trigger_message_id)
+                .maybe_emit_quiet_summary(channel_service, channel, &state, trigger_message_id)
                 .await;
         }
         let _ = channel_service
@@ -602,25 +730,15 @@ impl ChatChannelOrchestratorService {
         &self,
         channel_service: &ChatChannelService,
         channel: &super::chat_channels::ChatChannelDoc,
+        state: &ChatChannelOrchestratorStateDoc,
         trigger_message_id: &str,
     ) -> Result<(), mongodb::error::Error> {
-        let Some(state) = channel_service
-            .get_orchestrator_state(&channel.channel_id)
-            .await?
-        else {
-            return Ok(());
-        };
         if state.last_seen_discussion_message_id.as_deref() != Some(trigger_message_id) {
             return Ok(());
         }
         let recent_roots = channel_service
             .list_recent_root_message_docs(&channel.channel_id, 80)
             .await?;
-        if Self::recent_summary_exists(&recent_roots)
-            || Self::recent_suggestion_exists(&recent_roots)
-        {
-            return Ok(());
-        }
         let cutoff = Utc::now() - chrono::Duration::minutes(20);
         let discussion_messages = recent_roots
             .iter()
@@ -642,8 +760,39 @@ impl ChatChannelOrchestratorService {
         if discussion_messages.len() < 3 || unique_users.len() < 2 {
             return Ok(());
         }
-        self.emit_summary_card(channel_service, channel, &discussion_messages)
-            .await
+        let linked_ids = discussion_messages
+            .iter()
+            .map(|item| item.message_id.as_str())
+            .collect::<Vec<_>>()
+            .join("|");
+        let revision = format!("discussion_summary:{}:{}", trigger_message_id, linked_ids);
+        if Self::registry_matches(
+            state,
+            ChatChannelCardEmissionFamily::Suggestion,
+            "discussion_summary",
+            &revision,
+        ) {
+            return Ok(());
+        }
+        self.emit_summary_card(
+            channel_service,
+            channel,
+            &discussion_messages,
+            trigger_message_id,
+            &revision,
+        )
+        .await?;
+        let _ = channel_service
+            .record_orchestrator_card_emission(
+                channel,
+                "discussion_summary",
+                ChatChannelCardEmissionFamily::Suggestion,
+                "discussion_summary",
+                &revision,
+                None,
+            )
+            .await;
+        Ok(())
     }
 
     pub fn spawn_quiet_window_summary(&self, channel_id: String, trigger_message_id: String) {
@@ -669,8 +818,16 @@ impl ChatChannelOrchestratorService {
             };
             tokio::time::sleep(Self::quiet_window_for(state.agent_autonomy_mode)).await;
             let orchestrator = ChatChannelOrchestratorService::new(db, agent_service);
+            let Some(state) = channel_service
+                .get_orchestrator_state(&channel.channel_id)
+                .await
+                .ok()
+                .flatten()
+            else {
+                return;
+            };
             if let Err(error) = orchestrator
-                .maybe_emit_quiet_summary(&channel_service, &channel, &trigger_message_id)
+                .maybe_emit_quiet_summary(&channel_service, &channel, &state, &trigger_message_id)
                 .await
             {
                 warn!(
@@ -702,5 +859,109 @@ impl ChatChannelOrchestratorService {
             }
         }
         info!("chat channel orchestrator sweep completed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::chat_channels::{ChatChannelCardEmissionRegistry, ChatChannelDisplayStatus};
+
+    #[test]
+    fn normalize_card_summary_drops_template_prefixes_and_duplicate_lines() {
+        let raw =
+            "正式协作进度\n正式协作进度\n### 当前已完成\n正式协作进度\n已开始落地。\n已开始落地。";
+        let normalized = ChatChannelOrchestratorService::normalize_card_summary(raw, 160);
+        assert!(!normalized.contains("###"));
+        assert!(!normalized.lines().any(|line| line.trim() == "正式协作进度"));
+        assert_eq!(normalized, "当前已完成\n已开始落地。");
+    }
+
+    #[test]
+    fn registry_matches_same_revision_only_once() {
+        let mut state = ChatChannelOrchestratorStateDoc {
+            id: None,
+            channel_id: "channel-1".to_string(),
+            team_id: "team-1".to_string(),
+            agent_autonomy_mode:
+                crate::agent::chat_channels::ChatChannelAgentAutonomyMode::Standard,
+            channel_goal: None,
+            participant_notes: None,
+            expected_outputs: None,
+            collaboration_style: None,
+            current_focus: None,
+            active_collaboration_summaries: Vec::new(),
+            recent_suggestion_fingerprints: Vec::new(),
+            ignored_suggestion_fingerprints: Vec::new(),
+            card_emission_registry: ChatChannelCardEmissionRegistry::default(),
+            last_heartbeat_at: None,
+            last_heartbeat_reason: None,
+            last_summary_at: None,
+            last_result_sync_at: None,
+            last_seen_discussion_message_id: None,
+            last_seen_document_change_at: None,
+            last_seen_ai_output_change_at: None,
+            created_at: mongodb::bson::DateTime::now(),
+            updated_at: mongodb::bson::DateTime::now(),
+        };
+        state
+            .card_emission_registry
+            .progress_revisions
+            .insert("root-1".to_string(), "rev-1".to_string());
+        assert!(ChatChannelOrchestratorService::registry_matches(
+            &state,
+            ChatChannelCardEmissionFamily::Progress,
+            "root-1",
+            "rev-1",
+        ));
+        assert!(!ChatChannelOrchestratorService::registry_matches(
+            &state,
+            ChatChannelCardEmissionFamily::Progress,
+            "root-1",
+            "rev-2",
+        ));
+    }
+
+    #[test]
+    fn reminder_revision_changes_only_when_status_or_latest_activity_changes() {
+        let root = ChatChannelMessageDoc {
+            id: None,
+            message_id: "root-1".to_string(),
+            channel_id: "channel-1".to_string(),
+            team_id: "team-1".to_string(),
+            thread_root_id: None,
+            parent_message_id: None,
+            surface: ChatChannelMessageSurface::Issue,
+            thread_state: ChatChannelThreadState::Active,
+            collaboration_status: Some(ChatChannelDisplayStatus::AwaitingConfirmation),
+            author_type: ChatChannelAuthorType::User,
+            author_user_id: Some("user-1".to_string()),
+            author_agent_id: None,
+            author_name: "U".to_string(),
+            agent_id: None,
+            content_text: "需要判断".to_string(),
+            content_blocks: serde_json::json!([]),
+            metadata: serde_json::json!({}),
+            visible: true,
+            created_at: mongodb::bson::DateTime::now(),
+            updated_at: mongodb::bson::DateTime::now(),
+        };
+        let base = ChatChannelOrchestratorService::reminder_revision(
+            &root,
+            "collaboration_awaiting_judgement_reminder",
+            "msg-1",
+        );
+        let same = ChatChannelOrchestratorService::reminder_revision(
+            &root,
+            "collaboration_awaiting_judgement_reminder",
+            "msg-1",
+        );
+        let changed = ChatChannelOrchestratorService::reminder_revision(
+            &root,
+            "collaboration_awaiting_judgement_reminder",
+            "msg-2",
+        );
+        assert_eq!(base, same);
+        assert_ne!(base, changed);
     }
 }

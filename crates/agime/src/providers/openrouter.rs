@@ -11,9 +11,9 @@ use super::utils::{
     RequestLog,
 };
 use crate::conversation::message::Message;
-
 use crate::model::ModelConfig;
 use crate::providers::formats::openai::{create_request, get_usage, response_to_message};
+use crate::runtime_profile::{apply_effective_execution, resolve_for_provider_with_model};
 use rmcp::model::Tool;
 
 pub const OPENROUTER_DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4";
@@ -200,7 +200,8 @@ fn update_request_for_anthropic(original_payload: &Value) -> Value {
 }
 
 async fn create_request_based_on_model(
-    provider: &OpenRouterProvider,
+    _provider: &OpenRouterProvider,
+    model_config: &ModelConfig,
     system: &str,
     messages: &[Message],
     tools: &[Tool],
@@ -210,9 +211,13 @@ async fn create_request_based_on_model(
     // native format internally.
     // NOTE: Do not use get_image_format_for_model() here - OpenRouter always needs OpenAI format
     let image_format = super::utils::ImageFormat::OpenAi;
-    let mut payload = create_request(&provider.model, system, messages, tools, &image_format)?;
+    let mut payload = create_request(model_config, system, messages, tools, &image_format)?;
 
-    if provider.supports_cache_control().await {
+    if !model_config.prompt_caching_mode.is_disabled()
+        && model_config
+            .model_name
+            .starts_with(OPENROUTER_MODEL_PREFIX_ANTHROPIC)
+    {
         payload = update_request_for_anthropic(&payload);
     }
 
@@ -266,8 +271,16 @@ impl Provider for OpenRouterProvider {
         messages: &[Message],
         tools: &[Tool],
     ) -> Result<(Message, ProviderUsage), ProviderError> {
-        let payload = create_request_based_on_model(self, system, messages, tools).await?;
-        let mut log = RequestLog::start(model_config, &payload)?;
+        let runtime_profile = resolve_for_provider_with_model(self, model_config).await;
+        let effective_model_config = apply_effective_execution(model_config, &runtime_profile);
+        let payload =
+            create_request_based_on_model(self, &effective_model_config, system, messages, tools)
+                .await?;
+        let mut log = RequestLog::start_with_runtime_profile(
+            &effective_model_config,
+            &payload,
+            Some(&runtime_profile),
+        )?;
 
         // Make request
         let response = self
@@ -280,7 +293,9 @@ impl Provider for OpenRouterProvider {
         // Parse response
         let message = response_to_message(
             &response,
-            Some(&crate::capabilities::resolve(&model_config.model_name)),
+            Some(&crate::capabilities::resolve_with_model_config(
+                &effective_model_config,
+            )),
         )?;
         let usage = response.get("usage").map(get_usage).unwrap_or_else(|| {
             tracing::debug!("Failed to get usage data");
@@ -369,6 +384,9 @@ impl Provider for OpenRouterProvider {
     }
 
     async fn supports_cache_control(&self) -> bool {
+        if self.model.prompt_caching_mode.is_disabled() {
+            return false;
+        }
         self.model
             .model_name
             .starts_with(OPENROUTER_MODEL_PREFIX_ANTHROPIC)

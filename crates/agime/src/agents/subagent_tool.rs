@@ -24,12 +24,17 @@ pub const SUBAGENT_TOOL_NAME: &str = "subagent";
 
 const SUMMARY_INSTRUCTIONS: &str = r#"
 Important: Your parent agent will only receive your final message as a summary of your work.
-Make sure your last message provides a comprehensive summary of:
-- What you were asked to do
-- What actions you took
-- The results or outcomes
-- Any important findings or recommendations
+You are a bounded worker, not the leader.
+Do not recurse into more helpers unless the runtime explicitly instructed you to do so.
+Do not spend your last turn on meta commentary or process narration.
+Your final response MUST use this exact structure, in this exact order:
+Scope: <one sentence on the bounded scope you handled>
+Result: <what you found or changed, concise but concrete>
+Artifacts changed: <comma-separated paths or outputs; omit this line if nothing changed>
+Blocker: <one concrete blocker; omit this line if not blocked>
 
+Do not output markdown headers, bullet lists, or extra sections before these labels.
+Keep Result short. Do not paste raw shell output, repeated validation JSON, or long path-heavy logs into the final summary.
 Be concise but complete.
 "#;
 
@@ -439,21 +444,22 @@ async fn execute_subagent(
     .await;
 
     match result {
-        Ok(text) => {
+        Ok(result) => {
             let classification = classify_child_task_result(
-                crate::agents::harness::TaskKind::Subagent,
+                crate::agents::harness::child_tasks::ChildExecutionExpectation::MaterializingChange,
                 &task_targets,
                 &task_write_scope,
-                &text,
+                &result.summary,
             );
             Ok(rmcp::model::CallToolResult {
-                content: vec![Content::text(text.clone())],
+                content: vec![Content::text(result.summary.clone())],
                 structured_content: Some(json!({
                     "status": "completed",
                     "session_id": session_id,
-                    "summary": text,
+                    "summary": result.summary,
                     "accepted_targets": classification.accepted_targets,
                     "produced_delta": classification.produced_delta,
+                    "recovered_terminal_summary": result.recovered_terminal_summary,
                     "summary_only": true,
                 })),
                 is_error: Some(false),

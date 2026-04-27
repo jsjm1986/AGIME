@@ -299,12 +299,6 @@ impl ChatManager {
     }
 }
 
-impl super::runtime::EventBroadcaster for ChatManager {
-    async fn broadcast(&self, context_id: &str, event: StreamEvent) {
-        self.broadcast(context_id, event).await;
-    }
-}
-
 impl Default for ChatManager {
     fn default() -> Self {
         Self::new()

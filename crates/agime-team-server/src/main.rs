@@ -345,15 +345,11 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
         "TEAM_AGENT_EXTENSION_CACHE_ROOT",
         &config.team_agent_extension_cache_root,
     );
-    let direct_host_path = agent::server_harness_host::current_host_execution_path();
     let auto_compact_threshold = std::env::var("AGIME_AUTO_COMPACT_THRESHOLD")
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(DEFAULT_AUTO_COMPACT_THRESHOLD);
-    info!(
-        "Direct host runtime mode: path={:?}, v4_only=true",
-        direct_host_path
-    );
+    info!("Direct host runtime mode: DirectHarness V4 only");
     info!(
         "Context runtime mode: strategy=context_runtime, auto_threshold={:.1}%",
         auto_compact_threshold * 100.0

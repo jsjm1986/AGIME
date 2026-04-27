@@ -54,7 +54,7 @@ src/
     ├── routes_mongo.rs            # Agent CRUD and task routes
     ├── task_manager.rs            # TaskManager: tracks background tasks
     ├── streamer.rs                # SSE streaming for real-time updates
-    ├── runtime.rs                 # Shared bridge pattern utilities
+    ├── runtime.rs                 # Legacy TaskExecutor/subagent compatibility utilities
     ├── platform_runner.rs         # In-process platform extension runner
     ├── mcp_connector.rs           # MCP client for subprocess extensions
     ├── provider_factory.rs        # Factory for creating LLM providers
@@ -955,12 +955,11 @@ pub enum StreamEvent {
 
 ### 21. Key Design Patterns
 
-#### Bridge Pattern (executor → platform extensions)
-- TaskExecutor creates temp task
-- Task registered in TaskManager
-- Events bridged to ChatManager/MissionManager
-- Task executed via TaskExecutor
-- Cleanup happens in outer executor
+#### Legacy Task Bridge (Mission/AgentTask compatibility)
+- Mission/AgentTask compatibility paths can still create temporary task records
+- TaskExecutor consumes those task records and reports through TaskManager/runtime observers
+- Chat, channel, document-analysis, and scheduled-task surfaces do not use this bridge
+- Full TaskExecutor removal is deferred until Mission/AgentTask has a V4-native task host
 
 #### Factory Pattern (provider_factory)
 - Create provider based on api_format
@@ -1194,5 +1193,5 @@ The AGIME Team Server is a comprehensive platform for AI-driven team collaborati
 7. **Flexible database support** (MongoDB primary, SQLite fallback)
 8. **Comprehensive background maintenance** for session/mission cleanup
 
-The codebase demonstrates enterprise-grade architecture patterns: service layer separation, factory methods, bridge patterns for component integration, and event-driven real-time communication. It's designed to scale with teams of any size while maintaining security, reliability, and extensibility.
+The codebase demonstrates enterprise-grade architecture patterns: service layer separation, factory methods, DirectHarness V4 execution surfaces, legacy task compatibility boundaries, and event-driven real-time communication. It's designed to scale with teams of any size while maintaining security, reliability, and extensibility.
 

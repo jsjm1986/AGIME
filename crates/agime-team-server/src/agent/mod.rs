@@ -25,7 +25,6 @@ pub mod extension_manager_client;
 pub mod harness_adapter;
 pub mod harness_core;
 pub mod hook_runtime;
-pub mod host_router;
 pub mod local_fs_workspace_store;
 pub mod mcp_connector;
 pub mod platform_runner;
@@ -74,8 +73,6 @@ pub mod smart_log;
 // pub mod team_skills_extension;
 // pub mod team_mcp_extension;
 // pub mod team_tools_server;
-#[allow(unused_imports)]
-pub use executor_mongo::TaskExecutor;
 #[allow(unused_imports)]
 pub use rate_limit::{default_rate_limiter, task_rate_limiter, RateLimiter};
 pub use routes_mongo::router; // Use MongoDB version

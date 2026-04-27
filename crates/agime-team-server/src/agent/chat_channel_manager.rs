@@ -315,9 +315,3 @@ impl ChatChannelManager {
         false
     }
 }
-
-impl super::runtime::EventBroadcaster for ChatChannelManager {
-    async fn broadcast(&self, context_id: &str, event: StreamEvent) {
-        self.broadcast(context_id, event).await;
-    }
-}

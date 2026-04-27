@@ -44,7 +44,7 @@ graph LR
     end
 
     subgraph Layer5["运行时层"]
-        Runtime["Bridge Pattern<br/>Context注入<br/>Governance"]
+        Runtime["DirectHarness V4<br/>Context Runtime<br/>Governance"]
     end
 
     subgraph Layer6["扩展层"]
@@ -204,10 +204,10 @@ pub trait Provider {
 
 #### 6.3 核心支撑模块
 
-**runtime.rs** - Bridge Pattern共享工具
+**runtime.rs** - Legacy TaskExecutor/subagent 兼容工具
 - create_temp_task(): 临时任务创建
 - 统一的工具执行接口
-- Chat/Mission executor复用
+- Mission/AgentTask/subagent 兼容路径复用
 
 **task_manager.rs** - 后台任务追踪
 - StreamEvent枚举 (14+变体)

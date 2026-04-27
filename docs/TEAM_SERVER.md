@@ -524,7 +524,7 @@ pub enum StreamEvent {
 ## 关键设计模式
 
 1. **Service Layer Architecture**: Routes → Service → DB/Extensions
-2. **Bridge Pattern**: Chat/Mission executors 复用 TaskExecutor
+2. **Legacy Task Bridge**: 仅 Mission/AgentTask 兼容路径继续使用 TaskExecutor
 3. **Factory Pattern**: provider_factory 用于 LLM 选择
 4. **Event Sourcing**: StreamEvent + MongoDB 持久化
 5. **Async Streaming**: SSE 带事件历史

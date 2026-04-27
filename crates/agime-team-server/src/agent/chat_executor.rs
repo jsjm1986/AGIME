@@ -38,12 +38,12 @@ fn direct_host_timeout_secs() -> u64 {
         .unwrap_or(600)
 }
 
-/// Chat executor that reuses TaskExecutor logic for session-based chat
+/// DirectHarness V4 executor for ordinary agent chat sessions.
 pub struct ChatExecutor {
     db: Arc<MongoDb>,
     chat_manager: Arc<ChatManager>,
     agent_service: Arc<AgentService>,
-    /// Internal task manager used to drive TaskExecutor
+    /// Internal task manager retained for legacy queue wakeups after V4 runs release a slot.
     internal_task_manager: Arc<TaskManager>,
     workspace_root: String,
 }

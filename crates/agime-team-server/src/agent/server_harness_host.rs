@@ -75,15 +75,6 @@ use super::session_mongo::AgentSessionDoc;
 use super::task_manager::{StreamEvent, TaskManager};
 use super::workspace_service::{WorkspaceExecutionContext, WorkspaceService};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HostExecutionPath {
-    DirectHarness,
-}
-
-pub fn current_host_execution_path() -> HostExecutionPath {
-    HostExecutionPath::DirectHarness
-}
-
 fn parse_turn_tool_gate_allow_only(
     turn_system_instruction: Option<&str>,
 ) -> Option<HashSet<String>> {
@@ -3619,14 +3610,6 @@ mod tests {
 
         assert_eq!(result.structured_content, Some(structured));
         assert_eq!(result.content.len(), 1);
-    }
-
-    #[test]
-    fn direct_host_path_is_v4_only() {
-        assert_eq!(
-            current_host_execution_path(),
-            HostExecutionPath::DirectHarness
-        );
     }
 
     #[test]

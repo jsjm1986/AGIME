@@ -21,6 +21,15 @@ use super::service_mongo::{AgentService, ExecutionSlotAcquireOutcome};
 use super::task_manager::{StreamEvent, TaskManager};
 use super::workspace_service::WorkspaceService;
 
+const CHAT_DELIVERY_FALLBACK_TEXT: &str = "已准备文件，可直接预览或下载。";
+
+#[derive(Debug)]
+struct WorkspaceFileMessagePatch {
+    messages_json: String,
+    message_count: i32,
+    preview: String,
+}
+
 fn direct_host_timeout_secs() -> u64 {
     std::env::var("TEAM_DIRECT_HOST_TIMEOUT_SECS")
         .ok()
@@ -220,21 +229,25 @@ impl ChatExecutor {
         exec_result.map(|_| ())
     }
 
-    fn append_workspace_files_to_messages_json(
-        messages_json: &str,
-        files: &[ChatWorkspaceFileBlock],
-    ) -> Option<String> {
-        if files.is_empty() {
-            return None;
+    fn is_delivery_tool_handoff_text(text: &str) -> bool {
+        let normalized = text.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return true;
         }
-        let mut messages: Vec<serde_json::Value> = serde_json::from_str(messages_json).ok()?;
-        let assistant = messages.iter_mut().rev().find(|item| {
-            item.get("role")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|role| role.eq_ignore_ascii_case("assistant"))
-        })?;
 
-        let mut content = match assistant.get("content") {
+        normalized.contains("document exported to workspace successfully")
+            || normalized.contains("file exported to workspace successfully")
+            || normalized.contains("workspace successfully")
+                && normalized.contains("developer shell")
+                && normalized.contains("inspect the file content")
+            || normalized.contains("use developer shell, mcp, or another local tool")
+    }
+
+    fn normalize_workspace_delivery_content(
+        content: Option<&serde_json::Value>,
+        files: &[ChatWorkspaceFileBlock],
+    ) -> Vec<serde_json::Value> {
+        let raw_content = match content {
             Some(serde_json::Value::Array(items)) => items.clone(),
             Some(serde_json::Value::String(text)) => {
                 vec![serde_json::json!({ "type": "text", "text": text })]
@@ -242,7 +255,29 @@ impl ChatExecutor {
             _ => Vec::new(),
         };
 
-        let existing_paths = content
+        let mut normalized_content = Vec::new();
+        let mut has_user_visible_text = false;
+        for item in raw_content {
+            let is_text_block = item
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("text"));
+            if is_text_block {
+                let text = item
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                if Self::is_delivery_tool_handoff_text(text) {
+                    continue;
+                }
+                if !text.trim().is_empty() {
+                    has_user_visible_text = true;
+                }
+            }
+            normalized_content.push(item);
+        }
+
+        let existing_paths = normalized_content
             .iter()
             .filter_map(|item| {
                 let record = item.as_object()?;
@@ -256,31 +291,109 @@ impl ChatExecutor {
             })
             .collect::<std::collections::HashSet<_>>();
 
+        if !has_user_visible_text {
+            normalized_content.insert(
+                0,
+                serde_json::json!({
+                    "type": "text",
+                    "text": CHAT_DELIVERY_FALLBACK_TEXT
+                }),
+            );
+        }
+
         for file in files {
             if existing_paths.contains(&file.path) {
                 continue;
             }
             if let Ok(value) = serde_json::to_value(file) {
-                content.push(value);
+                normalized_content.push(value);
             }
         }
 
-        if content.iter().all(|item| {
-            item.get("type")
+        normalized_content
+    }
+
+    fn append_workspace_files_to_messages_json(
+        messages_json: &str,
+        files: &[ChatWorkspaceFileBlock],
+    ) -> Option<WorkspaceFileMessagePatch> {
+        if files.is_empty() {
+            return None;
+        }
+        let mut messages: Vec<serde_json::Value> = serde_json::from_str(messages_json).ok()?;
+        let assistant_index = messages.iter().rposition(|item| {
+            item.get("role")
                 .and_then(serde_json::Value::as_str)
-                .is_some_and(|kind| kind == "workspace_file")
-        }) {
-            content.insert(
-                0,
-                serde_json::json!({
-                    "type": "text",
-                    "text": "已准备文件，可直接预览或下载。"
-                }),
+                .is_some_and(|role| role.eq_ignore_ascii_case("assistant"))
+        });
+
+        if let Some(index) = assistant_index {
+            let content = Self::normalize_workspace_delivery_content(
+                messages[index].get("content"),
+                files,
             );
+            messages[index]["content"] = serde_json::Value::Array(content);
+        } else {
+            messages.push(serde_json::json!({
+                "role": "assistant",
+                "content": Self::normalize_workspace_delivery_content(None, files),
+            }));
         }
 
-        assistant["content"] = serde_json::Value::Array(content);
-        serde_json::to_string(&messages).ok()
+        let message_count = messages.len() as i32;
+        let messages_json = serde_json::to_string(&messages).ok()?;
+        let preview = Self::extract_last_assistant_preview(&messages_json);
+        Some(WorkspaceFileMessagePatch {
+            messages_json,
+            message_count,
+            preview,
+        })
+    }
+
+    fn completion_blocked_without_visible_reply(
+        outcome: &super::server_harness_host::ServerHarnessHostOutcome,
+    ) -> bool {
+        let report_matches = outcome.completion_report.as_ref().is_some_and(|report| {
+            report.status.eq_ignore_ascii_case("blocked")
+                && report
+                    .blocking_reason
+                    .as_deref()
+                    .or(Some(report.summary.as_str()))
+                    .is_some_and(|text| {
+                        text.contains("without a user-visible assistant response")
+                    })
+        });
+        let outcome_matches = outcome.completion_outcome.as_ref().is_some_and(|completion| {
+            completion.status.eq_ignore_ascii_case("blocked")
+                && completion
+                    .blocking_reason
+                    .as_deref()
+                    .is_some_and(|text| {
+                        text.contains("without a user-visible assistant response")
+                    })
+        });
+        report_matches || outcome_matches
+    }
+
+    fn settle_workspace_delivery_completion(
+        outcome: &mut super::server_harness_host::ServerHarnessHostOutcome,
+    ) {
+        if !Self::completion_blocked_without_visible_reply(outcome) {
+            return;
+        }
+        if let Some(report) = outcome.completion_report.as_mut() {
+            report.status = "completed".to_string();
+            report.summary = CHAT_DELIVERY_FALLBACK_TEXT.to_string();
+            report.blocking_reason = None;
+            report.next_steps.clear();
+        }
+        if let Some(completion) = outcome.completion_outcome.as_mut() {
+            completion.status = "completed".to_string();
+            completion.state = agime::agents::harness::ExecuteCompletionState::Completed;
+            completion.summary = Some(CHAT_DELIVERY_FALLBACK_TEXT.to_string());
+            completion.blocking_reason = None;
+            completion.completion_ready = true;
+        }
     }
 
     async fn attach_pending_workspace_files_to_latest_assistant_message(
@@ -295,25 +408,26 @@ impl ChatExecutor {
         if files.is_empty() {
             return Ok(());
         }
-        let Some(patched_messages_json) =
+        let Some(patch) =
             Self::append_workspace_files_to_messages_json(&outcome.messages_json, &files)
         else {
             return Ok(());
         };
 
-        outcome.messages_json = patched_messages_json.clone();
-        let preview = Self::extract_last_assistant_preview(&patched_messages_json);
-        outcome.last_assistant_text = if preview.trim().is_empty() {
+        outcome.messages_json = patch.messages_json.clone();
+        outcome.message_count = patch.message_count;
+        outcome.last_assistant_text = if patch.preview.trim().is_empty() {
             None
         } else {
-            Some(preview.clone())
+            Some(patch.preview.clone())
         };
+        Self::settle_workspace_delivery_completion(outcome);
         self.agent_service
             .update_session_after_message(
                 session_id,
-                &patched_messages_json,
+                &patch.messages_json,
                 outcome.message_count,
-                &preview,
+                &patch.preview,
                 None,
                 outcome.total_tokens,
                 outcome.context_runtime_state.as_ref(),

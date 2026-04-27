@@ -72,7 +72,7 @@ chmod +x serve.sh
 - **Skills**: 可复用的 Prompt 模板，支持参数化
 - **Recipes**: 预定义工作流（含多步 SubRecipe）
 - **Subagent**: Agent 内部可创建子 Agent 并行处理任务
-- **Context Compaction**: 智能上下文压缩（CFPM），防止超出 Token 限制
+- **Context Runtime**: 分层上下文运行时，负责投影、折叠、session memory 与恢复
 
 ## 架构概览
 

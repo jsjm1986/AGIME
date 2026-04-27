@@ -49,6 +49,29 @@ graph LR
 
 ## 核心模块
 
+### 当前执行主线与上下文主线
+
+`agime server` 当前不要再按“所有流量都会经过 `executor_mongo.rs`”去理解，也不要再按旧 `legacy_segmented / CFPM` 压缩主线去理解。
+
+**当前主线：**
+
+1. `chat_executor.rs` / `chat_channel_executor.rs`
+2. `server_harness_host.rs` 的 `DirectHarness`
+3. `agime` harness
+4. `crates/agime/src/context_runtime/*`
+
+**当前上下文系统：**
+
+- 主内核是 `context_runtime`
+- 主行为是 provider 前投影、staged collapse、committed collapse、session memory、overflow recovery
+- 逻辑会话通过 `context_runtime_state` 持久化运行时状态
+
+**维护判断原则：**
+
+- 修改上下文行为时，优先看 `crates/agime/src/context_runtime/*`
+- 看 direct-host chat 时，优先看 `server_harness_host.rs`
+- 看 task / executor 路径时，再看 `executor_mongo.rs`
+
 ### 1. main.rs — 服务器启动 (977 行)
 
 **启动流程：**
@@ -182,6 +205,8 @@ pub struct ApiKeyDoc {
 
 ### 4. agent/executor_mongo.rs — TaskExecutor (2000 行)
 
+`executor_mongo.rs` 现在应视为 **TaskExecutor / bridge 兼容路径**，不是当前 direct chat 主线。
+
 **核心 LLM 执行管道：**
 
 1. **加载代理配置**
@@ -259,7 +284,9 @@ pub struct ApiKeyDoc {
 - 直接多轮对话，绕过正式 Task 系统
 - 流程: 用户 → Chat Session → Agent → 多轮对话 → 归档
 - ChatManager 追踪活动会话，事件广播
-- 每条消息使用 TaskExecutor 的 "bridge pattern"
+- 入口固定进入 `DirectHarness`
+- DirectHarness 主线进入 `server_harness_host.rs`，由 `agime` harness 接管对话、工具、排队恢复和压缩
+- 不再通过临时 TaskExecutor bridge 执行 chat/channel/document/scheduled-task
 - 实时 SSE 流式传输，事件历史持久化
 - 过期会话清理 (默认 4 小时不活动)
 
@@ -279,6 +306,7 @@ pub struct ActiveChat {
 **特点:**
 - 多步自主任务，带审批工作流
 - 生命周期: Draft → Planning → Planned → Running → Completed/Failed/Cancelled
+- 这一轨仍大量依赖 TaskExecutor / `executor_mongo.rs`
 - 执行模式: Sequential 或 Adaptive (AGE)
 - 审批策略: Auto, Checkpoint, Manual
 - Token 预算和 artifact 追踪

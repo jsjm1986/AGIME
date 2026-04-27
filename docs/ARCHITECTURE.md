@@ -97,7 +97,8 @@ pub trait Provider {
     async fn complete(&self, messages: &[Message]) -> Result<Response>;
     async fn stream_complete(&self, messages: &[Message]) -> Result<Stream<Response>>;
     fn supports_tools(&self) -> bool;
-    fn supports_thinking(&self) -> bool;
+    async fn supports_cache_control(&self) -> bool;
+    async fn supports_cache_edit(&self) -> bool;
 }
 ```
 
@@ -179,7 +180,7 @@ pub trait Provider {
 
 **核心模块：**
 - `chat_manager.rs` (319行): ActiveChat结构，会话追踪，事件广播
-- `chat_executor.rs`: 对话执行器，桥接TaskExecutor
+- `chat_executor.rs`: 对话执行器，固定进入 DirectHarness V4
 - `chat_routes.rs`: HTTP路由，SSE流式传输
 
 **特点：**
@@ -422,11 +423,11 @@ services:
 
 ## 关键设计模式
 
-### Bridge Pattern (桥接模式)
+### Legacy Bridge Pattern (任务兼容路径)
 
-**位置**: `runtime.rs` - 核心支撑模块
+**位置**: `runtime.rs` - legacy mission/task 兼容模块
 
-**目的**: Chat/Mission executor 复用 TaskExecutor 的共享工具和执行逻辑
+**目的**: 保留旧 Mission/AgentTask 的兼容执行能力。Chat、Channel、Document Analysis、Scheduled Task 不再通过该路径执行。
 
 **实现**:
 ```rust
@@ -435,13 +436,8 @@ pub fn create_temp_task() -> Task {
     // 创建临时任务包装
 }
 
-// ChatExecutor 使用桥接
-ChatExecutor.send_message()
-    → runtime::create_temp_task()
-    → TaskExecutor.execute_task()
-
-// MissionExecutor 使用桥接
-MissionExecutor.execute_step()
+// Legacy Mission/AgentTask 使用桥接
+MissionOrLegacyTask.execute_step()
     → runtime::create_temp_task()
     → TaskExecutor.execute_task()
 ```
@@ -451,8 +447,8 @@ MissionExecutor.execute_step()
 ```mermaid
 graph LR
     subgraph Executors["执行器层"]
-        Chat[ChatExecutor]
         Mission[MissionExecutor]
+        Legacy[Legacy AgentTask]
     end
 
     subgraph Bridge["桥接层"]
@@ -469,8 +465,8 @@ graph LR
         Context[上下文]
     end
 
-    Chat --> TempTask
     Mission --> TempTask
+    Legacy --> TempTask
     TempTask --> TaskExec
     TaskExec --> Tools
     TaskExec --> LLM
@@ -481,10 +477,10 @@ graph LR
     style Shared fill:#43e97b,stroke:#43e97b,color:#ffffff
 ```
 
-**优势**:
-- 避免代码重复：Chat/Mission 不需要重新实现 LLM 调用逻辑
-- 统一工具执行接口：所有执行路径使用相同的工具路由
-- 简化维护：核心执行逻辑集中在 TaskExecutor
+**当前边界**:
+- Chat/Channel/Document/Scheduled Task 使用 DirectHarness V4
+- Mission/AgentTask 暂时保留 TaskExecutor 兼容路径
+- 后续迁移 Mission/AgentTask 后，可删除该 legacy bridge
 
 ## Avatar 执行流程
 

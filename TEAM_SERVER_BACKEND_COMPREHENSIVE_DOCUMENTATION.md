@@ -50,7 +50,7 @@ src/
     ├── adaptive_executor.rs       # AGE (Adaptive Goal Execution) engine
     ├── session_mongo.rs           # AgentSessionDoc: conversation state persistence
     ├── service_mongo.rs           # AgentService: business logic layer
-    ├── executor_mongo.rs          # TaskExecutor: core LLM execution logic
+    ├── executor_mongo.rs          # TaskExecutor compatibility path (tasks / bridge)
     ├── routes_mongo.rs            # Agent CRUD and task routes
     ├── task_manager.rs            # TaskManager: tracks background tasks
     ├── streamer.rs                # SSE streaming for real-time updates
@@ -74,6 +74,30 @@ src/
     ├── portal_public.rs           # Public portal API routes (no auth)
     └── (many more utility modules...)
 ```
+
+---
+
+## Current Mainline: Execution Path & Compaction
+
+For current `agime server` behavior, chat-like traffic should be read through the DirectHarness V4 host first, not through `executor_mongo.rs`.
+
+**Current chat / channel / document-analysis mainline:**
+1. `chat_executor.rs` / `chat_channel_executor.rs`
+2. `server_harness_host.rs`
+3. `agime` harness (`reply_bootstrap.rs`, `compaction.rs`, `finalize.rs`)
+4. `context_runtime` persistence
+
+**Important routing rule:**
+- DirectHarness V4 is the only chat / channel / document-analysis / scheduled-task execution surface
+- Chat/channel compaction comes from `context_runtime`
+- `executor_mongo.rs` remains relevant only for legacy Mission/AgentTask compatibility paths, but it is not the default chat mainline
+
+**Current default compaction rule:**
+- Chat/channel/document/scheduled-task runtime state is owned by `context_runtime`
+- `legacy_segmented` is retained only inside the legacy TaskExecutor path
+- `AGIME_AUTO_COMPACT_THRESHOLD` defaults to `0.8`
+
+This distinction matters operationally: if a chat regression reproduces on the current server, investigate harness files first, not `executor_mongo.rs`.
 
 ---
 
@@ -260,7 +284,7 @@ Direct multi-turn chat sessions that bypass the formal Task system.
 **Session Flow:**
 1. User creates chat session (CreateChatSessionRequest)
 2. AgentSessionDoc persists conversation state (messages, tokens, extensions)
-3. Each message sends to Agent via TaskExecutor's "bridge pattern"
+3. Each message sends to the Agent through DirectHarness V4
 4. ChatManager tracks active sessions with broadcast channels
 5. Real-time events streamed via SSE
 6. Session can be archived when done
@@ -272,9 +296,9 @@ Direct multi-turn chat sessions that bypass the formal Task system.
 - Cleanup task removes stale sessions (default: 4 hours inactivity)
 
 **ChatExecutor:**
-- Reuses TaskExecutor via "bridge pattern"
-- Creates temporary task, approves it, executes, cleans up
-- Bridges stream events from TaskManager to ChatManager broadcast
+- Calls `ServerHarnessHost::execute_chat_host`
+- Uses DirectHarness slot admission; saturated turns wait as queued V4 work
+- Streams DirectHarness events to ChatManager broadcast
 - Manages workspace isolation per session
 
 **Routes:**
@@ -363,7 +387,9 @@ pub enum ExecutionMode {
 
 #### Task Executor & Core LLM Integration (executor_mongo.rs)
 
-**TaskExecutor** orchestrates the full LLM execution pipeline:
+`executor_mongo.rs` is still an important execution path, but it should now be read as the **TaskExecutor / bridge compatibility path**, not the default direct chat path.
+
+**TaskExecutor** orchestrates the LLM pipeline for task-style and bridge-style execution:
 
 **Execution Flow:**
 1. Load agent config (API key, model, extensions, skills)
@@ -394,7 +420,7 @@ pub enum ExecutionMode {
 - **Context Management:**
   - Loads conversation history from AgentSessionDoc
   - Injects system prompt + user custom instructions
-  - Implements context compaction (when context exceeds threshold)
+  - Implements its own compatibility-path context compaction
   - Tracks token counts (input/output)
 
 - **Tool Execution:**

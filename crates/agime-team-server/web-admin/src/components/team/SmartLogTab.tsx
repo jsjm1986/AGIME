@@ -65,6 +65,94 @@ const BADGE_COMPLETED = `${BADGE_BASE} bg-[hsl(var(--status-info-bg))] text-[hsl
 const BADGE_COMPLETED_GREEN = `${BADGE_BASE} bg-[hsl(var(--status-success-bg))] text-[hsl(var(--status-success-text))]`;
 const BADGE_FAILED = `${BADGE_BASE} bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]`;
 
+type SafetyRiskLevel = 'safe' | 'medium' | 'high' | null;
+
+function extractSafetySection(text: string): string | null {
+  const headingPatterns = ['**安全性与危险警告**', '安全性与危险警告', '**Safety & Risk Warnings**', 'Safety & Risk Warnings'];
+  let start = -1;
+  for (const pattern of headingPatterns) {
+    start = text.indexOf(pattern);
+    if (start !== -1) {
+      start += pattern.length;
+      break;
+    }
+  }
+  if (start === -1) return null;
+
+  const rest = text.slice(start);
+  const nextHeading = rest.search(/\n\s*\*\*[^*\n]+\*\*/);
+  return (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).trim();
+}
+
+function detectSafetyRisk(text: string): SafetyRiskLevel {
+  const section = extractSafetySection(text);
+  if (!section) return null;
+
+  const normalized = section.toLowerCase();
+  const safeTerms = ['未发现明显', '没有明显', '无明显', 'no obvious'];
+  const hasSafeConclusion = safeTerms.some((term) => normalized.includes(term.toLowerCase()));
+  const strongRiskTerms = ['严重安全风险', '严重风险', '高风险', '后门', 'rm -rf', '~/.ssh', 'curl | bash', 'credential theft', 'backdoor'];
+  if (hasSafeConclusion && !strongRiskTerms.some((term) => normalized.includes(term.toLowerCase()))) {
+    return 'safe';
+  }
+
+  const highRiskTerms = [
+    '严重安全风险',
+    '严重风险',
+    '高风险',
+    '密钥',
+    'api_key',
+    'token',
+    '外传',
+    '上传',
+    '窃取',
+    '后门',
+    'curl | bash',
+    'curl -fssl',
+    'rm -rf',
+    '~/.ssh',
+    'dangerous',
+    'exfiltration',
+    'credential theft',
+    'backdoor',
+  ];
+  if (highRiskTerms.some((term) => normalized.includes(term.toLowerCase()))) {
+    return 'high';
+  }
+  const mediumRiskTerms = ['需要人工确认', '权限变更', '命令执行', '外部访问', '风险', 'human review', 'permission', 'command execution', 'external access'];
+  if (mediumRiskTerms.some((term) => normalized.includes(term.toLowerCase()))) {
+    return 'medium';
+  }
+  if (hasSafeConclusion) {
+    return 'safe';
+  }
+  return 'medium';
+}
+
+function safetyRiskLabelKey(level: SafetyRiskLevel): string {
+  if (level === 'high') return 'aiInsights.safetyHigh';
+  if (level === 'medium') return 'aiInsights.safetyMedium';
+  if (level === 'safe') return 'aiInsights.safetySafe';
+  return '';
+}
+
+function safetyRiskHintKey(level: SafetyRiskLevel): string {
+  if (level === 'high') return 'aiInsights.safetyHighHint';
+  if (level === 'medium') return 'aiInsights.safetyMediumHint';
+  if (level === 'safe') return 'aiInsights.safetySafeHint';
+  return '';
+}
+
+function safetyRiskClasses(level: SafetyRiskLevel): string {
+  if (level === 'high') {
+    return 'border-status-error/40 bg-[hsl(var(--status-error-bg))] text-[hsl(var(--status-error-text))]';
+  }
+  if (level === 'medium') {
+    return 'border-status-warning/40 bg-[hsl(var(--status-warning-bg))] text-[hsl(var(--status-warning-text))]';
+  }
+  return 'border-status-success/40 bg-[hsl(var(--status-success-bg))] text-[hsl(var(--status-success-text))]';
+}
+
 function formatRelativeTime(dateStr: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
   const diffMs = Date.now() - new Date(dateStr).getTime();
   const diffMin = Math.floor(diffMs / 60_000);
@@ -146,9 +234,99 @@ function ExpandableText({ text, maxLength = 200, markdown = false }: { text: str
   );
 }
 
+interface DocumentAnalysisPayload {
+  status?: string;
+  summary?: string;
+  content_structure?: string[];
+  key_points?: string[];
+  file_observations?: string[];
+  limitations?: string[];
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+}
+
+function parseDocumentAnalysisPayload(text: string): DocumentAnalysisPayload | null {
+  try {
+    const parsed = JSON.parse(text) as DocumentAnalysisPayload;
+    if (!parsed || typeof parsed !== 'object') return null;
+
+    if (typeof parsed.summary === 'string' && parsed.summary.trim().startsWith('{')) {
+      try {
+        const nested = JSON.parse(parsed.summary) as DocumentAnalysisPayload;
+        if (nested && typeof nested === 'object' && typeof nested.summary === 'string') {
+          return nested;
+        }
+      } catch {
+        // Keep the outer payload when legacy model text only looks like JSON.
+      }
+    }
+
+    if (
+      typeof parsed.summary !== 'string' &&
+      stringArray(parsed.content_structure).length === 0 &&
+      stringArray(parsed.key_points).length === 0
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function DocumentAnalysisSection({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section className="space-y-1.5">
+      <h4 className="text-xs font-semibold uppercase tracking-[0.08em] text-[hsl(var(--muted-foreground))]">
+        {title}
+      </h4>
+      <ul className="space-y-1.5">
+        {items.map((item, index) => (
+          <li key={`${title}-${index}`} className="flex gap-2 text-sm leading-relaxed">
+            <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[hsl(var(--primary)/0.65)]" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function StructuredDocumentAnalysis({ payload }: { payload: DocumentAnalysisPayload }) {
+  const { t } = useTranslation();
+  const summary = typeof payload.summary === 'string' ? payload.summary.trim() : '';
+  const contentStructure = stringArray(payload.content_structure);
+  const keyPoints = stringArray(payload.key_points);
+  const fileObservations = stringArray(payload.file_observations);
+  const limitations = stringArray(payload.limitations);
+
+  return (
+    <div className="space-y-4 pt-3">
+      {summary && (
+        <section className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--muted)/0.22)] px-3 py-2.5">
+          <h4 className="mb-1 text-xs font-semibold uppercase tracking-[0.08em] text-[hsl(var(--muted-foreground))]">
+            {t('smartLog.analysisSummary')}
+          </h4>
+          <p className="text-sm leading-relaxed">{summary}</p>
+        </section>
+      )}
+      <DocumentAnalysisSection title={t('smartLog.analysisStructure')} items={contentStructure} />
+      <DocumentAnalysisSection title={t('smartLog.analysisKeyPoints')} items={keyPoints} />
+      <DocumentAnalysisSection title={t('smartLog.analysisObservations')} items={fileObservations} />
+      <DocumentAnalysisSection title={t('smartLog.analysisLimitations')} items={limitations} />
+    </div>
+  );
+}
+
 /** Parse markdown into sections by **bold headings** or ## headings, each independently collapsible. */
 function SectionAccordion({ text }: { text: string }) {
   const { t } = useTranslation();
+  const structuredAnalysis = useMemo(() => parseDocumentAnalysisPayload(text), [text]);
   const sections = useMemo(() => {
     const parts: { title: string; body: string }[] = [];
     const lines = text.split('\n');
@@ -177,6 +355,10 @@ function SectionAccordion({ text }: { text: string }) {
 
   // Reset open state when text content changes (e.g. AI regeneration)
   useEffect(() => { reset([0]); }, [text, reset]);
+
+  if (structuredAnalysis) {
+    return <StructuredDocumentAnalysis payload={structuredAnalysis} />;
+  }
 
   if (sections.length < 2) {
     return <ExpandableText text={text} markdown />;
@@ -444,10 +626,13 @@ function InsightSection({
       <div className="space-y-1">
         {items.map((item) => {
           const isOpen = openSet.has(item.id);
+          const safetyRisk = detectSafetyRisk(item.ai_description);
           return (
             <div
               key={item.id}
-              className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] overflow-hidden"
+              className={`rounded-lg border bg-[hsl(var(--card))] overflow-hidden ${
+                safetyRisk === 'high' ? 'border-status-error/35' : 'border-[hsl(var(--border))]'
+              }`}
             >
               <button
                 onClick={() => toggle(item.id)}
@@ -459,12 +644,25 @@ function InsightSection({
                 <span className="text-xs px-1.5 py-0.5 rounded bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] shrink-0">
                   {t(TYPE_LABEL_KEYS[item.type] ?? 'smartLog.filterSkill')}
                 </span>
+                {safetyRisk ? (
+                  <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold shrink-0 ${safetyRiskClasses(safetyRisk)}`}>
+                    {t(safetyRiskLabelKey(safetyRisk))}
+                  </span>
+                ) : null}
                 <span className="ml-auto text-xs text-[hsl(var(--muted-foreground))] shrink-0">
                   {formatRelativeTime(item.ai_described_at, t)}
                 </span>
               </button>
               {isOpen && (
                 <div className="px-4 pt-3 pb-3 border-t border-[hsl(var(--border)/0.5)]">
+                  {safetyRisk ? (
+                    <div className={`mb-3 rounded-lg border px-3 py-2 text-sm font-medium ${safetyRiskClasses(safetyRisk)}`}>
+                      {t(safetyRiskLabelKey(safetyRisk))}
+                      <span className="ml-2 font-normal">
+                        {t(safetyRiskHintKey(safetyRisk))}
+                      </span>
+                    </div>
+                  ) : null}
                   <MarkdownContent content={item.ai_description} className="text-sm" />
                   <div className="flex items-center justify-between mt-2">
                     <div className="text-xs text-[hsl(var(--muted-foreground))]">

@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use super::common_mongo::{default_protection_level, default_version, default_visibility};
 
+fn default_review_status() -> String {
+    "approved".to_string()
+}
+
 /// Storage type for skills
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -53,6 +57,14 @@ pub struct Skill {
     pub visibility: String,
     #[serde(default = "default_protection_level")]
     pub protection_level: String,
+    #[serde(default = "default_review_status")]
+    pub review_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_note: Option<String>,
 
     // AI Describe
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,6 +107,7 @@ pub struct SkillSummary {
     pub tags: Vec<String>,
     pub visibility: String,
     pub protection_level: String,
+    pub review_status: String,
     pub use_count: i32,
     pub author_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -122,6 +135,7 @@ impl From<Skill> for SkillSummary {
             tags: s.tags,
             visibility: s.visibility,
             protection_level: s.protection_level,
+            review_status: s.review_status,
             use_count: s.use_count,
             author_id: s.created_by,
             ai_description: s.ai_description,

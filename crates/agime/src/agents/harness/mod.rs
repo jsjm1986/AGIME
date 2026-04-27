@@ -48,8 +48,11 @@ pub use compaction::{
 };
 pub use completion::{
     build_conversation_completion_report, build_execute_completion_report,
-    build_system_document_analysis_completion_report, derive_execute_completion_outcome,
-    format_execution_host_completion_text, normalize_execution_host_completion_report,
+    build_system_document_analysis_completion_report,
+    build_system_document_analysis_completion_report_from_conversation,
+    derive_execute_completion_outcome, format_execution_host_completion_text,
+    normalize_execution_host_completion_report,
+    normalize_pre_materialized_document_analysis_completion_report,
     normalize_system_document_analysis_completion_report, parse_execution_host_completion_report,
     CompletionSurfacePolicy, ExecuteCompletionOutcome, ExecuteCompletionState,
     ExecutionHostCompletionReport,

@@ -256,6 +256,12 @@ pub fn assistant_text_counts_as_terminal_reply(text: &str) -> bool {
     !trimmed.is_empty() && !summary_indicates_runtime_internal_only(trimmed)
 }
 
+pub fn document_analysis_text_counts_as_final(text: &str) -> bool {
+    assistant_text_counts_as_terminal_reply(text)
+        && !summary_indicates_document_content_unavailable(text)
+        && !summary_indicates_future_intent(text)
+}
+
 fn summary_indicates_runtime_internal_only(summary: &str) -> bool {
     let normalized = summary.trim().to_ascii_lowercase();
 
@@ -445,17 +451,54 @@ fn summary_indicates_document_content_unavailable(summary: &str) -> bool {
 
 fn summary_indicates_future_intent(summary: &str) -> bool {
     let normalized = summary.trim().to_ascii_lowercase();
-    [
+    if [
         "i need to read the document first",
         "i'll start by reading",
         "let me do that now",
         "before i can provide a final output",
+        "need to extract the actual content",
         "需要先读取文档",
+        "需要从工作区文件中提取实际内容",
+        "直接从工作区文件中提取",
+        "摘录内容不完整",
+        "摘录内容不足",
+        "不足以完成分析",
+        "让我",
         "让我先",
+        "让我用",
+        "我将",
+        "我将使用",
+        "我会",
         "下一步",
     ]
     .iter()
     .any(|pattern| normalized.contains(pattern))
+    {
+        return true;
+    }
+
+    let intent_prefixes = [
+        "let me",
+        "i need to",
+        "i will",
+        "i'll",
+        "i am going to",
+        "i’m going to",
+    ];
+    let document_actions = [
+        "read", "extract", "inspect", "open", "parse", "access", "load",
+    ];
+    if intent_prefixes
+        .iter()
+        .any(|prefix| normalized.contains(prefix))
+        && document_actions
+            .iter()
+            .any(|action| normalized.contains(action))
+    {
+        return true;
+    }
+
+    false
 }
 
 pub fn normalize_execution_host_completion_report(
@@ -658,12 +701,28 @@ pub fn build_conversation_completion_report(
 }
 
 pub fn normalize_system_document_analysis_completion_report(
-    mut report: ExecutionHostCompletionReport,
+    report: ExecutionHostCompletionReport,
     signal_summary: Option<&CoordinatorSignalSummary>,
 ) -> ExecutionHostCompletionReport {
-    let document_access_established = signal_summary
-        .map(CoordinatorSignalSummary::document_access_established)
-        .unwrap_or(false);
+    normalize_document_analysis_completion_report(report, signal_summary, false)
+}
+
+pub fn normalize_pre_materialized_document_analysis_completion_report(
+    report: ExecutionHostCompletionReport,
+    signal_summary: Option<&CoordinatorSignalSummary>,
+) -> ExecutionHostCompletionReport {
+    normalize_document_analysis_completion_report(report, signal_summary, true)
+}
+
+fn normalize_document_analysis_completion_report(
+    mut report: ExecutionHostCompletionReport,
+    signal_summary: Option<&CoordinatorSignalSummary>,
+    document_access_preestablished: bool,
+) -> ExecutionHostCompletionReport {
+    let document_access_established = document_access_preestablished
+        || signal_summary
+            .map(CoordinatorSignalSummary::document_access_established)
+            .unwrap_or(false);
     let document_content_accessed = report.content_accessed.unwrap_or_else(|| {
         signal_summary
             .map(CoordinatorSignalSummary::document_content_accessed)
@@ -743,6 +802,53 @@ pub fn build_system_document_analysis_completion_report(
             required_tool_prefixes,
         ),
         signal_summary,
+    )
+}
+
+pub fn build_system_document_analysis_completion_report_from_conversation(
+    final_output_raw: Option<&str>,
+    final_conversation: &Conversation,
+    completion_outcome: Option<&ExecuteCompletionOutcome>,
+    signal_summary: Option<&CoordinatorSignalSummary>,
+    required_tool_prefixes: &[String],
+) -> ExecutionHostCompletionReport {
+    if parse_execution_host_completion_report(final_output_raw).is_none()
+        && !completion_outcome.is_some_and(|outcome| outcome.state.is_terminal())
+        && !signal_summary.is_some_and(completion_has_hard_blocking_signals)
+    {
+        if let Some(summary) = latest_terminal_user_visible_assistant_text(final_conversation)
+            .filter(|summary| document_analysis_text_counts_as_final(summary))
+        {
+            let evidence = signal_summary.map(CoordinatorSignalSummary::completion_evidence);
+            return normalize_system_document_analysis_completion_report(
+                ExecutionHostCompletionReport {
+                    status: "completed".to_string(),
+                    summary,
+                    produced_artifacts: evidence
+                        .as_ref()
+                        .map(|value| value.produced_targets.clone())
+                        .unwrap_or_default(),
+                    accepted_artifacts: evidence
+                        .as_ref()
+                        .map(|value| value.accepted_targets.clone())
+                        .unwrap_or_default(),
+                    next_steps: Vec::new(),
+                    validation_status: None,
+                    blocking_reason: None,
+                    reason_code: Some("document_analysis_completed".to_string()),
+                    content_accessed: Some(true),
+                    analysis_complete: Some(true),
+                },
+                signal_summary,
+            );
+        }
+    }
+
+    build_system_document_analysis_completion_report(
+        final_output_raw,
+        completion_outcome,
+        signal_summary,
+        required_tool_prefixes,
     )
 }
 
@@ -968,7 +1074,8 @@ mod tests {
     }
 
     #[test]
-    fn derive_execute_completion_outcome_ignores_document_validation_failures_contradicted_by_read_tool() {
+    fn derive_execute_completion_outcome_ignores_document_validation_failures_contradicted_by_read_tool(
+    ) {
         let summary = CoordinatorSignalSummary::from_signals(&[
             CoordinatorSignal::ToolCompleted {
                 request_id: "req-1".to_string(),
@@ -1397,6 +1504,72 @@ mod tests {
         assert_eq!(report.status, "blocked");
         assert_eq!(report.validation_status.as_deref(), Some("failed"));
         assert_eq!(report.content_accessed, Some(false));
+    }
+
+    #[test]
+    fn pre_materialized_document_analysis_does_not_require_document_tool_signal() {
+        let report = normalize_pre_materialized_document_analysis_completion_report(
+            ExecutionHostCompletionReport {
+                status: "completed".to_string(),
+                summary: "Document Overview\nKey Content\nKey Takeaways".to_string(),
+                produced_artifacts: Vec::new(),
+                accepted_artifacts: vec!["document:doc-1".to_string()],
+                next_steps: Vec::new(),
+                validation_status: None,
+                blocking_reason: None,
+                reason_code: None,
+                content_accessed: Some(true),
+                analysis_complete: Some(true),
+            },
+            None,
+        );
+
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.validation_status.as_deref(), Some("passed"));
+        assert_eq!(
+            report.reason_code.as_deref(),
+            Some("document_analysis_completed")
+        );
+    }
+
+    #[test]
+    fn system_document_analysis_can_complete_from_terminal_assistant_text() {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::user().with_text("analyze the document"));
+        conversation.push(Message::assistant().with_text("Document Overview\nKey Takeaways"));
+
+        let report = build_system_document_analysis_completion_report_from_conversation(
+            None,
+            &conversation,
+            None,
+            Some(&CoordinatorSignalSummary {
+                document_phase: Some(
+                    super::super::signals::DocumentAnalysisPhase::AccessEstablished,
+                ),
+                ..Default::default()
+            }),
+            &[],
+        );
+
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.content_accessed, Some(true));
+        assert_eq!(report.analysis_complete, Some(true));
+    }
+
+    #[test]
+    fn document_analysis_future_intent_text_is_not_final() {
+        assert!(!document_analysis_text_counts_as_final(
+            "摘录内容不完整，需要从工作区文件中提取实际内容。让我用 Python 来读取这个 PPTX 文件。"
+        ));
+        assert!(!document_analysis_text_counts_as_final(
+            "摘录内容不足以完成分析。我将直接从工作区文件中提取 PPTX 内容。"
+        ));
+        assert!(!document_analysis_text_counts_as_final(
+            "让我直接从 PPTX 文件中提取内容。"
+        ));
+        assert!(!document_analysis_text_counts_as_final(
+            "The text excerpt is extremely minimal. Given the file is only 772 bytes and the excerpt is essentially just a placeholder, let me extract the actual content from the PPTX file."
+        ));
     }
 
     #[test]

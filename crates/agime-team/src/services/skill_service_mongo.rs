@@ -40,6 +40,23 @@ impl SkillService {
         Self { db }
     }
 
+    async fn initial_review_status(&self, team_id: &str) -> Result<String> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let team = self
+            .db
+            .collection::<crate::models::mongo::Team>("teams")
+            .find_one(doc! { "_id": team_oid }, None)
+            .await?;
+        let policy = team
+            .map(|team| team.settings.skill_upload_policy)
+            .unwrap_or_else(|| "auto_approve".to_string());
+        Ok(if policy.eq_ignore_ascii_case("require_admin_review") {
+            "pending_review".to_string()
+        } else {
+            "approved".to_string()
+        })
+    }
+
     /// Check if a skill name already exists in the team
     pub async fn check_duplicate_name(
         &self,
@@ -93,6 +110,7 @@ impl SkillService {
         let team_oid = ObjectId::parse_str(team_id)?;
         let now = Utc::now();
         let version = "1.0.0".to_string();
+        let review_status = self.initial_review_status(team_id).await?;
 
         let skill_md =
             generate_skill_md_for_inline(name, description.as_deref(), content, &version);
@@ -117,6 +135,10 @@ impl SkillService {
             dependencies: None,
             visibility: visibility.unwrap_or_else(|| "team".to_string()),
             protection_level: "team_installable".to_string(),
+            review_status,
+            reviewed_by: None,
+            reviewed_at: None,
+            review_note: None,
             use_count: 0,
             is_deleted: false,
             created_by: user_id.to_string(),
@@ -146,6 +168,7 @@ impl SkillService {
     ) -> Result<Skill> {
         let team_oid = ObjectId::parse_str(team_id)?;
         let now = Utc::now();
+        let review_status = self.initial_review_status(team_id).await?;
         let version = "1.0.0".to_string();
 
         let skill = Skill {
@@ -168,6 +191,10 @@ impl SkillService {
             dependencies: None,
             visibility: visibility.unwrap_or_else(|| "team".to_string()),
             protection_level: "team_installable".to_string(),
+            review_status,
+            reviewed_by: None,
+            reviewed_at: None,
+            review_note: None,
             use_count: 0,
             is_deleted: false,
             created_by: user_id.to_string(),

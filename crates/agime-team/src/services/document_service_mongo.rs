@@ -13,6 +13,8 @@ use mongodb::bson::{doc, oid::ObjectId, Binary, Regex as BsonRegex};
 use mongodb::options::FindOptions;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::io::{Cursor, Read};
+use zip::read::ZipArchive;
 
 #[derive(Debug, Serialize)]
 pub struct TagCount {
@@ -455,6 +457,15 @@ impl DocumentService {
             || mime == "application/typescript";
 
         if !is_text {
+            let data = doc
+                .content
+                .as_ref()
+                .map(|content| content.bytes.as_slice())
+                .unwrap_or_default();
+            if is_office_open_xml(mime, &doc.name) {
+                let text = extract_office_open_xml_text(data, mime, &doc.name)?;
+                return Ok((text, doc.mime_type));
+            }
             return Err(anyhow!("Document is not a text file"));
         }
 
@@ -1276,5 +1287,172 @@ impl DocumentService {
             return Err(anyhow!("Document not found"));
         }
         Ok(())
+    }
+}
+
+fn is_office_open_xml(mime: &str, name: &str) -> bool {
+    let lower_mime = mime.to_ascii_lowercase();
+    let lower_name = name.to_ascii_lowercase();
+    lower_mime.contains("officedocument")
+        || lower_name.ends_with(".docx")
+        || lower_name.ends_with(".pptx")
+        || lower_name.ends_with(".xlsx")
+}
+
+fn extract_office_open_xml_text(data: &[u8], mime: &str, name: &str) -> Result<String> {
+    let mut archive = ZipArchive::new(Cursor::new(data))
+        .map_err(|error| anyhow!("Failed to open Office document package: {}", error))?;
+    let lower_mime = mime.to_ascii_lowercase();
+    let lower_name = name.to_ascii_lowercase();
+
+    let mut parts = Vec::new();
+    for index in 0..archive.len() {
+        let entry_name = {
+            let file = archive.by_index(index)?;
+            file.name().to_string()
+        };
+        if !is_office_text_part(&entry_name, &lower_mime, &lower_name) {
+            continue;
+        }
+
+        let mut file = archive.by_name(&entry_name)?;
+        let mut xml = String::new();
+        file.read_to_string(&mut xml)?;
+        let text = xml_visible_text(&xml);
+        if !text.is_empty() {
+            parts.push(text);
+        }
+    }
+
+    let text = normalize_extracted_text(&parts.join("\n"));
+    if text.is_empty() {
+        Err(anyhow!("Office document did not contain extractable text"))
+    } else {
+        Ok(text.chars().take(200_000).collect())
+    }
+}
+
+fn is_office_text_part(entry_name: &str, lower_mime: &str, lower_name: &str) -> bool {
+    let entry = entry_name.to_ascii_lowercase();
+    let is_docx = lower_name.ends_with(".docx") || lower_mime.contains("wordprocessingml");
+    let is_pptx = lower_name.ends_with(".pptx") || lower_mime.contains("presentationml");
+    let is_xlsx = lower_name.ends_with(".xlsx") || lower_mime.contains("spreadsheetml");
+
+    if is_docx {
+        return entry == "word/document.xml"
+            || entry.starts_with("word/header")
+            || entry.starts_with("word/footer");
+    }
+    if is_pptx {
+        return entry.starts_with("ppt/slides/slide") && entry.ends_with(".xml")
+            || entry.starts_with("ppt/notesSlides/notesSlide") && entry.ends_with(".xml");
+    }
+    if is_xlsx {
+        return entry == "xl/sharedstrings.xml"
+            || (entry.starts_with("xl/worksheets/sheet") && entry.ends_with(".xml"));
+    }
+    false
+}
+
+fn xml_visible_text(xml: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    let mut entity = String::new();
+    let mut in_entity = false;
+
+    for ch in xml.chars() {
+        if in_tag {
+            if ch == '>' {
+                in_tag = false;
+                if !out.ends_with(char::is_whitespace) {
+                    out.push(' ');
+                }
+            }
+            continue;
+        }
+        if in_entity {
+            if ch == ';' {
+                out.push_str(&decode_xml_entity(&entity));
+                entity.clear();
+                in_entity = false;
+            } else if entity.len() < 12 {
+                entity.push(ch);
+            } else {
+                out.push('&');
+                out.push_str(&entity);
+                entity.clear();
+                in_entity = false;
+                out.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '<' => in_tag = true,
+            '&' => in_entity = true,
+            _ => out.push(ch),
+        }
+    }
+    if in_entity {
+        out.push('&');
+        out.push_str(&entity);
+    }
+    normalize_extracted_text(&out)
+}
+
+fn decode_xml_entity(entity: &str) -> String {
+    match entity {
+        "amp" => "&".to_string(),
+        "lt" => "<".to_string(),
+        "gt" => ">".to_string(),
+        "quot" => "\"".to_string(),
+        "apos" => "'".to_string(),
+        value if value.starts_with("#x") => u32::from_str_radix(&value[2..], 16)
+            .ok()
+            .and_then(char::from_u32)
+            .map(|ch| ch.to_string())
+            .unwrap_or_default(),
+        value if value.starts_with('#') => value[1..]
+            .parse::<u32>()
+            .ok()
+            .and_then(char::from_u32)
+            .map(|ch| ch.to_string())
+            .unwrap_or_default(),
+        _ => format!("&{};", entity),
+    }
+}
+
+fn normalize_extracted_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xml_visible_text_extracts_namespaced_text() {
+        let xml = r#"<w:document><w:p><w:r><w:t>第一节</w:t></w:r></w:p><w:p><w:r><w:t>A &amp; B</w:t></w:r></w:p></w:document>"#;
+        let text = xml_visible_text(xml);
+        assert!(text.contains("第一节"));
+        assert!(text.contains("A & B"));
+    }
+
+    #[test]
+    fn office_part_selection_covers_mainstream_formats() {
+        assert!(is_office_text_part(
+            "word/document.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "demo.docx"
+        ));
+        assert!(is_office_text_part(
+            "ppt/slides/slide1.xml",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "demo.pptx"
+        ));
+        assert!(is_office_text_part(
+            "xl/sharedStrings.xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "demo.xlsx"
+        ));
     }
 }

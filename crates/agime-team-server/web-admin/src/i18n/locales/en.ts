@@ -1752,6 +1752,14 @@ export default {
     notConfigured: "AI service not configured, please contact admin",
     refreshAll: "Refresh All",
     batchGenerating: "Generating AI descriptions...",
+    safetyHigh: "High risk",
+    safetyMedium: "Needs review",
+    safetySafe: "No obvious issue",
+    safetyHighHint:
+      "This skill interpretation found signs of secret exfiltration, dangerous commands, or backdoor behavior. Human review is required before use.",
+    safetyMediumHint:
+      "This skill touches permissions or execution boundaries that should be reviewed before use.",
+    safetySafeHint: "This skill interpretation found no obvious safety issue.",
   },
   smartLog: {
     title: "Smart Log",
@@ -1791,6 +1799,11 @@ export default {
     collapseAll: "Collapse all",
     showDeleted: "Show deletions",
     noInsights: "No AI insights yet",
+    analysisSummary: "Summary",
+    analysisStructure: "Content structure",
+    analysisKeyPoints: "Key points",
+    analysisObservations: "File observations",
+    analysisLimitations: "Limitations",
   },
   ecosystem: {
     title: "Ecosystem Collaboration",

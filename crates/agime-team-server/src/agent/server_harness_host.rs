@@ -8,8 +8,9 @@ use agime::agents::extension::ExtensionConfig;
 use agime::agents::format_execution_host_completion_text;
 use agime::agents::harness::TransitionTrace;
 use agime::agents::harness::{
-    auto_resolve_request, normalize_system_document_analysis_completion_report,
-    CompletionSurfacePolicy, PermissionBridgeResolution,
+    auto_resolve_request, normalize_pre_materialized_document_analysis_completion_report,
+    normalize_system_document_analysis_completion_report, CompletionSurfacePolicy,
+    PermissionBridgeResolution,
 };
 use agime::agents::{
     build_permission_requested_control_message, build_permission_resolved_control_message,
@@ -722,6 +723,8 @@ fn completion_surface_policy_for_session_source(
 ) -> CompletionSurfacePolicy {
     if session_source.eq_ignore_ascii_case("system") {
         CompletionSurfacePolicy::SystemDocumentAnalysis
+    } else if session_source.eq_ignore_ascii_case("document_analysis") {
+        CompletionSurfacePolicy::Conversation
     } else if session_source.eq_ignore_ascii_case("chat")
         || session_source.eq_ignore_ascii_case("automation_runtime")
     {
@@ -866,6 +869,8 @@ fn completion_contract_for_session_source(
 ) -> Option<agime::recipe::Response> {
     if session_source.eq_ignore_ascii_case("system") {
         Some(document_analysis_completion_response())
+    } else if session_source.eq_ignore_ascii_case("document_analysis") {
+        None
     } else if matches!(harness_mode, HarnessMode::Execute) && require_final_report {
         Some(execution_host_completion_response())
     } else {
@@ -902,7 +907,10 @@ fn normalize_adapter_execution_host_completion_report(
         || session_source.eq_ignore_ascii_case("portal")
         || session_source.eq_ignore_ascii_case("channel_conversation");
 
-    if session_source.eq_ignore_ascii_case("system") {
+    if session_source.eq_ignore_ascii_case("document_analysis") {
+        report =
+            normalize_pre_materialized_document_analysis_completion_report(report, signal_summary);
+    } else if session_source.eq_ignore_ascii_case("system") {
         report = normalize_system_document_analysis_completion_report(report, signal_summary);
     } else if !conversation_surface
         && report.status == "completed"
@@ -2539,14 +2547,25 @@ impl ServerHarnessHost {
         llm_overrides: Option<Value>,
         broadcaster: StreamBroadcaster,
     ) -> Result<ServerHarnessHostOutcome> {
-        let inferred_targets = if session.session_source.eq_ignore_ascii_case("system") {
+        let inferred_targets = if session.session_source.eq_ignore_ascii_case("system")
+            || session
+                .session_source
+                .eq_ignore_ascii_case("document_analysis")
+        {
             Vec::new()
         } else {
             infer_targets_from_user_message(user_message)
         };
         let effective_target_artifacts = {
             let base_targets = if target_artifacts.is_empty() {
-                host_target_artifacts(session)
+                if session
+                    .session_source
+                    .eq_ignore_ascii_case("document_analysis")
+                {
+                    Vec::new()
+                } else {
+                    host_target_artifacts(session)
+                }
             } else {
                 target_artifacts
             };
@@ -2568,7 +2587,14 @@ impl ServerHarnessHost {
         };
         let effective_result_contract = {
             let mut contract = if result_contract.is_empty() {
-                host_result_contract(session)
+                if session
+                    .session_source
+                    .eq_ignore_ascii_case("document_analysis")
+                {
+                    Vec::new()
+                } else {
+                    host_result_contract(session)
+                }
             } else {
                 result_contract
             };
@@ -2617,8 +2643,15 @@ impl ServerHarnessHost {
 
         let runtime_snapshot =
             AgentRuntimePolicyResolver::resolve(&effective_agent, Some(session), None);
+        let document_analysis_surface = session
+            .session_source
+            .eq_ignore_ascii_case("document_analysis");
         let non_delegating_surface = is_non_delegating_session_source(&session.session_source);
-        let coordinator_execution_mode = if session.session_source.eq_ignore_ascii_case("system") {
+        let coordinator_execution_mode = if session.session_source.eq_ignore_ascii_case("system")
+            || session
+                .session_source
+                .eq_ignore_ascii_case("document_analysis")
+        {
             CoordinatorExecutionMode::SingleWorker
         } else if non_delegating_surface {
             if !matches!(
@@ -2651,7 +2684,11 @@ impl ServerHarnessHost {
                 mode => mode,
             }
         };
-        let delegation_mode = if non_delegating_surface {
+        let delegation_mode = if non_delegating_surface
+            || session
+                .session_source
+                .eq_ignore_ascii_case("document_analysis")
+        {
             DelegationMode::Disabled
         } else {
             match coordinator_execution_mode {
@@ -2671,8 +2708,11 @@ impl ServerHarnessHost {
                 }
             }
         };
-        let effective_validation_mode =
-            validation_mode && runtime_snapshot.delegation_policy.allow_validation_worker;
+        let effective_validation_mode = validation_mode
+            && !session
+                .session_source
+                .eq_ignore_ascii_case("document_analysis")
+            && runtime_snapshot.delegation_policy.allow_validation_worker;
         let require_final_report =
             session.require_final_report || runtime_snapshot.delegation_policy.require_final_report;
         let run_id = Uuid::new_v4().to_string();
@@ -2782,16 +2822,25 @@ impl ServerHarnessHost {
         let agent_instance = Arc::new(Agent::new());
         agent_instance
             .set_delegation_capability_context(Some(DelegationCapabilityContext {
-                allow_plan_mode: runtime_snapshot.delegation_policy.allow_plan,
-                allow_subagent: runtime_snapshot.delegation_policy.allow_subagent,
-                allow_swarm: runtime_snapshot.delegation_policy.allow_swarm,
-                allow_worker_messaging: runtime_snapshot.delegation_policy.allow_worker_messaging,
+                allow_plan_mode: !document_analysis_surface
+                    && runtime_snapshot.delegation_policy.allow_plan,
+                allow_subagent: !document_analysis_surface
+                    && runtime_snapshot.delegation_policy.allow_subagent,
+                allow_swarm: !document_analysis_surface
+                    && runtime_snapshot.delegation_policy.allow_swarm,
+                allow_worker_messaging: !document_analysis_surface
+                    && runtime_snapshot.delegation_policy.allow_worker_messaging,
             }))
             .await;
         let explicit_delegation_turn = effective_turn_system_instruction
             .as_deref()
             .is_some_and(|value| value.contains(CHAT_DELEGATION_PROFILE_ID));
-        let harness_mode = if should_force_execute_for_explicit_delegation(
+        let harness_mode = if session
+            .session_source
+            .eq_ignore_ascii_case("document_analysis")
+        {
+            HarnessMode::Conversation
+        } else if should_force_execute_for_explicit_delegation(
             &session.session_source,
             user_message,
             explicit_delegation_turn,
@@ -2807,10 +2856,12 @@ impl ServerHarnessHost {
             .collect::<Vec<_>>();
         server_local_tool_names.sort();
         server_local_tool_names.dedup();
+        let server_local_tools_for_host = prepared.server_local_tools.clone();
+        let worker_extensions_for_host = prepared.worker_extensions.clone();
         let host_extensions = host_extensions_for_mode(
             harness_mode,
-            &prepared.server_local_tools,
-            &prepared.worker_extensions,
+            &server_local_tools_for_host,
+            &worker_extensions_for_host,
         );
         let completion_surface_policy =
             completion_surface_policy_for_session_source(&session.session_source, harness_mode);
@@ -2891,7 +2942,7 @@ impl ServerHarnessHost {
                 parallelism_budget: runtime_snapshot.delegation_policy.parallelism_budget,
                 swarm_budget: runtime_snapshot.delegation_policy.swarm_budget,
                 validation_mode: effective_validation_mode,
-                worker_extensions: prepared.worker_extensions.clone(),
+                worker_extensions: worker_extensions_for_host,
                 initial_context_runtime_state: session.context_runtime_state.clone(),
                 task_runtime: Some(task_runtime.clone()),
                 system_prompt_override: Some(prepared.system_prompt.clone()),
@@ -3935,6 +3986,10 @@ mod tests {
             harness_mode_for_session_source("portal"),
             HarnessMode::Conversation
         );
+        assert_eq!(
+            harness_mode_for_session_source("document_analysis"),
+            HarnessMode::Conversation
+        );
     }
 
     #[test]
@@ -4076,6 +4131,17 @@ mod tests {
             CompletionSurfacePolicy::SystemDocumentAnalysis
         );
         assert_eq!(
+            completion_surface_policy_for_session_source("document_analysis", HarnessMode::Execute),
+            CompletionSurfacePolicy::Conversation
+        );
+        assert_eq!(
+            completion_surface_policy_for_session_source(
+                "document_analysis",
+                HarnessMode::Conversation
+            ),
+            CompletionSurfacePolicy::Conversation
+        );
+        assert_eq!(
             completion_surface_policy_for_session_source("portal", HarnessMode::Conversation),
             CompletionSurfacePolicy::Conversation
         );
@@ -4119,6 +4185,19 @@ mod tests {
         assert!(system_schema["required"]
             .to_string()
             .contains("analysis_complete"));
+
+        assert!(completion_contract_for_session_source(
+            "document_analysis",
+            HarnessMode::Conversation,
+            false,
+        )
+        .is_none());
+        assert!(completion_contract_for_session_source(
+            "document_analysis",
+            HarnessMode::Execute,
+            true,
+        )
+        .is_none());
     }
 
     #[test]
@@ -4129,6 +4208,7 @@ mod tests {
         assert!(prefixes.contains(&"document_tools__import_document_to_workspace".to_string()));
         assert!(required_tool_prefixes_for_session_source("chat").is_empty());
         assert!(required_tool_prefixes_for_session_source("portal").is_empty());
+        assert!(required_tool_prefixes_for_session_source("document_analysis").is_empty());
     }
 
     #[test]
@@ -5036,6 +5116,36 @@ mod tests {
         assert_eq!(
             report.blocking_reason.as_deref(),
             Some("document content was not successfully accessed")
+        );
+    }
+
+    #[test]
+    fn adapter_document_analysis_uses_pre_materialized_completion_contract() {
+        let report = normalize_adapter_execution_host_completion_report(
+            ExecutionHostCompletionReport {
+                status: "completed".to_string(),
+                summary: "Document Overview\nContent Structure\nKey Takeaways".to_string(),
+                produced_artifacts: Vec::new(),
+                accepted_artifacts: vec!["document:doc-1".to_string()],
+                next_steps: Vec::new(),
+                validation_status: None,
+                blocking_reason: None,
+                reason_code: None,
+                content_accessed: Some(true),
+                analysis_complete: Some(true),
+            },
+            Some(&agime::agents::CoordinatorSignalSummary {
+                completed_tool_names: vec!["developer__shell".to_string()],
+                ..Default::default()
+            }),
+            "document_analysis",
+        );
+
+        assert_eq!(report.status, "completed");
+        assert_eq!(report.validation_status.as_deref(), Some("passed"));
+        assert_eq!(
+            report.reason_code.as_deref(),
+            Some("document_analysis_completed")
         );
     }
 

@@ -1104,6 +1104,7 @@ impl AgentService {
             | "portal_coding"
             | "portal_manager"
             | "system"
+            | "document_analysis"
             | "chat"
             | "automation_builder"
             | "automation_runtime"
@@ -1155,7 +1156,7 @@ impl AgentService {
         let restricted_scope = portal_restricted
             || matches!(
                 session_source,
-                "portal" | "portal_coding" | "portal_manager" | "system"
+                "portal" | "portal_coding" | "portal_manager" | "system" | "document_analysis"
             );
 
         let base_scope = match agent.skill_binding_mode {
@@ -5723,6 +5724,7 @@ impl AgentService {
         let hidden_from_chat_list = req.hidden_from_chat_list.unwrap_or_else(|| {
             req.portal_restricted
                 || session_source == "system"
+                || session_source == "document_analysis"
                 || session_source == "scheduled_task"
                 || session_source == "portal_coding"
                 || session_source == "portal_manager"

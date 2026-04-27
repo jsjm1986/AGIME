@@ -585,7 +585,7 @@ impl AgentRuntimePolicyResolver {
         let restricted_scope = portal_restricted
             || matches!(
                 session_source.as_str(),
-                "portal" | "portal_coding" | "portal_manager" | "system"
+                "portal" | "portal_coding" | "portal_manager" | "system" | "document_analysis"
             );
         let base_skill_scope = match agent.skill_binding_mode {
             SkillBindingMode::AssignedOnly => Some(assigned_skill_ids.clone()),

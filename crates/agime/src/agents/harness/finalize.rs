@@ -79,6 +79,32 @@ impl Agent {
             })
     }
 
+    fn has_final_document_analysis_text_after_last_tool_response(messages: &Conversation) -> bool {
+        let all_messages = messages.messages();
+        let last_tool_response_idx = all_messages.iter().rposition(|message| {
+            message.metadata.user_visible
+                && message
+                    .content
+                    .iter()
+                    .any(|content| matches!(content, MessageContent::ToolResponse(_)))
+        });
+        let start_idx = last_tool_response_idx.map(|idx| idx + 1).unwrap_or(0);
+
+        all_messages[start_idx..].iter().any(|message| {
+            message.role == rmcp::model::Role::Assistant
+                && message.metadata.user_visible
+                && message.content.iter().any(|content| {
+                    matches!(
+                        content,
+                        MessageContent::Text(text)
+                            if super::completion::document_analysis_text_counts_as_final(
+                                &text.text
+                            )
+                    )
+                })
+        })
+    }
+
     fn latest_user_visible_tool_response_text(messages: &Conversation) -> Option<String> {
         messages
             .messages()
@@ -422,10 +448,35 @@ impl Agent {
                 active_child_tasks,
                 has_blocking_signals,
             );
+        let system_document_analysis_text_is_terminal =
+            matches!(
+                completion_surface_policy,
+                CompletionSurfacePolicy::SystemDocumentAnalysis
+            ) && matches!(current_mode, HarnessMode::Execute)
+                && Self::has_final_document_analysis_text_after_last_tool_response(messages_to_add)
+                && !active_child_tasks
+                && !has_blocking_signals;
         let coordinator_should_complete = match completion_surface_policy {
-            CompletionSurfacePolicy::Execute | CompletionSurfacePolicy::SystemDocumentAnalysis => {
+            CompletionSurfacePolicy::Execute => {
                 if matches!(current_mode, HarnessMode::Execute) {
                     completion_outcome.state.is_terminal()
+                } else {
+                    Self::should_complete_coordinator_turn(
+                        current_mode,
+                        coordinator_execution_mode,
+                        has_completion_ready,
+                        required_tools_satisfied,
+                        has_terminal_user_visible_assistant_text,
+                        active_child_tasks,
+                        has_blocking_signals,
+                        has_user_visible_tool_response,
+                    )
+                }
+            }
+            CompletionSurfacePolicy::SystemDocumentAnalysis => {
+                if matches!(current_mode, HarnessMode::Execute) {
+                    completion_outcome.state.is_terminal()
+                        || system_document_analysis_text_is_terminal
                 } else {
                     Self::should_complete_coordinator_turn(
                         current_mode,

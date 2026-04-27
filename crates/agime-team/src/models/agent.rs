@@ -210,6 +210,8 @@ pub struct AgentExtensionConfig {
     pub extension: BuiltinExtension,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_groups: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -370,6 +372,8 @@ pub struct AttachedTeamExtensionRef {
     pub extension_id: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_groups: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -412,6 +416,8 @@ pub struct AgentSkillConfig {
     /// Whether this skill is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_groups: Vec<String>,
     /// Version at assignment time
     #[serde(default)]
     pub version: String,

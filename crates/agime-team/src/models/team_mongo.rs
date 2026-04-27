@@ -152,6 +152,8 @@ pub struct TeamSettings {
     pub members_can_invite: bool,
     #[serde(default = "default_visibility_setting")]
     pub default_visibility: String,
+    #[serde(default = "default_skill_upload_policy")]
+    pub skill_upload_policy: String,
     #[serde(default)]
     pub document_analysis: DocumentAnalysisSettings,
     #[serde(default)]
@@ -172,6 +174,7 @@ impl Default for TeamSettings {
             require_extension_review: true,
             members_can_invite: false,
             default_visibility: "team".to_string(),
+            skill_upload_policy: default_skill_upload_policy(),
             document_analysis: DocumentAnalysisSettings::default(),
             ai_describe: AiDescribeSettings::default(),
             general_agent: GeneralAgentSettings::default(),
@@ -363,6 +366,10 @@ fn default_skip_mime_prefixes() -> Vec<String> {
 
 fn default_visibility_setting() -> String {
     "team".to_string()
+}
+
+fn default_skill_upload_policy() -> String {
+    "auto_approve".to_string()
 }
 
 /// Team document

@@ -35,10 +35,11 @@ use super::transition::TransitionTrace;
 use super::{
     build_completion_control_messages, build_conversation_completion_report,
     build_execute_completion_report, build_session_finished_message, build_session_started_message,
-    build_system_document_analysis_completion_report, control_messages_for_agent_event,
-    register_harness_control_sequencer, unregister_harness_control_sequencer,
-    CompletionSurfacePolicy, ExecuteCompletionOutcome, ExecutionHostCompletionReport,
-    HarnessControlMessage, HarnessControlSequencer, HarnessControlSink,
+    build_system_document_analysis_completion_report_from_conversation,
+    control_messages_for_agent_event, register_harness_control_sequencer,
+    unregister_harness_control_sequencer, CompletionSurfacePolicy, ExecuteCompletionOutcome,
+    ExecutionHostCompletionReport, HarnessControlMessage, HarnessControlSequencer,
+    HarnessControlSink,
 };
 
 #[async_trait]
@@ -559,8 +560,9 @@ pub async fn run_harness_host(
                 &request.required_tool_prefixes,
             ),
             CompletionSurfacePolicy::SystemDocumentAnalysis => {
-                build_system_document_analysis_completion_report(
+                build_system_document_analysis_completion_report_from_conversation(
                     final_output_string.as_deref(),
+                    &final_conversation,
                     completion_outcome.as_ref(),
                     merged_signal_summary.as_ref(),
                     &request.required_tool_prefixes,

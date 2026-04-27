@@ -651,6 +651,7 @@ fn build_surface_contract_overlay_text(contract: &SurfacePromptContract) -> Stri
         "channel_runtime" => "This is an explicit channel execution turn. Treat it as a focused execution step inside a collaboration thread.".to_string(),
         "channel_conversation" => "This is a channel collaboration conversation surface. Continue the thread naturally, as an ongoing work dialogue rather than a one-shot execution task.".to_string(),
         "system" => "This is a system surface. Completion is contract-driven and may be blocked when required content access or validation is missing.".to_string(),
+        "document_analysis" => "This is a document analysis surface. Use the provided workspace file path as the document input and complete the structured analysis from real file content.".to_string(),
         "portal_manager" => "This is a portal manager surface. Stay within governance and capability-management boundaries.".to_string(),
         "portal_coding" => "This is a portal coding surface. Stay within configured project and capability boundaries while producing real execution.".to_string(),
         "portal" => "This is a portal public/service surface. Respect external-facing capability and document boundaries.".to_string(),

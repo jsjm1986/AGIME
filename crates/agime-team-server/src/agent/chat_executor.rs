@@ -1,9 +1,6 @@
-//! Chat executor for direct session-based chat (bypasses Task system)
+//! Chat executor for direct session-based chat.
 //!
-//! ChatExecutor handles chat message execution directly on sessions.
-//! It internally creates a temporary task to reuse TaskExecutor's
-//! proven execution logic, but the task is ephemeral and not persisted
-//! to the agent_tasks collection.
+//! ChatExecutor runs chat messages through the DirectHarness V4 surface.
 
 use agime::agents::tool_execution_was_cancelled;
 use agime_team::MongoDb;
@@ -17,9 +14,8 @@ use crate::automation::{contract::derive_builder_sync_payload, service::Automati
 use super::chat_channels::ChatWorkspaceFileBlock;
 use super::chat_manager::ChatManager;
 use super::delegation_runtime::build_delegation_runtime;
+use super::direct_host_admission;
 use super::execution_admission;
-use super::host_router::HostExecutionRouter;
-use super::runtime;
 use super::server_harness_host::ServerHarnessHost;
 use super::service_mongo::{AgentService, ExecutionSlotAcquireOutcome};
 use super::task_manager::{StreamEvent, TaskManager};
@@ -58,10 +54,8 @@ impl ChatExecutor {
 
     /// Execute a chat message in a session (bypasses Task system).
     ///
-    /// Strategy: We create a temporary task record in MongoDB, use
-    /// TaskExecutor to run it, then bridge events from the internal
-    /// TaskManager to the ChatManager. After completion, the temp
-    /// task is cleaned up and session metadata is updated.
+    /// Strategy: execute directly through Harness V4. When the agent is
+    /// saturated, the request stays queued until a DirectHarness slot opens.
     ///
     /// C3 fix: All cleanup (is_processing, temp task, done event) is
     /// guaranteed via the inner method + cleanup-on-all-paths pattern.
@@ -357,13 +351,7 @@ impl ChatExecutor {
             .map_err(|e| anyhow!("Failed to bind workspace: {}", e))?;
         let workspace_path = workspace_binding.root_path;
 
-        let router = HostExecutionRouter::from_env();
-        let mut using_direct_host = matches!(
-            router.path(),
-            super::server_harness_host::HostExecutionPath::DirectHarness
-        );
         let cancel_token_direct = cancel_token.clone();
-        let cancel_token_bridge = cancel_token;
         let target_artifacts = session
             .attached_document_ids
             .iter()
@@ -371,146 +359,113 @@ impl ChatExecutor {
             .map(|value| format!("document:{}", value.trim()))
             .collect::<Vec<_>>();
         let result_contract = target_artifacts.clone();
-        let exec_result = if using_direct_host {
-            match self
-                .agent_service
-                .try_acquire_execution_slot(agent_id)
-                .await
-                .map_err(|e| anyhow!("Failed to acquire agent execution slot: {}", e))?
-            {
-                ExecutionSlotAcquireOutcome::Acquired => {
-                    let direct_result = async {
-                        let agent = self
-                            .agent_service
-                            .get_agent_with_key(agent_id)
-                            .await
-                            .map_err(|e| anyhow!("DB error: {}", e))?
-                            .ok_or_else(|| anyhow!("Agent not found"))?;
-                        let host = ServerHarnessHost::new(
-                            self.db.clone(),
-                            self.agent_service.clone(),
-                            self.internal_task_manager.clone(),
-                        );
-                        let timeout_secs = direct_host_timeout_secs();
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(timeout_secs),
-                            host.execute_chat_host(
-                                &session,
-                                &agent,
-                                user_message,
-                                workspace_path.clone(),
-                                turn_system_instruction,
-                                target_artifacts.clone(),
-                                result_contract.clone(),
-                                false,
-                                cancel_token_direct.clone(),
-                                self.chat_manager.clone(),
-                            ),
-                        )
-                        .await
-                        {
-                            Ok(result) => result.map(Some),
-                            Err(_) => {
-                                cancel_token_direct.cancel();
-                                Err(anyhow!(
-                                    "Direct harness chat host timed out after {}s",
-                                    timeout_secs
-                                ))
-                            }
-                        }
-                    }
+
+        match self
+            .agent_service
+            .try_acquire_execution_slot(agent_id)
+            .await
+            .map_err(|e| anyhow!("Failed to acquire agent execution slot: {}", e))?
+        {
+            ExecutionSlotAcquireOutcome::Acquired => {}
+            ExecutionSlotAcquireOutcome::Saturated => {
+                let _ = self
+                    .agent_service
+                    .set_session_execution_state(session_id, "queued", true)
                     .await;
-
-                    if let Err(error) = self.agent_service.release_execution_slot(agent_id).await {
-                        tracing::warn!(
-                            "Failed to release execution slot for agent {} after direct chat: {}",
-                            agent_id,
-                            error
-                        );
-                    }
-                    if let Err(error) = execution_admission::start_next_queued_tasks_for_agent(
-                        &self.db,
-                        &self.agent_service,
-                        &self.internal_task_manager,
-                        agent_id,
-                    )
-                    .await
-                    {
-                        tracing::warn!(
-                            "Failed to dispatch queued work for agent {} after direct chat: {}",
-                            agent_id,
-                            error
-                        );
-                    }
-
-                    direct_result
-                }
-                ExecutionSlotAcquireOutcome::Saturated => {
-                    using_direct_host = false;
-                    let _ = self
-                        .agent_service
-                        .set_session_execution_state(session_id, "queued", true)
-                        .await;
-                    self.chat_manager
-                        .broadcast(
-                            session_id,
-                            StreamEvent::Status {
-                                status: "queued".to_string(),
-                            },
-                        )
-                        .await;
-                    runtime::execute_bridge_request(
-                        &self.db,
-                        &self.agent_service,
-                        &self.internal_task_manager,
-                        &self.chat_manager,
-                        runtime::BridgeExecutionRequest {
-                            context_id: session_id.to_string(),
-                            agent_id: agent_id.to_string(),
-                            session_id: session_id.to_string(),
-                            channel_id: None,
-                            run_scope_id: None,
-                            user_message: user_message.to_string(),
-                            cancel_token: cancel_token_bridge,
-                            workspace_path: Some(workspace_path),
-                            llm_overrides: None,
-                            turn_system_instruction: turn_system_instruction.map(str::to_string),
+                self.chat_manager
+                    .broadcast(
+                        session_id,
+                        StreamEvent::Status {
+                            status: "queued".to_string(),
                         },
                     )
-                    .await?;
-                    Ok(None)
-                }
+                    .await;
+                direct_host_admission::wait_for_execution_slot(
+                    &self.agent_service,
+                    agent_id,
+                    &cancel_token_direct,
+                )
+                .await?;
+                let _ = self
+                    .agent_service
+                    .set_session_execution_state(session_id, "running", true)
+                    .await;
+                self.chat_manager
+                    .broadcast(
+                        session_id,
+                        StreamEvent::Status {
+                            status: "running".to_string(),
+                        },
+                    )
+                    .await;
             }
-        } else {
-            runtime::execute_bridge_request(
-                &self.db,
-                &self.agent_service,
-                &self.internal_task_manager,
-                &self.chat_manager,
-                runtime::BridgeExecutionRequest {
-                    context_id: session_id.to_string(),
-                    agent_id: agent_id.to_string(),
-                    session_id: session_id.to_string(),
-                    channel_id: None,
-                    run_scope_id: None,
-                    user_message: user_message.to_string(),
-                    cancel_token: cancel_token_bridge,
-                    workspace_path: Some(workspace_path),
-                    llm_overrides: None,
-                    turn_system_instruction: turn_system_instruction.map(str::to_string),
-                },
-            )
-            .await?;
-            Ok(None)
-        };
-
-        // Bridge path still needs the legacy metadata updater.
-        // Direct host persists history/preview/title via SessionHostPersistenceAdapter.
-        if !using_direct_host {
-            self.update_session_metadata(session_id, user_message).await;
         }
 
-        exec_result
+        let direct_result = async {
+            let agent = self
+                .agent_service
+                .get_agent_with_key(agent_id)
+                .await
+                .map_err(|e| anyhow!("DB error: {}", e))?
+                .ok_or_else(|| anyhow!("Agent not found"))?;
+            let host = ServerHarnessHost::new(
+                self.db.clone(),
+                self.agent_service.clone(),
+                self.internal_task_manager.clone(),
+            );
+            let timeout_secs = direct_host_timeout_secs();
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(timeout_secs),
+                host.execute_chat_host(
+                    &session,
+                    &agent,
+                    user_message,
+                    workspace_path.clone(),
+                    turn_system_instruction,
+                    target_artifacts.clone(),
+                    result_contract.clone(),
+                    false,
+                    cancel_token_direct.clone(),
+                    self.chat_manager.clone(),
+                ),
+            )
+            .await
+            {
+                Ok(result) => result.map(Some),
+                Err(_) => {
+                    cancel_token_direct.cancel();
+                    Err(anyhow!(
+                        "Direct harness chat host timed out after {}s",
+                        timeout_secs
+                    ))
+                }
+            }
+        }
+        .await;
+
+        if let Err(error) = self.agent_service.release_execution_slot(agent_id).await {
+            tracing::warn!(
+                "Failed to release execution slot for agent {} after direct chat: {}",
+                agent_id,
+                error
+            );
+        }
+        if let Err(error) = execution_admission::start_next_queued_tasks_for_agent(
+            &self.db,
+            &self.agent_service,
+            &self.internal_task_manager,
+            agent_id,
+        )
+        .await
+        {
+            tracing::warn!(
+                "Failed to dispatch queued work for agent {} after direct chat: {}",
+                agent_id,
+                error
+            );
+        }
+
+        direct_result
     }
 
     /// Update session metadata after message completion

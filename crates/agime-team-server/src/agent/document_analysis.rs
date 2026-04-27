@@ -20,12 +20,11 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use super::host_router::{DocumentAnalysisHostRouteRequest, HostExecutionRouter};
-use super::runtime::{self, EventBroadcaster};
+use super::runtime;
 use super::server_harness_host::ServerHarnessHost;
 use super::service_mongo::AgentService;
 use super::session_mongo::CreateSessionRequest;
-use super::task_manager::{StreamEvent, TaskManager};
+use super::task_manager::TaskManager;
 use super::workspace_service::WorkspaceService;
 use agime::agents::format_execution_host_completion_text;
 
@@ -332,13 +331,6 @@ fn serialize_document_analysis_json(result: DocumentAnalysisJsonResult) -> Strin
         .collect()
 }
 
-/// Discards all events. Used for background analysis with no SSE subscribers.
-struct NoopBroadcaster;
-
-impl EventBroadcaster for NoopBroadcaster {
-    async fn broadcast(&self, _context_id: &str, _event: StreamEvent) {}
-}
-
 pub struct DocumentAnalysisTriggerImpl {
     db: Arc<MongoDb>,
     agent_service: Arc<AgentService>,
@@ -614,102 +606,24 @@ async fn process_document_analysis(
         "[doc-analysis] Calling execution host for session={}",
         session_id
     );
-    let router = HostExecutionRouter::from_env();
-    let db_direct = db.clone();
-    let db_bridge = db.clone();
-    let agent_svc_direct = agent_svc.clone();
-    let agent_svc_bridge = agent_svc.clone();
-    let agent_svc_after = agent_svc.clone();
-    let cancel_token_direct = cancel_token.clone();
-    let cancel_token_bridge = cancel_token.clone();
-    let llm_overrides_direct = llm_overrides.clone();
-    let llm_overrides_bridge = llm_overrides.clone();
-    let session_id_bridge = session_id.clone();
-    let exec_result = router
-        .route_document_analysis(
-            DocumentAnalysisHostRouteRequest {
-                session_id: session_id.clone(),
-                agent_id: agent.id.clone(),
-                user_message,
-                workspace_path: workspace_path.clone(),
-                llm_overrides,
-                target_artifacts: Vec::new(),
-                result_contract: Vec::new(),
-                validation_mode: false,
-            },
-            |request| async move {
-                let host = ServerHarnessHost::new(
-                    db_direct,
-                    agent_svc_direct,
-                    Arc::new(TaskManager::new()),
-                );
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(AGENT_TIMEOUT_SECS),
-                    host.execute_document_analysis_host(
-                        &session,
-                        &agent,
-                        &request.user_message,
-                        request.workspace_path,
-                        request.target_artifacts,
-                        request.result_contract,
-                        request.validation_mode,
-                        llm_overrides_direct,
-                        cancel_token_direct,
-                    ),
-                )
-                .await
-                .map(|result| result)
-                .map_err(anyhow::Error::from)?
-            },
-            |request| async move {
-                let task_manager = Arc::new(TaskManager::new());
-                let broadcaster = Arc::new(NoopBroadcaster);
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(AGENT_TIMEOUT_SECS),
-                    runtime::execute_bridge_request(
-                        &db_bridge,
-                        &agent_svc_bridge,
-                        &task_manager,
-                        &broadcaster,
-                        runtime::BridgeExecutionRequest {
-                            context_id: request.session_id.clone(),
-                            agent_id: request.agent_id,
-                            session_id: request.session_id,
-                            channel_id: None,
-                            run_scope_id: None,
-                            user_message: request.user_message,
-                            cancel_token: cancel_token_bridge,
-                            workspace_path: Some(request.workspace_path),
-                            llm_overrides: llm_overrides_bridge,
-                            turn_system_instruction: None,
-                        },
-                    ),
-                )
-                .await
-                .map_err(anyhow::Error::from)??;
-                let updated_session = agent_svc_after
-                    .get_session(&session_id_bridge)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("Session not found after bridge execution"))?;
-                Ok(super::server_harness_host::ServerHarnessHostOutcome {
-                    messages_json: updated_session.messages_json.clone(),
-                    message_count: updated_session.message_count,
-                    total_tokens: updated_session.total_tokens,
-                    context_runtime_state: updated_session.context_runtime_state.clone(),
-                    last_assistant_text: runtime::extract_last_assistant_text(
-                        &updated_session.messages_json,
-                    ),
-                    completion_report: None,
-                    persisted_child_evidence: Vec::new(),
-                    persisted_child_transcript_resume: Vec::new(),
-                    transition_trace: None,
-                    events_emitted: 0,
-                    signal_summary: None,
-                    completion_outcome: None,
-                })
-            },
+    let host = ServerHarnessHost::new(db.clone(), agent_svc.clone(), Arc::new(TaskManager::new()));
+    let exec_result = tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_TIMEOUT_SECS),
+        host.execute_document_analysis_host(
+            &session,
+            &agent,
+            &user_message,
+            workspace_path.clone(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            llm_overrides,
+            cancel_token.clone(),
         )
-        .await;
+    )
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|result| result);
 
     let (analysis_text, completion_report) = match exec_result {
         Ok(outcome) => {

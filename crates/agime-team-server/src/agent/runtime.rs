@@ -1,10 +1,10 @@
-//! Shared runtime utilities for executor bridge pattern
+//! Legacy runtime utilities for TaskExecutor bridge compatibility.
 //!
-//! Shared runtime bridge utilities for executor flows
-//! to reuse TaskExecutor: create temp task → approve → register in
-//! internal TaskManager → bridge events → execute → cleanup.
+//! Chat, channel, document analysis, and scheduled-task execution do not use
+//! this module. They run through DirectHarness V4 and `context_runtime`.
 //!
-//! This module extracts the shared logic to eliminate duplication.
+//! The remaining bridge helpers are retained for legacy Mission/AgentTask and
+//! subagent compatibility until those surfaces have a V4-native task host.
 
 use agime::prompt_template;
 use agime_team::models::{BuiltinExtension, TaskResultType, TaskStatus, TeamAgent};

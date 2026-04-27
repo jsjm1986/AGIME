@@ -75,31 +75,13 @@ use super::session_mongo::AgentSessionDoc;
 use super::task_manager::{StreamEvent, TaskManager};
 use super::workspace_service::{WorkspaceExecutionContext, WorkspaceService};
 
-const DIRECT_HARNESS_HOST_FLAG: &str = "TEAM_ENABLE_DIRECT_HARNESS_HOST";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostExecutionPath {
-    Bridge,
     DirectHarness,
 }
 
-pub fn direct_harness_host_enabled() -> bool {
-    std::env::var(DIRECT_HARNESS_HOST_FLAG)
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
-
 pub fn current_host_execution_path() -> HostExecutionPath {
-    if direct_harness_host_enabled() {
-        HostExecutionPath::DirectHarness
-    } else {
-        HostExecutionPath::Bridge
-    }
+    HostExecutionPath::DirectHarness
 }
 
 fn parse_turn_tool_gate_allow_only(
@@ -3640,23 +3622,11 @@ mod tests {
     }
 
     #[test]
-    fn direct_host_flag_defaults_off() {
-        let _guard = env_lock().lock().expect("env lock");
-        std::env::remove_var(DIRECT_HARNESS_HOST_FLAG);
-        assert!(!direct_harness_host_enabled());
-        assert_eq!(current_host_execution_path(), HostExecutionPath::Bridge);
-    }
-
-    #[test]
-    fn direct_host_flag_honors_true_like_values() {
-        let _guard = env_lock().lock().expect("env lock");
-        std::env::set_var(DIRECT_HARNESS_HOST_FLAG, "true");
-        assert!(direct_harness_host_enabled());
+    fn direct_host_path_is_v4_only() {
         assert_eq!(
             current_host_execution_path(),
             HostExecutionPath::DirectHarness
         );
-        std::env::remove_var(DIRECT_HARNESS_HOST_FLAG);
     }
 
     #[test]

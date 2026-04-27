@@ -345,23 +345,21 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
         "TEAM_AGENT_EXTENSION_CACHE_ROOT",
         &config.team_agent_extension_cache_root,
     );
-    let direct_host_flag =
-        std::env::var("TEAM_ENABLE_DIRECT_HARNESS_HOST").unwrap_or_else(|_| "unset".to_string());
     let direct_host_path = agent::server_harness_host::current_host_execution_path();
     let auto_compact_threshold = std::env::var("AGIME_AUTO_COMPACT_THRESHOLD")
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(DEFAULT_AUTO_COMPACT_THRESHOLD);
     info!(
-        "Direct host rollout mode: path={:?}, TEAM_ENABLE_DIRECT_HARNESS_HOST={}",
-        direct_host_path, direct_host_flag
+        "Direct host runtime mode: path={:?}, v4_only=true",
+        direct_host_path
     );
     info!(
         "Context runtime mode: strategy=context_runtime, auto_threshold={:.1}%",
         auto_compact_threshold * 100.0
     );
     info!(
-        "Chat/channel direct host uses the context_runtime subsystem; executor_mongo remains on a compatibility path until it is migrated"
+        "Chat/channel/document/scheduled-task surfaces use DirectHarness V4 with context_runtime; executor_mongo remains isolated for legacy mission/task execution"
     );
 
     info!(

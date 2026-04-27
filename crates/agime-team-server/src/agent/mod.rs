@@ -16,6 +16,7 @@ pub mod capability_policy;
 pub mod context_injector;
 pub mod delegation_runtime;
 pub mod developer_tools;
+pub mod direct_host_admission;
 pub mod document_tools;
 pub mod execution_admission;
 pub mod executor_mongo;
@@ -45,7 +46,7 @@ pub mod workspace_physical_store;
 pub mod workspace_service;
 pub mod workspace_types;
 
-// Shared runtime utilities for executor bridge pattern
+// Legacy mission/task bridge utilities. Chat/channel/document surfaces use DirectHarness V4.
 pub mod runtime;
 pub mod runtime_bridge;
 

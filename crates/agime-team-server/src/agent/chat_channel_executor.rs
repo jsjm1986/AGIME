@@ -11,9 +11,8 @@ use super::chat_channels::{
     ChatChannelService, ChatChannelThreadState, ChatWorkspaceFileBlock,
 };
 use super::delegation_runtime::build_delegation_runtime;
+use super::direct_host_admission;
 use super::execution_admission;
-use super::host_router::HostExecutionRouter;
-use super::runtime;
 use super::server_harness_host::ServerHarnessHost;
 use super::service_mongo::{AgentService, ExecutionSlotAcquireOutcome};
 use super::task_manager::{StreamEvent, TaskManager};
@@ -570,13 +569,7 @@ impl ChatChannelExecutor {
             .map(|instruction| format!("{}\n\n{}", instruction, req.user_message))
             .unwrap_or_else(|| req.user_message.clone());
 
-        let router = HostExecutionRouter::from_env();
-        let using_direct_host = matches!(
-            router.path(),
-            super::server_harness_host::HostExecutionPath::DirectHarness
-        );
         let cancel_token_direct = cancel_token.clone();
-        let cancel_token_bridge = cancel_token;
         let mut targets = Vec::new();
         if let Some(thread_root_id) = req.thread_root_id.as_deref() {
             targets.push(format!(
@@ -595,188 +588,126 @@ impl ChatChannelExecutor {
         );
         let target_artifacts = targets.clone();
         let result_contract = targets;
-        let exec_result = if using_direct_host {
-            match self
-                .agent_service
-                .try_acquire_execution_slot(&req.agent_id)
-                .await
-                .map_err(|e| anyhow!("Failed to acquire agent execution slot: {}", e))?
-            {
-                ExecutionSlotAcquireOutcome::Acquired => {
-                    let direct_result = async {
-                        let agent = self
-                            .agent_service
-                            .get_agent_with_key(&req.agent_id)
-                            .await
-                            .map_err(|e| anyhow!("DB error: {}", e))?
-                            .ok_or_else(|| anyhow!("Agent not found"))?;
-                        let host = ServerHarnessHost::new(
-                            self.db.clone(),
-                            self.agent_service.clone(),
-                            self.internal_task_manager.clone(),
-                        );
-                        let timeout_secs = direct_host_timeout_secs();
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(timeout_secs),
-                            host.execute_channel_host(
-                                &session,
-                                &agent,
-                                &effective_user_message,
-                                workspace_path.clone(),
-                                target_artifacts.clone(),
-                                result_contract.clone(),
-                                false,
-                                cancel_token_direct.clone(),
-                                format!("{}::{}", req.channel_id, req.run_scope_id),
-                                self.channel_manager.clone(),
-                            ),
-                        )
-                        .await
-                        {
-                            Ok(result) => result,
-                            Err(_) => {
-                                cancel_token_direct.cancel();
-                                Err(anyhow!(
-                                    "Direct harness channel host timed out after {}s",
-                                    timeout_secs
-                                ))
-                            }
-                        }
-                    }
+
+        match self
+            .agent_service
+            .try_acquire_execution_slot(&req.agent_id)
+            .await
+            .map_err(|e| anyhow!("Failed to acquire agent execution slot: {}", e))?
+        {
+            ExecutionSlotAcquireOutcome::Acquired => {}
+            ExecutionSlotAcquireOutcome::Saturated => {
+                let _ = self
+                    .agent_service
+                    .set_session_execution_state(&req.internal_session_id, "queued", true)
                     .await;
-
-                    if let Err(error) = self
-                        .agent_service
-                        .release_execution_slot(&req.agent_id)
-                        .await
-                    {
-                        tracing::warn!(
-                            "Failed to release execution slot for agent {} after channel execution: {}",
-                            req.agent_id,
-                            error
-                        );
-                    }
-                    if let Err(error) = execution_admission::start_next_queued_tasks_for_agent(
-                        &self.db,
-                        &self.agent_service,
-                        &self.internal_task_manager,
-                        &req.agent_id,
-                    )
-                    .await
-                    {
-                        tracing::warn!(
-                            "Failed to dispatch queued work for agent {} after channel execution: {}",
-                            req.agent_id,
-                            error
-                        );
-                    }
-
-                    direct_result
-                }
-                ExecutionSlotAcquireOutcome::Saturated => {
-                    let _ = self
-                        .agent_service
-                        .set_session_execution_state(&req.internal_session_id, "queued", true)
-                        .await;
-                    let channel_service = ChatChannelService::new(self.db.clone());
-                    let _ = channel_service
-                        .set_run_state(&req.channel_id, &req.run_scope_id, "queued", true)
-                        .await;
-                    self.channel_manager
-                        .broadcast(
-                            &format!("{}::{}", req.channel_id, req.run_scope_id),
-                            StreamEvent::Status {
-                                status: "queued".to_string(),
-                            },
-                        )
-                        .await;
-                    runtime::execute_bridge_request(
-                        &self.db,
-                        &self.agent_service,
-                        &self.internal_task_manager,
-                        &self.channel_manager,
-                        runtime::BridgeExecutionRequest {
-                            context_id: req.channel_id.clone(),
-                            agent_id: req.agent_id.clone(),
-                            session_id: req.internal_session_id.clone(),
-                            channel_id: Some(req.channel_id.clone()),
-                            run_scope_id: Some(req.run_scope_id.clone()),
-                            user_message: effective_user_message.clone(),
-                            cancel_token: cancel_token_bridge,
-                            workspace_path: Some(workspace_path),
-                            llm_overrides: None,
-                            turn_system_instruction: None,
+                let channel_service = ChatChannelService::new(self.db.clone());
+                let _ = channel_service
+                    .set_run_state(&req.channel_id, &req.run_scope_id, "queued", true)
+                    .await;
+                self.channel_manager
+                    .broadcast(
+                        &format!("{}::{}", req.channel_id, req.run_scope_id),
+                        StreamEvent::Status {
+                            status: "queued".to_string(),
                         },
                     )
-                    .await?;
-                    let updated_session = self
-                        .agent_service
-                        .get_session(&req.internal_session_id)
-                        .await
-                        .map_err(|e| anyhow!("DB error: {}", e))?
-                        .ok_or_else(|| {
-                            anyhow!("Runtime session not found after bridge execution")
-                        })?;
-                    Ok(super::server_harness_host::ServerHarnessHostOutcome {
-                        messages_json: updated_session.messages_json.clone(),
-                        message_count: updated_session.message_count,
-                        total_tokens: updated_session.total_tokens,
-                        context_runtime_state: updated_session.context_runtime_state.clone(),
-                        last_assistant_text: runtime::extract_last_assistant_text(
-                            &updated_session.messages_json,
-                        ),
-                        completion_report: None,
-                        persisted_child_evidence: Vec::new(),
-                        persisted_child_transcript_resume: Vec::new(),
-                        transition_trace: None,
-                        events_emitted: 0,
-                        signal_summary: None,
-                        completion_outcome: None,
-                    })
+                    .await;
+                direct_host_admission::wait_for_execution_slot(
+                    &self.agent_service,
+                    &req.agent_id,
+                    &cancel_token_direct,
+                )
+                .await?;
+                let _ = self
+                    .agent_service
+                    .set_session_execution_state(&req.internal_session_id, "running", true)
+                    .await;
+                let channel_service = ChatChannelService::new(self.db.clone());
+                let _ = channel_service
+                    .set_run_state(&req.channel_id, &req.run_scope_id, "running", true)
+                    .await;
+                self.channel_manager
+                    .broadcast(
+                        &format!("{}::{}", req.channel_id, req.run_scope_id),
+                        StreamEvent::Status {
+                            status: "running".to_string(),
+                        },
+                    )
+                    .await;
+            }
+        }
+
+        let exec_result = {
+            let direct_result = async {
+                let agent = self
+                    .agent_service
+                    .get_agent_with_key(&req.agent_id)
+                    .await
+                    .map_err(|e| anyhow!("DB error: {}", e))?
+                    .ok_or_else(|| anyhow!("Agent not found"))?;
+                let host = ServerHarnessHost::new(
+                    self.db.clone(),
+                    self.agent_service.clone(),
+                    self.internal_task_manager.clone(),
+                );
+                let timeout_secs = direct_host_timeout_secs();
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_secs),
+                    host.execute_channel_host(
+                        &session,
+                        &agent,
+                        &effective_user_message,
+                        workspace_path.clone(),
+                        target_artifacts.clone(),
+                        result_contract.clone(),
+                        false,
+                        cancel_token_direct.clone(),
+                        format!("{}::{}", req.channel_id, req.run_scope_id),
+                        self.channel_manager.clone(),
+                    ),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => {
+                        cancel_token_direct.cancel();
+                        Err(anyhow!(
+                            "Direct harness channel host timed out after {}s",
+                            timeout_secs
+                        ))
+                    }
                 }
             }
-        } else {
-            runtime::execute_bridge_request(
+            .await;
+
+            if let Err(error) = self
+                .agent_service
+                .release_execution_slot(&req.agent_id)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to release execution slot for agent {} after channel execution: {}",
+                    req.agent_id,
+                    error
+                );
+            }
+            if let Err(error) = execution_admission::start_next_queued_tasks_for_agent(
                 &self.db,
                 &self.agent_service,
                 &self.internal_task_manager,
-                &self.channel_manager,
-                runtime::BridgeExecutionRequest {
-                    context_id: req.channel_id.clone(),
-                    agent_id: req.agent_id.clone(),
-                    session_id: req.internal_session_id.clone(),
-                    channel_id: Some(req.channel_id.clone()),
-                    run_scope_id: Some(req.run_scope_id.clone()),
-                    user_message: effective_user_message,
-                    cancel_token: cancel_token_bridge,
-                    workspace_path: Some(workspace_path),
-                    llm_overrides: None,
-                    turn_system_instruction: None,
-                },
+                &req.agent_id,
             )
-            .await?;
-            let updated_session = self
-                .agent_service
-                .get_session(&req.internal_session_id)
-                .await
-                .map_err(|e| anyhow!("DB error: {}", e))?
-                .ok_or_else(|| anyhow!("Runtime session not found after bridge execution"))?;
-            Ok(super::server_harness_host::ServerHarnessHostOutcome {
-                messages_json: updated_session.messages_json.clone(),
-                message_count: updated_session.message_count,
-                total_tokens: updated_session.total_tokens,
-                context_runtime_state: updated_session.context_runtime_state.clone(),
-                last_assistant_text: runtime::extract_last_assistant_text(
-                    &updated_session.messages_json,
-                ),
-                completion_report: None,
-                persisted_child_evidence: Vec::new(),
-                persisted_child_transcript_resume: Vec::new(),
-                transition_trace: None,
-                events_emitted: 0,
-                signal_summary: None,
-                completion_outcome: None,
-            })
+            .await
+            {
+                tracing::warn!(
+                    "Failed to dispatch queued work for agent {} after channel execution: {}",
+                    req.agent_id,
+                    error
+                );
+            }
+
+            direct_result
         };
 
         exec_result

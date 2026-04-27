@@ -60,57 +60,45 @@ impl HostExecutionRouter {
         self.path
     }
 
-    pub async fn route_chat<T, FD, FB, FutD, FutB>(
+    pub async fn route_chat<T, FD, FutD>(
         &self,
         request: ChatHostRouteRequest,
         direct: FD,
-        bridge: FB,
     ) -> Result<T>
     where
         FD: FnOnce(ChatHostRouteRequest) -> FutD,
-        FB: FnOnce(ChatHostRouteRequest) -> FutB,
         FutD: std::future::Future<Output = Result<T>>,
-        FutB: std::future::Future<Output = Result<T>>,
     {
         match self.path {
             HostExecutionPath::DirectHarness => direct(request).await,
-            HostExecutionPath::Bridge => bridge(request).await,
         }
     }
 
-    pub async fn route_channel<T, FD, FB, FutD, FutB>(
+    pub async fn route_channel<T, FD, FutD>(
         &self,
         request: ChannelHostRouteRequest,
         direct: FD,
-        bridge: FB,
     ) -> Result<T>
     where
         FD: FnOnce(ChannelHostRouteRequest) -> FutD,
-        FB: FnOnce(ChannelHostRouteRequest) -> FutB,
         FutD: std::future::Future<Output = Result<T>>,
-        FutB: std::future::Future<Output = Result<T>>,
     {
         match self.path {
             HostExecutionPath::DirectHarness => direct(request).await,
-            HostExecutionPath::Bridge => bridge(request).await,
         }
     }
 
-    pub async fn route_document_analysis<T, FD, FB, FutD, FutB>(
+    pub async fn route_document_analysis<T, FD, FutD>(
         &self,
         request: DocumentAnalysisHostRouteRequest,
         direct: FD,
-        bridge: FB,
     ) -> Result<T>
     where
         FD: FnOnce(DocumentAnalysisHostRouteRequest) -> FutD,
-        FB: FnOnce(DocumentAnalysisHostRouteRequest) -> FutB,
         FutD: std::future::Future<Output = Result<T>>,
-        FutB: std::future::Future<Output = Result<T>>,
     {
         match self.path {
             HostExecutionPath::DirectHarness => direct(request).await,
-            HostExecutionPath::Bridge => bridge(request).await,
         }
     }
 }
@@ -124,53 +112,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn chat_router_uses_bridge_path_when_disabled() {
-        let router = HostExecutionRouter::new(HostExecutionPath::Bridge);
-        let called = Arc::new(Mutex::new(Vec::new()));
-        let request = ChatHostRouteRequest {
-            session_id: "session-1".to_string(),
-            agent_id: "agent-1".to_string(),
-            user_message: "hello".to_string(),
-            workspace_path: "/tmp/workspace".to_string(),
-            turn_system_instruction: None,
-            target_artifacts: Vec::new(),
-            result_contract: Vec::new(),
-            validation_mode: false,
-        };
-
-        let result = router
-            .route_chat(
-                request,
-                {
-                    let called = called.clone();
-                    |req| async move {
-                        called
-                            .lock()
-                            .await
-                            .push(format!("direct:{}", req.session_id));
-                        Ok("direct")
-                    }
-                },
-                {
-                    let called = called.clone();
-                    |req| async move {
-                        called
-                            .lock()
-                            .await
-                            .push(format!("bridge:{}", req.session_id));
-                        Ok("bridge")
-                    }
-                },
-            )
-            .await
-            .expect("route should succeed");
-
-        assert_eq!(result, "bridge");
-        assert_eq!(called.lock().await.as_slice(), ["bridge:session-1"]);
-    }
-
-    #[tokio::test]
-    async fn channel_router_uses_direct_path_when_enabled() {
+    async fn channel_router_uses_direct_path() {
         let router = HostExecutionRouter::new(HostExecutionPath::DirectHarness);
         let called = Arc::new(Mutex::new(Vec::new()));
         let request = ChannelHostRouteRequest {
@@ -195,16 +137,6 @@ mod tests {
                             .await
                             .push(format!("direct:{}", req.channel_id));
                         Ok("direct")
-                    }
-                },
-                {
-                    let called = called.clone();
-                    |req| async move {
-                        called
-                            .lock()
-                            .await
-                            .push(format!("bridge:{}", req.channel_id));
-                        Ok("bridge")
                     }
                 },
             )
@@ -238,7 +170,6 @@ mod tests {
                         .and_then(|value| value.get("model").cloned())
                         .and_then(|value| value.as_str().map(str::to_string)))
                 },
-                |_req| async move { Ok(None) },
             )
             .await
             .expect("route should succeed");

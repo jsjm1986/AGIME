@@ -1,7 +1,8 @@
-//! Task executor for running agent tasks (MongoDB version)
+//! Legacy task executor for running mission/AgentTask workloads (MongoDB version)
 //!
-//! This module provides the TaskExecutor which executes approved tasks
-//! using the agime Provider abstraction layer for unified LLM access.
+//! Chat, channel, document-analysis, and scheduled-task surfaces are owned by
+//! DirectHarness V4. Do not route new user-facing conversational surfaces back
+//! through this executor.
 
 use agime::agents::extension::ExtensionInfo;
 use agime::agents::final_output_tool::{
@@ -162,9 +163,8 @@ const MAX_UNIFIED_MAX_TURNS: usize = 5000;
 
 /// Maximum characters for a single tool result before truncation
 const MAX_TOOL_RESULT_CHARS: usize = 32_000;
-/// Compatibility path only: TaskExecutor/bridge routes still compact here.
-/// Direct chat/channel/document host traffic does not use this constant; it
-/// routes into agime harness compaction via HostExecutionRouter instead.
+/// Compatibility path only: legacy mission/AgentTask execution still compacts here.
+/// DirectHarness V4 owns chat/channel/document/scheduled-task context runtime.
 /// This path intentionally stays on legacy segmented compaction.
 const SERVER_COMPACTION_MODE: &str = "legacy_segmented";
 /// If context usage reaches this ratio again soon after compaction, allow immediate re-compaction.

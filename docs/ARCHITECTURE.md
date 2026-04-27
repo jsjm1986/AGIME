@@ -40,7 +40,7 @@ graph LR
     end
 
     subgraph Layer4["执行层"]
-        Executors["TaskExecutor<br/>ChatExecutor<br/>MissionExecutor"]
+        Executors["DirectHarness V4 surfaces<br/>Chat/Channel/Document/Scheduled<br/>Legacy Mission/AgentTask"]
     end
 
     subgraph Layer5["运行时层"]
@@ -282,8 +282,9 @@ sequenceDiagram
     participant Routes as chat_routes.rs
     participant Manager as ChatManager
     participant Executor as ChatExecutor
-    participant Runtime as runtime.rs
-    participant Task as TaskExecutor
+    participant Host as ServerHarnessHost
+    participant Harness as agime harness
+    participant Context as context_runtime
     participant Provider as LLM Provider
     participant MCP as MCP Connector
     participant DB as MongoDB
@@ -292,15 +293,16 @@ sequenceDiagram
     Routes->>Manager: get_or_create_executor()
     Manager-->>Routes: ChatExecutor
     Routes->>Executor: send_message()
-    Executor->>Runtime: create_temp_task()
-    Runtime->>Task: execute_task()
-    Task->>Provider: complete()
+    Executor->>Host: execute_chat_host()
+    Host->>Harness: run_harness_host()
+    Harness->>Context: project/session context
+    Harness->>Provider: complete()
     Provider->>MCP: 调用工具
     MCP-->>Provider: 工具结果
-    Provider-->>Task: LLM响应
-    Task->>Client: StreamEvent广播 (SSE)
+    Provider-->>Harness: LLM响应
+    Harness->>Client: StreamEvent广播 (SSE)
     Note over Client: 前端实时显示
-    Task->>DB: 批量持久化<br/>(128事件/25ms)
+    Executor->>DB: 批量持久化<br/>(128事件/25ms)
 ```
 
 ### Mission Track流程 (Phase 2 - 目标驱动)

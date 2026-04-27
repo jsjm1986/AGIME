@@ -22,8 +22,8 @@ graph LR
     end
 
     subgraph Execution["执行层"]
-        TaskExecutor[TaskExecutor]
-        ChatManager[ChatManager]
+        DirectHarness[DirectHarness V4<br/>Chat/Channel/Document/Scheduled]
+        TaskExecutor[Legacy TaskExecutor<br/>Mission/AgentTask]
         MissionExec[MissionExec]
     end
 

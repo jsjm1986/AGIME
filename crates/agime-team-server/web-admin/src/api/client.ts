@@ -498,6 +498,20 @@ class ApiClient {
     await this.request(`/team/skills/${skillId}`, { method: "DELETE" });
   }
 
+  async approveSkill(skillId: string, note?: string): Promise<SharedSkill> {
+    return this.request(`/team/skills/${skillId}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    });
+  }
+
+  async rejectSkill(skillId: string, note?: string): Promise<SharedSkill> {
+    return this.request(`/team/skills/${skillId}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    });
+  }
+
   async searchSkillRegistry(
     teamId: string,
     query: string,

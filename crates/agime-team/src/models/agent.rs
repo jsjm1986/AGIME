@@ -557,6 +557,7 @@ impl TeamAgent {
             .map(|ext| AgentExtensionConfig {
                 extension: ext,
                 enabled: true,
+                allowed_groups: Vec::new(),
             })
             .collect();
         Self {

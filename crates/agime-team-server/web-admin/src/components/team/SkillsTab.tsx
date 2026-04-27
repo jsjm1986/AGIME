@@ -59,6 +59,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set());
   const [fetchingSkillId, setFetchingSkillId] = useState<string | null>(null);
   const [backfilling, setBackfilling] = useState(false);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
 
   const getErrorMsg = useCallback((err: unknown, fallbackKey = 'common.error') => (
@@ -189,6 +190,46 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
     }
   };
 
+  const handleReview = async (skillId: string, action: 'approve' | 'reject') => {
+    setReviewingId(skillId);
+    try {
+      if (action === 'approve') {
+        await apiClient.approveSkill(skillId);
+      } else {
+        await apiClient.rejectSkill(skillId);
+      }
+      await loadSkills();
+    } catch (err) {
+      setError(getErrorMsg(err));
+    } finally {
+      setReviewingId(null);
+    }
+  };
+
+  const reviewStatusLabel = (status?: string) => {
+    switch (status) {
+      case 'pending_review':
+        return t('teams.resource.review.pending', '待审核');
+      case 'rejected':
+        return t('teams.resource.review.rejected', '已拒绝');
+      case 'approved':
+      default:
+        return t('teams.resource.review.approved', '已通过');
+    }
+  };
+
+  const reviewStatusClassName = (status?: string) => {
+    switch (status) {
+      case 'pending_review':
+        return 'border-[hsl(var(--status-warning-text))/0.28] bg-[hsl(var(--status-warning-bg))] text-[hsl(var(--status-warning-text))]';
+      case 'rejected':
+        return 'border-[hsl(var(--status-error-text))/0.28] bg-[hsl(var(--status-error-bg))] text-[hsl(var(--status-error-text))]';
+      case 'approved':
+      default:
+        return 'border-[hsl(var(--status-success-text))/0.22] bg-[hsl(var(--status-success-bg))] text-[hsl(var(--status-success-text))]';
+    }
+  };
+
   if (loading) {
     return <p className="text-center py-8 text-[hsl(var(--muted-foreground))]">{t('common.loading')}</p>;
   }
@@ -227,12 +268,12 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
               <RefreshCw className={`h-4 w-4 mr-2 ${backfilling ? 'animate-spin' : ''}`} />
               {t('teams.resource.backfillMd')}
             </Button>
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              {t('teams.resource.createSkill')}
-            </Button>
           </>
         ) : null}
+        <Button onClick={() => setCreateDialogOpen(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          {t('teams.resource.createSkill')}
+        </Button>
       </div>
 
       <section className="mb-5 overflow-hidden rounded-[24px] border border-[hsl(var(--ui-line-soft))]/70 bg-[linear-gradient(135deg,hsl(var(--ui-surface-panel-strong))_0%,hsl(var(--ui-surface-panel-muted))_100%)] shadow-[0_16px_36px_hsl(var(--ui-shadow)/0.06)]">
@@ -316,6 +357,9 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                     v{skill.version}
                   </div>
                 </div>
+                <div className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${reviewStatusClassName(skill.reviewStatus)}`}>
+                  {reviewStatusLabel(skill.reviewStatus)}
+                </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                   <div className="rounded-2xl bg-[hsl(var(--ui-surface-panel-muted))] px-3 py-2">
@@ -354,7 +398,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                     size="sm"
                     className="h-9 rounded-full px-3"
                     onClick={() => void handleInstall(skill.id)}
-                    disabled={installingId === skill.id}
+                    disabled={installingId === skill.id || skill.reviewStatus === 'pending_review' || skill.reviewStatus === 'rejected'}
                   >
                     <Download className="mr-1.5 h-4 w-4" />
                     {t('teams.resource.install')}
@@ -379,6 +423,28 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                   </Button>
                   {canManage ? (
                     <>
+                      {skill.reviewStatus === 'pending_review' ? (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 rounded-full px-3"
+                            onClick={() => void handleReview(skill.id, 'approve')}
+                            disabled={reviewingId === skill.id}
+                          >
+                            {t('teams.resource.review.approve', '通过')}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 rounded-full px-3 text-[hsl(var(--destructive))] hover:text-[hsl(var(--destructive))]"
+                            onClick={() => void handleReview(skill.id, 'reject')}
+                            disabled={reviewingId === skill.id}
+                          >
+                            {t('teams.resource.review.reject', '拒绝')}
+                          </Button>
+                        </>
+                      ) : null}
                       <Button
                         variant="outline"
                         size="sm"
@@ -423,6 +489,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                 <TableHead>{t('teams.resource.name')}</TableHead>
                 <TableHead>{t('teams.resource.author')}</TableHead>
                 <TableHead>{t('teams.resource.version')}</TableHead>
+                <TableHead>{t('teams.resource.review.status', '审核状态')}</TableHead>
                 <TableHead>{t('teams.resource.usageCount')}</TableHead>
                 <TableHead className="w-[150px] sm:w-[180px]">{t('common.actions')}</TableHead>
               </TableRow>
@@ -434,6 +501,11 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                     <TableCell className="font-medium">{skill.name}</TableCell>
                     <TableCell>{skill.authorId}</TableCell>
                     <TableCell>{skill.version}</TableCell>
+                    <TableCell>
+                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${reviewStatusClassName(skill.reviewStatus)}`}>
+                        {reviewStatusLabel(skill.reviewStatus)}
+                      </span>
+                    </TableCell>
                     <TableCell>{skill.useCount}</TableCell>
                     <TableCell>
                       <div className="flex gap-1">
@@ -443,7 +515,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                         <Button variant="ghost" size="sm" onClick={() => void handleAiDescribe(skill.id)} disabled={describingId === skill.id} title={t('aiInsights.describe')}>
                           <Sparkles className={`h-4 w-4 ${skill.aiDescription ? 'text-status-warning-text' : ''} ${describingId === skill.id ? 'animate-spin' : ''}`} />
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => void handleInstall(skill.id)} disabled={installingId === skill.id} title={t('teams.resource.install')}>
+                        <Button variant="ghost" size="sm" onClick={() => void handleInstall(skill.id)} disabled={installingId === skill.id || skill.reviewStatus === 'pending_review' || skill.reviewStatus === 'rejected'} title={t('teams.resource.install')}>
                           <Download className="h-4 w-4" />
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => setConfirmAction({ type: 'uninstall', id: skill.id })} title={t('teams.resource.uninstall')}>
@@ -454,6 +526,16 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                         </Button>
                         {canManage ? (
                           <>
+                            {skill.reviewStatus === 'pending_review' ? (
+                              <>
+                                <Button variant="ghost" size="sm" onClick={() => void handleReview(skill.id, 'approve')} disabled={reviewingId === skill.id} title={t('teams.resource.review.approve', '通过')}>
+                                  {t('teams.resource.review.approveShort', '过')}
+                                </Button>
+                                <Button variant="ghost" size="sm" onClick={() => void handleReview(skill.id, 'reject')} disabled={reviewingId === skill.id} title={t('teams.resource.review.reject', '拒绝')}>
+                                  {t('teams.resource.review.rejectShort', '拒')}
+                                </Button>
+                              </>
+                            ) : null}
                             <Button variant="ghost" size="sm" onClick={() => void handleViewOrEdit(skill, 'edit')} disabled={fetchingSkillId === skill.id} title={t('common.edit')}>
                               <Pencil className="h-4 w-4" />
                             </Button>
@@ -467,7 +549,7 @@ export function SkillsTab({ teamId, canManage }: SkillsTabProps) {
                   </TableRow>
                   {expandedDescriptions.has(skill.id) && skill.aiDescription ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="bg-[hsl(var(--ui-surface-panel-muted))/0.76] p-4">
+                      <TableCell colSpan={6} className="bg-[hsl(var(--ui-surface-panel-muted))/0.76] p-4">
                         <div className="text-sm whitespace-pre-wrap">{skill.aiDescription}</div>
                         {skill.aiDescribedAt ? (
                           <div className="ui-tertiary-text mt-2 text-xs">

@@ -77,6 +77,10 @@ export interface SharedSkill {
   previousVersionId: string | null;
   visibility: string;
   protectionLevel: string;
+  reviewStatus?: 'pending_review' | 'approved' | 'rejected' | string;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
   dependencies: string[];
   tags: string[];
   aiDescription?: string | null;
@@ -458,6 +462,7 @@ export interface TeamSettingsResponse {
   requireExtensionReview: boolean;
   membersCanInvite: boolean;
   defaultVisibility: string;
+  skillUploadPolicy?: 'auto_approve' | 'require_admin_review' | string;
   documentAnalysis: DocumentAnalysisSettings;
   aiDescribe: AiDescribeSettings;
   generalAgent: GeneralAgentSettings;
@@ -479,6 +484,7 @@ export interface UpdateDocumentAnalysisSettings {
 }
 
 export interface UpdateTeamSettingsRequest {
+  skillUploadPolicy?: 'auto_approve' | 'require_admin_review';
   documentAnalysis?: UpdateDocumentAnalysisSettings;
   aiDescribe?: AiDescribeSettings;
   generalAgent?: GeneralAgentSettings;

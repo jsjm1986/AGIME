@@ -977,6 +977,7 @@ mod tests {
             baseline_enabled_extensions.push(AgentExtensionConfig {
                 extension: BuiltinExtension::SkillRegistry,
                 enabled: false,
+                allowed_groups: Vec::new(),
             });
         }
 
@@ -3203,6 +3204,7 @@ impl PortalToolsProvider {
                             next_enabled_extensions.push(AgentExtensionConfig {
                                 extension: *builtin,
                                 enabled: false,
+                                allowed_groups: Vec::new(),
                             });
                         }
                         builtin_extension_results.push(json!({
@@ -3224,6 +3226,7 @@ impl PortalToolsProvider {
                             next_enabled_extensions.push(AgentExtensionConfig {
                                 extension: *builtin,
                                 enabled: true,
+                                allowed_groups: Vec::new(),
                             });
                         }
                         builtin_extension_results.push(json!({

@@ -812,10 +812,36 @@ fn is_runtime_legacy_builtin_extension(extension: BuiltinExtension) -> bool {
     matches!(extension, BuiltinExtension::Team)
 }
 
+fn sanitize_group_ids(groups: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    groups
+        .into_iter()
+        .map(|group| group.trim().to_string())
+        .filter(|group| !group.is_empty())
+        .filter(|group| seen.insert(group.clone()))
+        .collect()
+}
+
 fn sanitize_enabled_extensions(configs: Vec<AgentExtensionConfig>) -> Vec<AgentExtensionConfig> {
     configs
         .into_iter()
+        .map(|mut config| {
+            config.allowed_groups = sanitize_group_ids(config.allowed_groups);
+            config
+        })
         .filter(|config| !is_runtime_legacy_builtin_extension(config.extension))
+        .collect()
+}
+
+fn sanitize_assigned_skills(skills: Vec<AgentSkillConfig>) -> Vec<AgentSkillConfig> {
+    skills
+        .into_iter()
+        .map(|mut skill| {
+            skill.skill_id = skill.skill_id.trim().to_string();
+            skill.allowed_groups = sanitize_group_ids(skill.allowed_groups);
+            skill
+        })
+        .filter(|skill| !skill.skill_id.is_empty())
         .collect()
 }
 
@@ -838,6 +864,7 @@ fn sanitize_attached_team_extensions(
                 .transport
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty());
+            item.allowed_groups = sanitize_group_ids(item.allowed_groups);
             item
         })
         .filter(|item| !item.extension_id.is_empty())
@@ -879,7 +906,7 @@ impl From<TeamAgentDoc> for TeamAgent {
             auto_compact_threshold: doc.auto_compact_threshold,
             prompt_caching_mode: doc.prompt_caching_mode,
             cache_edit_mode: doc.cache_edit_mode,
-            assigned_skills: doc.assigned_skills,
+            assigned_skills: sanitize_assigned_skills(doc.assigned_skills),
             skill_binding_mode: doc.skill_binding_mode,
             delegation_policy: doc.delegation_policy,
             attached_team_extensions: sanitize_attached_team_extensions(
@@ -3156,6 +3183,7 @@ impl AgentService {
                     .map(|ext| AgentExtensionConfig {
                         extension: ext,
                         enabled: true,
+                        allowed_groups: Vec::new(),
                     })
                     .collect()
             }));
@@ -3195,7 +3223,7 @@ impl AgentService {
             auto_compact_threshold: req.auto_compact_threshold,
             prompt_caching_mode: req.prompt_caching_mode.unwrap_or_default(),
             cache_edit_mode: req.cache_edit_mode.unwrap_or_default(),
-            assigned_skills: req.assigned_skills.unwrap_or_default(),
+            assigned_skills: sanitize_assigned_skills(req.assigned_skills.unwrap_or_default()),
             skill_binding_mode: req.skill_binding_mode.unwrap_or_default(),
             delegation_policy: req.delegation_policy.unwrap_or_default(),
             attached_team_extensions,
@@ -4605,7 +4633,8 @@ impl AgentService {
         }
         if let Some(ref assigned_skills) = req.assigned_skills {
             let skills_bson =
-                mongodb::bson::to_bson(assigned_skills).unwrap_or(bson::Bson::Array(vec![]));
+                mongodb::bson::to_bson(&sanitize_assigned_skills(assigned_skills.clone()))
+                    .unwrap_or(bson::Bson::Array(vec![]));
             set_doc.insert("assigned_skills", skills_bson);
         }
         if let Some(skill_binding_mode) = req.skill_binding_mode {
@@ -5053,6 +5082,7 @@ impl AgentService {
         AttachedTeamExtensionRef {
             extension_id: ext.id.map(|id| id.to_hex()).unwrap_or_default(),
             enabled: true,
+            allowed_groups: Vec::new(),
             runtime_name: Some(ext.name.clone()),
             display_name: Some(ext.name.clone()),
             transport: Some(ext.extension_type.clone()),
@@ -5587,6 +5617,13 @@ impl AgentService {
                 "Skill does not belong to this team".to_string(),
             ));
         }
+        if !agime_team::services::mongo::skill_service_mongo::SkillService::is_approved(
+            &skill.review_status,
+        ) {
+            return Err(ServiceError::Internal(
+                "Skill is not approved for runtime use".to_string(),
+            ));
+        }
 
         // 2. Get current agent
         let agent = self
@@ -5613,6 +5650,7 @@ impl AgentService {
             name: skill.name,
             description: skill.description.clone(),
             enabled: true,
+            allowed_groups: Vec::new(),
             version: skill.version.clone(),
         };
 
@@ -5680,7 +5718,7 @@ impl AgentService {
 
         // Get all team skills via list() with large limit
         let result = skill_service
-            .list(team_id, Some(1), Some(200), None, None)
+            .list_runtime_approved(team_id, Some(1), Some(200), None, None)
             .await
             .map_err(|e| ServiceError::Internal(e.to_string()))?;
 

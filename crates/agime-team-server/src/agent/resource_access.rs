@@ -14,6 +14,10 @@ pub(crate) fn is_runtime_resource_allowed(visibility: &str, protection_level: &s
         && is_runtime_protection_level_allowed(protection_level)
 }
 
+pub(crate) fn is_runtime_review_approved(review_status: &str) -> bool {
+    review_status.trim().eq_ignore_ascii_case("approved")
+}
+
 pub(crate) fn is_runtime_visibility_allowed(visibility: &str) -> bool {
     matches!(normalize(visibility).as_str(), "team" | "public")
 }

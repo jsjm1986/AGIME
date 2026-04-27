@@ -47,6 +47,7 @@ type AttachedTeamExtensionWire = {
   runtimeName?: string;
   displayName?: string;
   transport?: string;
+  allowedGroups?: string[];
 };
 
 const MAX_MODEL_RUNTIME_TOKENS = 2_000_000;
@@ -78,7 +79,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
 
   // Extension configuration state
   const [enabledExtensions, setEnabledExtensions] = useState<AgentExtensionConfig[]>(
-    DEFAULT_EXTENSIONS.map((ext) => ({ extension: ext, enabled: true }))
+    DEFAULT_EXTENSIONS.map((ext) => ({ extension: ext, enabled: true, allowed_groups: [] }))
   );
   const [customExtensions, setCustomExtensions] = useState<CustomExtensionConfig[]>([]);
   const [attachedTeamExtensions, setAttachedTeamExtensions] = useState<AttachedTeamExtensionRef[]>([]);
@@ -218,6 +219,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
           runtimeName: item.runtime_name,
           displayName: item.display_name,
           transport: item.transport,
+          allowedGroups: item.allowed_groups ?? item.allowedGroups ?? [],
         })),
       };
       await agentApi.createAgent(wireReq as unknown as CreateAgentRequest);
@@ -240,7 +242,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
     setModel('');
     setApiKey('');
     setApiFormat('openai');
-    setEnabledExtensions(DEFAULT_EXTENSIONS.map((ext) => ({ extension: ext, enabled: true })));
+    setEnabledExtensions(DEFAULT_EXTENSIONS.map((ext) => ({ extension: ext, enabled: true, allowed_groups: [] })));
     setCustomExtensions([]);
     setAttachedTeamExtensions([]);
     setSkillBindingMode('hybrid');
@@ -562,6 +564,7 @@ export function CreateAgentDialog({ teamId, open, onOpenChange, onCreated }: Pro
                 onCustomChange={setCustomExtensions}
                 onAttachedTeamExtensionsChange={setAttachedTeamExtensions}
                 teamId={teamId}
+                availableGroups={availableGroups}
               />
             </TabsContent>
 

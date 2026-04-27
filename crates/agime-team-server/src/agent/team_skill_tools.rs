@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::resource_access::is_runtime_resource_allowed;
+use super::resource_access::{is_runtime_resource_allowed, is_runtime_review_approved};
 
 const MAX_SKILL_CONTENT_BYTES: usize = 128 * 1024;
 const DEFAULT_SEARCH_LIMIT: u64 = 20;
@@ -271,7 +271,7 @@ impl TeamSkillToolsProvider {
 
         let svc = self.service();
         let result = svc
-            .list(
+            .list_runtime_approved(
                 &self.team_id,
                 Some(1),
                 Some(limit),
@@ -284,6 +284,7 @@ impl TeamSkillToolsProvider {
             .items
             .into_iter()
             .filter(|s| is_runtime_resource_allowed(&s.visibility, &s.protection_level))
+            .filter(|s| is_runtime_review_approved(&s.review_status))
             .filter(|s| self.is_skill_allowed(&s.id))
             .collect();
 
@@ -343,6 +344,9 @@ impl TeamSkillToolsProvider {
             return Err(anyhow!(
                 "Skill is not available to runtime due to visibility/protection policy"
             ));
+        }
+        if !is_runtime_review_approved(&skill.review_status) {
+            return Err(anyhow!("Skill is not approved for runtime use"));
         }
 
         let mut content = skill

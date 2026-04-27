@@ -23,6 +23,7 @@ import {
   BUILTIN_EXTENSIONS,
   BuiltinExtension,
 } from '../../api/agent';
+import type { UserGroupSummary } from '../../api/userGroups';
 
 interface Props {
   enabledExtensions: AgentExtensionConfig[];
@@ -32,6 +33,7 @@ interface Props {
   onCustomChange: (extensions: CustomExtensionConfig[]) => void;
   onAttachedTeamExtensionsChange: (extensions: AttachedTeamExtensionRef[]) => void;
   teamId?: string;
+  availableGroups?: UserGroupSummary[];
 }
 
 export function ExtensionConfigPanel({
@@ -42,6 +44,7 @@ export function ExtensionConfigPanel({
   onCustomChange,
   onAttachedTeamExtensionsChange,
   teamId,
+  availableGroups = [],
 }: Props) {
   const { t, i18n } = useTranslation();
   const [addCustomOpen, setAddCustomOpen] = useState(false);
@@ -50,6 +53,7 @@ export function ExtensionConfigPanel({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [teamExtensions, setTeamExtensions] = useState<SharedExtension[]>([]);
   const [loadingTeamExtensions, setLoadingTeamExtensions] = useState(false);
+  const [permissionEditorId, setPermissionEditorId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!teamId) {
@@ -96,8 +100,88 @@ export function ExtensionConfigPanel({
       );
     } else {
       // Add new extension config
-      onEnabledChange([...enabledExtensions, { extension: extId, enabled: true }]);
+      onEnabledChange([...enabledExtensions, { extension: extId, enabled: true, allowed_groups: [] }]);
     }
+  };
+
+  const updateBuiltinAllowedGroups = (extId: BuiltinExtension, groups: string[]) => {
+    const existing = enabledExtensions.find((item) => item.extension === extId);
+    if (existing) {
+      onEnabledChange(
+        enabledExtensions.map((item) =>
+          item.extension === extId
+            ? { ...item, allowed_groups: groups, allowedGroups: groups }
+            : item
+        )
+      );
+      return;
+    }
+    onEnabledChange([...enabledExtensions, { extension: extId, enabled: true, allowed_groups: groups }]);
+  };
+
+  const updateAttachedAllowedGroups = (extensionId: string, groups: string[]) => {
+    onAttachedTeamExtensionsChange(
+      attachedTeamExtensions.map((item) =>
+        item.extension_id === extensionId
+          ? { ...item, allowed_groups: groups, allowedGroups: groups }
+          : item
+      )
+    );
+  };
+
+  const renderPermissionEditor = (
+    editorId: string,
+    selectedGroups: string[] | undefined,
+    onChange: (groups: string[]) => void,
+  ) => {
+    if (availableGroups.length === 0) return null;
+    const current = selectedGroups ?? [];
+    const label = current.length === 0
+      ? t('agent.capabilityAccess.inheritAgent', '继承 Agent')
+      : t('agent.capabilityAccess.groupCount', '{{count}} 个用户组', { count: current.length });
+    return (
+      <span className="relative inline-flex items-center">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-6 px-2 text-xs"
+          onClick={() => setPermissionEditorId(permissionEditorId === editorId ? null : editorId)}
+        >
+          {t('agent.capabilityAccess.label', '使用权限')}: {label}
+        </Button>
+        {permissionEditorId === editorId && (
+          <span className="absolute left-0 top-7 z-20 flex w-[320px] flex-wrap gap-1 rounded-md border bg-popover p-2 shadow">
+            <Button
+              type="button"
+              size="sm"
+              variant={current.length === 0 ? 'default' : 'outline'}
+              className="h-6 px-2 text-xs"
+              onClick={() => onChange([])}
+            >
+              {t('agent.capabilityAccess.inheritAgent', '继承 Agent')}
+            </Button>
+            {availableGroups.map((group) => {
+              const selected = current.includes(group.id);
+              return (
+                <Button
+                  key={group.id}
+                  type="button"
+                  size="sm"
+                  variant={selected ? 'default' : 'outline'}
+                  className="h-6 px-2 text-xs"
+                  onClick={() =>
+                    onChange(selected ? current.filter((item) => item !== group.id) : [...current, group.id])
+                  }
+                >
+                  {group.name}
+                </Button>
+              );
+            })}
+          </span>
+        )}
+      </span>
+    );
   };
 
   // Check if extension is enabled
@@ -150,6 +234,7 @@ export function ExtensionConfigPanel({
         runtime_name: extension.name,
         display_name: extension.name,
         transport: extension.extensionType,
+        allowed_groups: [],
       },
     ]);
   };
@@ -205,6 +290,11 @@ export function ExtensionConfigPanel({
                   >
                     {ext.name}
                   </Badge>
+                  {isEnabled(ext.id) && renderPermissionEditor(
+                    `builtin:${ext.id}`,
+                    enabledExtensions.find((item) => item.extension === ext.id)?.allowed_groups,
+                    (groups) => updateBuiltinAllowedGroups(ext.id, groups),
+                  )}
                   {teamId && (
                     <Button
                       type="button"
@@ -250,6 +340,11 @@ export function ExtensionConfigPanel({
                   >
                     {ext.name}
                   </Badge>
+                  {isEnabled(ext.id) && renderPermissionEditor(
+                    `builtin:${ext.id}`,
+                    enabledExtensions.find((item) => item.extension === ext.id)?.allowed_groups,
+                    (groups) => updateBuiltinAllowedGroups(ext.id, groups),
+                  )}
                   {teamId && (
                     <Button
                       type="button"
@@ -339,9 +434,9 @@ export function ExtensionConfigPanel({
               {attachedTeamExtensions.map((ext) => (
                 <div
                   key={`team-${ext.extension_id}`}
-                  className="flex items-center justify-between p-2 border rounded"
+                  className="flex items-center justify-between gap-2 p-2 border rounded"
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Badge
                       variant={ext.enabled ? 'default' : 'outline'}
                       className="cursor-pointer"
@@ -363,6 +458,11 @@ export function ExtensionConfigPanel({
                     <Badge variant="secondary" className="text-xs">
                       Team
                     </Badge>
+                    {renderPermissionEditor(
+                      `team:${ext.extension_id}`,
+                      ext.allowed_groups ?? ext.allowedGroups,
+                      (groups) => updateAttachedAllowedGroups(ext.extension_id, groups),
+                    )}
                   </div>
                   <Button
                     type="button"

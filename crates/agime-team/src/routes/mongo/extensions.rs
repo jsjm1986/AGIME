@@ -10,7 +10,7 @@ use mongodb::bson;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use super::teams::{can_manage_team, is_team_member, AppState};
+use super::teams::{can_manage_team, AppState};
 use super::InstallResponse;
 use crate::models::mongo::SmartLogContext;
 use crate::services::mongo::{ExtensionService, TeamService};
@@ -159,10 +159,10 @@ async fn list_extensions(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
 
-    if !is_team_member(&team, &user.0) {
+    if !can_manage_team(&team, &user.0) {
         return Err((
             StatusCode::FORBIDDEN,
-            "Only team members can view extensions".to_string(),
+            "Only team admin or owner can view extensions".to_string(),
         ));
     }
 
@@ -225,10 +225,10 @@ async fn create_extension(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
 
-    if !is_team_member(&team, &user.0) {
+    if !can_manage_team(&team, &user.0) {
         return Err((
             StatusCode::FORBIDDEN,
-            "Only team members can create extensions".to_string(),
+            "Only team admin or owner can create extensions".to_string(),
         ));
     }
 
@@ -345,10 +345,10 @@ async fn get_extension(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
 
-    if !is_team_member(&team, &user.0) {
+    if !can_manage_team(&team, &user.0) {
         return Err((
             StatusCode::FORBIDDEN,
-            "Only team members can view extensions".to_string(),
+            "Only team admin or owner can view extensions".to_string(),
         ));
     }
 
@@ -451,10 +451,10 @@ async fn install_extension(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
 
-    if !is_team_member(&team, &user.0) {
+    if !can_manage_team(&team, &user.0) {
         return Err((
             StatusCode::FORBIDDEN,
-            "Only team members can install extensions".to_string(),
+            "Only team admin or owner can install extensions".to_string(),
         ));
     }
 

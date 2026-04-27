@@ -1809,6 +1809,8 @@ pub struct TeamSettingsResponse {
     pub members_can_invite: bool,
     #[serde(rename = "defaultVisibility")]
     pub default_visibility: String,
+    #[serde(rename = "skillUploadPolicy")]
+    pub skill_upload_policy: String,
     #[serde(rename = "documentAnalysis")]
     pub document_analysis: DocumentAnalysisSettingsResponse,
     #[serde(rename = "aiDescribe")]
@@ -1905,6 +1907,7 @@ impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
             require_extension_review: s.require_extension_review,
             members_can_invite: s.members_can_invite,
             default_visibility: s.default_visibility,
+            skill_upload_policy: s.skill_upload_policy,
             document_analysis: DocumentAnalysisSettingsResponse {
                 enabled: s.document_analysis.enabled,
                 api_url: s.document_analysis.api_url,
@@ -1958,6 +1961,8 @@ impl From<crate::models::mongo::TeamSettings> for TeamSettingsResponse {
 
 #[derive(Debug, Deserialize)]
 struct UpdateTeamSettingsRequest {
+    #[serde(rename = "skillUploadPolicy")]
+    skill_upload_policy: Option<String>,
     #[serde(rename = "documentAnalysis")]
     document_analysis: Option<UpdateDocAnalysisRequest>,
     #[serde(rename = "aiDescribe")]
@@ -2147,6 +2152,22 @@ async fn update_team_settings(
     }
 
     let mut settings = team.settings;
+
+    if let Some(policy) = req.skill_upload_policy {
+        match policy.trim().to_ascii_lowercase().as_str() {
+            "auto_approve" => settings.skill_upload_policy = "auto_approve".to_string(),
+            "require_admin_review" => {
+                settings.skill_upload_policy = "require_admin_review".to_string()
+            }
+            _ => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Invalid skillUploadPolicy; expected auto_approve or require_admin_review"
+                        .to_string(),
+                ));
+            }
+        }
+    }
 
     // Merge document_analysis fields
     if let Some(da) = req.document_analysis {

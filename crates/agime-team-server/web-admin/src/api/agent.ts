@@ -28,6 +28,8 @@ export interface DelegationPolicy {
 export interface AttachedTeamExtensionRef {
   extension_id: string;
   enabled: boolean;
+  allowed_groups?: string[];
+  allowedGroups?: string[];
   runtime_name?: string;
   display_name?: string;
   transport?: string;
@@ -37,6 +39,7 @@ type AttachedTeamExtensionRefWire = Partial<AttachedTeamExtensionRef> & {
   extensionId?: string;
   runtimeName?: string;
   displayName?: string;
+  allowedGroups?: string[];
 };
 
 // Built-in extension types
@@ -58,6 +61,8 @@ export type BuiltinExtension =
 export interface AgentExtensionConfig {
   extension: BuiltinExtension;
   enabled: boolean;
+  allowed_groups?: string[];
+  allowedGroups?: string[];
 }
 
 // Custom extension configuration
@@ -78,6 +83,8 @@ export interface AgentSkillConfig {
   name: string;
   description?: string;
   enabled: boolean;
+  allowed_groups?: string[];
+  allowedGroups?: string[];
   version: string;
 }
 
@@ -174,9 +181,24 @@ function normalizeAttachedTeamExtensionRef(
   return {
     extension_id: raw?.extension_id ?? raw?.extensionId ?? '',
     enabled: raw?.enabled ?? true,
+    allowed_groups: raw?.allowed_groups ?? raw?.allowedGroups ?? [],
     runtime_name: raw?.runtime_name ?? raw?.runtimeName,
     display_name: raw?.display_name ?? raw?.displayName,
     transport: raw?.transport,
+  };
+}
+
+function normalizeAgentExtensionConfig(raw: AgentExtensionConfig): AgentExtensionConfig {
+  return {
+    ...raw,
+    allowed_groups: raw.allowed_groups ?? raw.allowedGroups ?? [],
+  };
+}
+
+function normalizeAgentSkillConfig(raw: AgentSkillConfig): AgentSkillConfig {
+  return {
+    ...raw,
+    allowed_groups: raw.allowed_groups ?? raw.allowedGroups ?? [],
   };
 }
 
@@ -224,7 +246,9 @@ function normalizeAgent(raw: TeamAgentWire): TeamAgent {
     api_url: raw.api_url ?? raw.apiUrl,
     model: raw.model,
     api_format: raw.api_format ?? raw.apiFormat ?? 'openai',
-    enabled_extensions: raw.enabled_extensions ?? raw.enabledExtensions ?? [],
+    enabled_extensions: (raw.enabled_extensions ?? raw.enabledExtensions ?? []).map(
+      normalizeAgentExtensionConfig,
+    ),
     custom_extensions: raw.custom_extensions ?? raw.customExtensions ?? [],
     agent_domain: raw.agent_domain ?? raw.agentDomain,
     agent_role: raw.agent_role ?? raw.agentRole,
@@ -246,7 +270,9 @@ function normalizeAgent(raw: TeamAgentWire): TeamAgent {
     prompt_caching_mode:
       raw.prompt_caching_mode ?? raw.promptCachingMode ?? 'auto',
     cache_edit_mode: raw.cache_edit_mode ?? raw.cacheEditMode ?? 'auto',
-    assigned_skills: raw.assigned_skills ?? raw.assignedSkills ?? [],
+    assigned_skills: (raw.assigned_skills ?? raw.assignedSkills ?? []).map(
+      normalizeAgentSkillConfig,
+    ),
     skill_binding_mode: raw.skill_binding_mode ?? raw.skillBindingMode ?? 'assigned_only',
     delegation_policy: normalizeDelegationPolicy(
       raw.delegation_policy ?? raw.delegationPolicy,

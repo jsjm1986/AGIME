@@ -55,6 +55,14 @@ pub struct SkillInfo {
     pub visibility: String,
     #[serde(rename = "protectionLevel")]
     pub protection_level: String,
+    #[serde(rename = "reviewStatus")]
+    pub review_status: String,
+    #[serde(rename = "reviewedBy", skip_serializing_if = "Option::is_none")]
+    pub reviewed_by: Option<String>,
+    #[serde(rename = "reviewedAt", skip_serializing_if = "Option::is_none")]
+    pub reviewed_at: Option<String>,
+    #[serde(rename = "reviewNote", skip_serializing_if = "Option::is_none")]
+    pub review_note: Option<String>,
     pub tags: Vec<String>,
     #[serde(rename = "useCount")]
     pub use_count: i32,
@@ -100,6 +108,11 @@ pub struct UpdateSkillRequest {
 }
 
 #[derive(Debug, Deserialize, Default)]
+pub struct ReviewSkillRequest {
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
 pub struct VerifyAccessRequest {
     #[serde(rename = "userId")]
     pub _user_id: Option<String>,
@@ -130,6 +143,8 @@ pub fn skill_routes() -> Router<Arc<AppState>> {
             "/skills/{id}",
             get(get_skill).put(update_skill).delete(delete_skill),
         )
+        .route("/skills/{id}/approve", post(approve_skill))
+        .route("/skills/{id}/reject", post(reject_skill))
         .route("/skills/{id}/install", post(install_skill))
         .route("/skills/{id}/uninstall", delete(uninstall_skill))
         .route("/skills/{id}/verify-access", post(verify_skill_access))
@@ -167,6 +182,10 @@ fn skill_to_json(skill: crate::models::mongo::Skill) -> serde_json::Value {
         "previousVersionId": skill.previous_version_id,
         "visibility": skill.visibility,
         "protectionLevel": skill.protection_level,
+        "reviewStatus": skill.review_status,
+        "reviewedBy": skill.reviewed_by,
+        "reviewedAt": skill.reviewed_at.map(|dt| dt.to_rfc3339()),
+        "reviewNote": skill.review_note,
         "dependencies": skill.dependencies,
         "tags": skill.tags,
         "useCount": skill.use_count,
@@ -202,10 +221,13 @@ async fn list_skills(
         ));
     }
 
+    let can_manage = can_manage_team(&team, &user.0);
     let service = SkillService::new((*state.db).clone());
     let result = service
-        .list(
+        .list_visible_for_user(
             &team_id,
+            &user.0,
+            can_manage,
             query.page,
             query.limit,
             query.search.as_deref(),
@@ -228,6 +250,10 @@ async fn list_skills(
             version: s.version,
             visibility: s.visibility,
             protection_level: s.protection_level,
+            review_status: s.review_status,
+            reviewed_by: None,
+            reviewed_at: None,
+            review_note: None,
             tags: s.tags,
             use_count: s.use_count,
             ai_description: s.ai_description,
@@ -409,6 +435,12 @@ async fn get_skill(
             "Only team members can view skills".to_string(),
         ));
     }
+    if !can_manage_team(&team, &user.0) && skill.created_by != user.0 {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Only team admin/owner or the uploader can view this skill".to_string(),
+        ));
+    }
 
     // Lazy-generate skill_md for inline skills that are missing it
     if skill.skill_md.is_none() && matches!(skill.storage_type, SkillStorageType::Inline) {
@@ -440,6 +472,73 @@ async fn get_skill(
     }
 
     Ok(Json(skill_to_json(skill)))
+}
+
+async fn review_skill(
+    state: Arc<AppState>,
+    user: AuthenticatedUserId,
+    id: String,
+    status: &'static str,
+    note: Option<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let service = SkillService::new((*state.db).clone());
+    let skill = service
+        .get(&id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Skill not found".to_string()))?;
+
+    let team_service = TeamService::new((*state.db).clone());
+    let team = team_service
+        .get(&skill.team_id.to_hex())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Team not found".to_string()))?;
+
+    if !can_manage_team(&team, &user.0) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Only team admin or owner can review skills".to_string(),
+        ));
+    }
+
+    let reviewed = service
+        .update_review_status(&id, &user.0, status, note)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(skill_to_json(reviewed)))
+}
+
+async fn approve_skill(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthenticatedUserId>,
+    Path(id): Path<String>,
+    req: Option<Json<ReviewSkillRequest>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    review_skill(
+        state,
+        user,
+        id,
+        "approved",
+        req.and_then(|Json(value)| value.note),
+    )
+    .await
+}
+
+async fn reject_skill(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthenticatedUserId>,
+    Path(id): Path<String>,
+    req: Option<Json<ReviewSkillRequest>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    review_skill(
+        state,
+        user,
+        id,
+        "rejected",
+        req.and_then(|Json(value)| value.note),
+    )
+    .await
 }
 
 async fn update_skill(
@@ -527,6 +626,18 @@ async fn install_skill(
             "Only team members can install skills".to_string(),
         ));
     }
+    if !can_manage_team(&team, &user.0) && skill.created_by != user.0 {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Only team admin/owner or the uploader can install this skill".to_string(),
+        ));
+    }
+    if !SkillService::is_approved(&skill.review_status) {
+        return Err((
+            StatusCode::CONFLICT,
+            "Skill is not approved for runtime use".to_string(),
+        ));
+    }
 
     // Increment use count
     let _ = service.increment_use_count(&id).await;
@@ -577,6 +688,26 @@ async fn verify_skill_access(
             protection_level: skill.protection_level,
             allows_local_install: false,
             error: Some("User is not a member of this team".to_string()),
+        }));
+    }
+    if !can_manage_team(&team, &user.0) && skill.created_by != user.0 {
+        return Ok(Json(VerifyAccessResponse {
+            authorized: false,
+            token: None,
+            expires_at: None,
+            protection_level: skill.protection_level,
+            allows_local_install: false,
+            error: Some("User can only verify uploaded or managed skills".to_string()),
+        }));
+    }
+    if !SkillService::is_approved(&skill.review_status) {
+        return Ok(Json(VerifyAccessResponse {
+            authorized: false,
+            token: None,
+            expires_at: None,
+            protection_level: skill.protection_level,
+            allows_local_install: false,
+            error: Some("Skill is not approved for runtime use".to_string()),
         }));
     }
 

@@ -67,6 +67,9 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
   const [shellSecurityMode, setShellSecurityMode] = useState<'off' | 'warn' | 'block'>('block');
   const [shellSecuritySaving, setShellSecuritySaving] = useState(false);
   const [shellSecurityMsg, setShellSecurityMsg] = useState('');
+  const [skillUploadPolicy, setSkillUploadPolicy] = useState<'auto_approve' | 'require_admin_review'>('auto_approve');
+  const [skillPolicySaving, setSkillPolicySaving] = useState(false);
+  const [skillPolicyMsg, setSkillPolicyMsg] = useState('');
   const [agents, setAgents] = useState<TeamAgent[]>([]);
 
   const isAdmin = team.currentUserRole === 'admin' || team.currentUserRole === 'owner';
@@ -106,6 +109,9 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
       setChatAssistantBusinessContext(s.chatAssistant?.businessContext || '');
       setChatAssistantToneHint(s.chatAssistant?.toneHint || '');
       setShellSecurityMode(s.shellSecurity?.mode || 'block');
+      setSkillUploadPolicy(
+        s.skillUploadPolicy === 'require_admin_review' ? 'require_admin_review' : 'auto_approve'
+      );
     } catch { /* use defaults */ }
     setDaLoading(false);
   };
@@ -250,6 +256,19 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
     }
   };
 
+  const handleSaveSkillPolicy = async () => {
+    setSkillPolicySaving(true);
+    setSkillPolicyMsg('');
+    try {
+      await apiClient.updateTeamSettings(team.id, { skillUploadPolicy });
+      setSkillPolicyMsg(t('teams.settings.skillPolicy.saved'));
+    } catch (err) {
+      setSkillPolicyMsg(err instanceof Error ? err.message : t('common.error'));
+    } finally {
+      setSkillPolicySaving(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <Card className="ui-section-panel">
@@ -279,6 +298,43 @@ export function SettingsTab({ team, onUpdate, onDelete }: SettingsTabProps) {
           </Button>
         </CardContent>
       </Card>
+
+      {isAdmin && !daLoading && (
+        <Card className="ui-section-panel">
+          <CardHeader>
+            <CardTitle className="ui-heading text-[22px]">
+              {t('teams.settings.skillPolicy.title')}
+            </CardTitle>
+            <p className="ui-secondary-text text-sm">
+              {t('teams.settings.skillPolicy.description')}
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Select
+              value={skillUploadPolicy}
+              onValueChange={(value) =>
+                setSkillUploadPolicy(value as 'auto_approve' | 'require_admin_review')
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto_approve">
+                  {t('teams.settings.skillPolicy.autoApprove')}
+                </SelectItem>
+                <SelectItem value="require_admin_review">
+                  {t('teams.settings.skillPolicy.requireReview')}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <Button onClick={handleSaveSkillPolicy} disabled={skillPolicySaving}>
+              {skillPolicySaving ? t('common.saving') : t('common.save')}
+            </Button>
+            {skillPolicyMsg && <p className="text-sm ui-secondary-text">{skillPolicyMsg}</p>}
+          </CardContent>
+        </Card>
+      )}
 
       {isAdmin && !daLoading && (
         <Card className="ui-section-panel">

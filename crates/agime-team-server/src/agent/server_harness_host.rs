@@ -2641,8 +2641,20 @@ impl ServerHarnessHost {
             ));
         }
 
-        let runtime_snapshot =
-            AgentRuntimePolicyResolver::resolve(&effective_agent, Some(session), None);
+        let user_group_ids = agime_team::services::mongo::user_group_service_mongo::UserGroupService::new(
+            (*self.db).clone(),
+        )
+        .get_user_group_ids(&session.team_id, &session.user_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<HashSet<_>>();
+        let runtime_snapshot = AgentRuntimePolicyResolver::resolve_for_user_groups(
+            &effective_agent,
+            Some(session),
+            None,
+            Some(&user_group_ids),
+        );
         let document_analysis_surface = session
             .session_source
             .eq_ignore_ascii_case("document_analysis");
@@ -3103,7 +3115,20 @@ impl ServerHarnessHost {
     ) -> Result<DirectHostPreparedRuntime> {
         let runtime_settings = TeamRuntimeSettings::from_env();
         let api_caller = build_api_caller(agent);
-        let runtime_snapshot = AgentRuntimePolicyResolver::resolve(agent, Some(session), None);
+        let user_group_ids = agime_team::services::mongo::user_group_service_mongo::UserGroupService::new(
+            (*self.db).clone(),
+        )
+        .get_user_group_ids(&session.team_id, &session.user_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<HashSet<_>>();
+        let runtime_snapshot = AgentRuntimePolicyResolver::resolve_for_user_groups(
+            agent,
+            Some(session),
+            None,
+            Some(&user_group_ids),
+        );
 
         let allowed_extension_names: HashSet<String> = runtime_snapshot
             .extensions
@@ -5186,6 +5211,7 @@ mod tests {
             platform_extension_to_agent_extension(&agime_team::models::AgentExtensionConfig {
                 extension: agime_team::models::BuiltinExtension::DocumentTools,
                 enabled: true,
+                allowed_groups: Vec::new(),
             })
             .expect("converted");
 

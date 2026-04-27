@@ -1833,7 +1833,25 @@ impl TaskExecutor {
             None
         };
 
-        let runtime_snapshot = AgentRuntimePolicyResolver::resolve(agent, session.as_ref(), None);
+        let actor_user_id = session
+            .as_ref()
+            .map(|session| session.user_id.as_str())
+            .unwrap_or(task.submitter_id.as_str());
+        let user_group_ids =
+            agime_team::services::mongo::user_group_service_mongo::UserGroupService::new(
+                (*self.db).clone(),
+            )
+            .get_user_group_ids(&task.team_id, actor_user_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let runtime_snapshot = AgentRuntimePolicyResolver::resolve_for_user_groups(
+            agent,
+            session.as_ref(),
+            None,
+            Some(&user_group_ids),
+        );
         let allowed_extension_names: Option<HashSet<String>> = Some(
             runtime_snapshot
                 .extensions

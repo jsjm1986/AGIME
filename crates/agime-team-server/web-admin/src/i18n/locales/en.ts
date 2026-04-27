@@ -889,6 +889,14 @@ export default {
         agentHint: "Only general team agents are listed here. Once saved, the MCP workspace will prefer this agent and agent cards will show the default marker.",
         saved: "Default general agent saved",
       },
+      skillPolicy: {
+        title: "Skill Upload Policy",
+        description:
+          "Members can upload skills. This setting controls whether uploaded skills are immediately available for Agent assignment.",
+        autoApprove: "Auto approve",
+        requireReview: "Require admin review",
+        saved: "Skill upload policy saved",
+      },
       chatAssistant: {
         title: "Chat assistant context",
         description:
@@ -962,6 +970,11 @@ export default {
       idle: "Idle",
       running: "Running {{active}}/{{max}}",
       full: "Full {{active}}/{{max}}",
+    },
+    capabilityAccess: {
+      label: "Access",
+      inheritAgent: "Inherit Agent",
+      groupCount: "{{count}} groups",
     },
     filter: {
       all: "All Status",
@@ -1242,6 +1255,18 @@ export default {
       addSkillToAgent: "Add to Agent",
       addSkillToAgentDesc: 'Select an agent to assign skill "{{name}}" to',
       skillAddedSuccess: 'Skill "{{skill}}" added to agent "{{agent}}"',
+      bindingMode: "Skill Binding Mode",
+      mode: {
+        assignedOnly: "Assigned skills only",
+        hybrid: "Hybrid",
+        onDemandOnly: "On-demand team skills only",
+        assignedOnlyHint:
+          "Runtime can only use skills explicitly assigned to this Agent.",
+        hybridHint:
+          "User sessions use the assigned skills allowed for their groups; system runs can still use on-demand team skills.",
+        onDemandOnlyHint:
+          "User sessions do not expose the full team skill library. Use this only for system runs or assign skills explicitly when users need access.",
+      },
     },
     access: {
       title: "Access Control",

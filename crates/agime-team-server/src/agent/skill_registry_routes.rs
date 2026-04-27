@@ -165,11 +165,11 @@ async fn load_team(
         .ok_or_else(|| json_error(StatusCode::NOT_FOUND, "Team not found"))
 }
 
-async fn require_team_member(
+async fn require_team_member_role(
     state: &Arc<AppState>,
     team_id: &str,
     user_id: &str,
-) -> Result<(), Response> {
+) -> Result<bool, Response> {
     let team = load_team(state, team_id).await?;
     if !is_team_member(&team, user_id) {
         return Err(json_error(
@@ -177,35 +177,22 @@ async fn require_team_member(
             "Only team members can access skill registry",
         ));
     }
-    Ok(())
-}
-
-async fn require_team_manager(
-    state: &Arc<AppState>,
-    team_id: &str,
-    user_id: &str,
-) -> Result<(), Response> {
-    let team = load_team(state, team_id).await?;
-    if !can_manage_team(&team, user_id) {
-        return Err(json_error(
-            StatusCode::FORBIDDEN,
-            "Only team admin or owner can upgrade imported skills",
-        ));
-    }
-    Ok(())
+    Ok(can_manage_team(&team, user_id))
 }
 
 fn registry_provider(
     state: &Arc<AppState>,
     team_id: &str,
     actor_id: &str,
+    actor_can_manage_team: bool,
 ) -> Result<SkillRegistryToolsProvider, Response> {
     let db = state.require_mongodb()?;
     Ok(SkillRegistryToolsProvider::new(
         db,
         team_id.to_string(),
         actor_id.to_string(),
-    ))
+    )
+    .with_actor_can_manage_team(actor_can_manage_team))
 }
 
 async fn search_registry(
@@ -213,8 +200,8 @@ async fn search_registry(
     user: AuthenticatedUserId,
     query: RegistrySearchQuery,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_team_member(&state, &query.team_id, &user.0).await?;
-    let provider = registry_provider(&state, &query.team_id, &user.0)?;
+    let can_manage = require_team_member_role(&state, &query.team_id, &user.0).await?;
+    let provider = registry_provider(&state, &query.team_id, &user.0, can_manage)?;
     let result = provider
         .search_registry(&query.query, query.limit)
         .await
@@ -227,8 +214,8 @@ async fn list_popular_registry_skills(
     user: AuthenticatedUserId,
     query: RegistryPopularQuery,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_team_member(&state, &query.team_id, &user.0).await?;
-    let provider = registry_provider(&state, &query.team_id, &user.0)?;
+    let can_manage = require_team_member_role(&state, &query.team_id, &user.0).await?;
+    let provider = registry_provider(&state, &query.team_id, &user.0, can_manage)?;
     let result = provider
         .list_popular_registry_skills(query.mode.as_deref(), query.limit)
         .await
@@ -241,8 +228,8 @@ async fn preview_registry_skill(
     user: AuthenticatedUserId,
     req: RegistryPreviewRequest,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_team_member(&state, &req.team_id, &user.0).await?;
-    let provider = registry_provider(&state, &req.team_id, &user.0)?;
+    let can_manage = require_team_member_role(&state, &req.team_id, &user.0).await?;
+    let provider = registry_provider(&state, &req.team_id, &user.0, can_manage)?;
     let result = if let Some(install_spec) = req.install_spec.as_deref() {
         provider.preview_registry_install_spec(install_spec).await
     } else {
@@ -259,8 +246,8 @@ async fn list_imported_registry_skills(
     user: AuthenticatedUserId,
     query: RegistryUpdatesQuery,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_team_member(&state, &query.team_id, &user.0).await?;
-    let provider = registry_provider(&state, &query.team_id, &user.0)?;
+    let can_manage = require_team_member_role(&state, &query.team_id, &user.0).await?;
+    let provider = registry_provider(&state, &query.team_id, &user.0, can_manage)?;
     let result = provider
         .list_imported_registry_skills()
         .await
@@ -273,8 +260,8 @@ async fn import_registry_skill(
     user: AuthenticatedUserId,
     req: RegistryImportRequest,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_team_member(&state, &req.team_id, &user.0).await?;
-    let provider = registry_provider(&state, &req.team_id, &user.0)?;
+    let can_manage = require_team_member_role(&state, &req.team_id, &user.0).await?;
+    let provider = registry_provider(&state, &req.team_id, &user.0, can_manage)?;
     let result = if let Some(install_spec) = req.install_spec.as_deref() {
         provider
             .import_registry_install_spec(install_spec, req.visibility.as_deref())
@@ -298,8 +285,8 @@ async fn check_registry_updates(
     user: AuthenticatedUserId,
     query: RegistryUpdatesQuery,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_team_member(&state, &query.team_id, &user.0).await?;
-    let provider = registry_provider(&state, &query.team_id, &user.0)?;
+    let can_manage = require_team_member_role(&state, &query.team_id, &user.0).await?;
+    let provider = registry_provider(&state, &query.team_id, &user.0, can_manage)?;
     let result = provider
         .check_registry_updates(query.imported_skill_id.as_deref())
         .await
@@ -312,8 +299,8 @@ async fn upgrade_registry_skill(
     user: AuthenticatedUserId,
     req: RegistryUpgradeRequest,
 ) -> Result<Json<serde_json::Value>, Response> {
-    require_team_manager(&state, &req.team_id, &user.0).await?;
-    let provider = registry_provider(&state, &req.team_id, &user.0)?;
+    let can_manage = require_team_member_role(&state, &req.team_id, &user.0).await?;
+    let provider = registry_provider(&state, &req.team_id, &user.0, can_manage)?;
     let result = provider
         .upgrade_registry_skill(&req.imported_skill_id, req.force)
         .await

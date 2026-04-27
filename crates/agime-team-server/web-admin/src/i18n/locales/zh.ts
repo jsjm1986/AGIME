@@ -878,6 +878,13 @@ export default {
         agentHint: "只显示常规团队 Agent。设置后，MCP 工作区会默认使用这个 Agent，并在 Agent 卡片中显示默认标记。",
         saved: "通用默认 Agent 已保存",
       },
+      skillPolicy: {
+        title: "技能上传策略",
+        description: "成员可以上传技能；这里控制上传后是否直接可用于 Agent 分配。",
+        autoApprove: "自动通过",
+        requireReview: "管理员审核后可用",
+        saved: "已保存技能上传策略",
+      },
       chatAssistant: {
         title: "聊天助手上下文",
         description:
@@ -950,6 +957,11 @@ export default {
       idle: "空闲",
       running: "运行中 {{active}}/{{max}}",
       full: "满载 {{active}}/{{max}}",
+    },
+    capabilityAccess: {
+      label: "使用权限",
+      inheritAgent: "继承 Agent",
+      groupCount: "{{count}} 个用户组",
     },
     filter: {
       all: "全部状态",
@@ -1224,6 +1236,17 @@ export default {
       addSkillToAgent: "添加到 Agent",
       addSkillToAgentDesc: '选择一个 Agent 来分配技能 "{{name}}"',
       skillAddedSuccess: '技能 "{{skill}}" 已添加到 Agent "{{agent}}"',
+      bindingMode: "技能绑定模式",
+      mode: {
+        assignedOnly: "仅已分配技能",
+        hybrid: "混合模式",
+        onDemandOnly: "仅按需团队技能",
+        assignedOnlyHint: "运行时只允许使用当前 Agent 已明确分配的技能。",
+        hybridHint:
+          "用户会话只暴露已分配且当前用户组允许的技能；系统运行仍可保留按需团队技能能力。",
+        onDemandOnlyHint:
+          "用户会话不会暴露完整团队技能库。如需用户使用，请把技能明确分配到 Agent。",
+      },
     },
     access: {
       title: "访问控制",

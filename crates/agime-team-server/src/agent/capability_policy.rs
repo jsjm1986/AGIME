@@ -353,6 +353,7 @@ impl RuntimeCapabilitySnapshot {
             .map(|item| AgentExtensionConfig {
                 extension: item.extension,
                 enabled: item.enabled,
+                allowed_groups: Vec::new(),
             })
             .collect()
     }
@@ -409,10 +410,28 @@ impl RuntimeCapabilitySnapshot {
 
 pub struct AgentRuntimePolicyResolver;
 
-fn resolved_builtin_capabilities(agent: &TeamAgent) -> Vec<ConfiguredBuiltinCapability> {
+fn capability_allowed_for_groups(
+    allowed_groups: &[String],
+    user_group_ids: Option<&HashSet<String>>,
+) -> bool {
+    if allowed_groups.is_empty() {
+        return true;
+    }
+    user_group_ids
+        .map(|groups| allowed_groups.iter().any(|group| groups.contains(group)))
+        .unwrap_or(true)
+}
+
+fn resolved_builtin_capabilities(
+    agent: &TeamAgent,
+    user_group_ids: Option<&HashSet<String>>,
+) -> Vec<ConfiguredBuiltinCapability> {
     let mut capabilities = Vec::new();
 
     for config in &agent.enabled_extensions {
+        if !capability_allowed_for_groups(&config.allowed_groups, user_group_ids) {
+            continue;
+        }
         if !capabilities
             .iter()
             .any(|item: &ConfiguredBuiltinCapability| item.extension == config.extension)
@@ -428,6 +447,10 @@ fn resolved_builtin_capabilities(agent: &TeamAgent) -> Vec<ConfiguredBuiltinCapa
     for extension in BuiltinExtension::all() {
         let registry = builtin_registry_entry(extension);
         if registry.default_enabled
+            && !agent
+                .enabled_extensions
+                .iter()
+                .any(|item| item.extension == extension)
             && !capabilities
                 .iter()
                 .any(|item: &ConfiguredBuiltinCapability| item.extension == extension)
@@ -448,6 +471,15 @@ impl AgentRuntimePolicyResolver {
         agent: &TeamAgent,
         session: Option<&AgentSessionDoc>,
         portal_effective: Option<&PortalEffectivePublicConfig>,
+    ) -> RuntimeCapabilitySnapshot {
+        Self::resolve_for_user_groups(agent, session, portal_effective, None)
+    }
+
+    pub fn resolve_for_user_groups(
+        agent: &TeamAgent,
+        session: Option<&AgentSessionDoc>,
+        portal_effective: Option<&PortalEffectivePublicConfig>,
+        user_group_ids: Option<&HashSet<String>>,
     ) -> RuntimeCapabilitySnapshot {
         let session_source = session
             .map(|item| item.session_source.clone())
@@ -489,7 +521,7 @@ impl AgentRuntimePolicyResolver {
                 })
             });
 
-        let builtin_capabilities = resolved_builtin_capabilities(agent);
+        let builtin_capabilities = resolved_builtin_capabilities(agent, user_group_ids);
 
         let custom_extensions = agent
             .custom_extensions
@@ -511,7 +543,10 @@ impl AgentRuntimePolicyResolver {
             })
             .cloned()
             .collect::<Vec<_>>();
-        let attached_team_extensions = merge_attached_team_extensions(agent);
+        let attached_team_extensions = merge_attached_team_extensions(agent)
+            .into_iter()
+            .filter(|reference| capability_allowed_for_groups(&reference.allowed_groups, user_group_ids))
+            .collect::<Vec<_>>();
 
         let mut base_extension_names = HashSet::new();
         for item in builtin_capabilities
@@ -573,7 +608,9 @@ impl AgentRuntimePolicyResolver {
         let assigned_skills = agent
             .assigned_skills
             .iter()
-            .filter(|skill| skill.enabled)
+            .filter(|skill| {
+                skill.enabled && capability_allowed_for_groups(&skill.allowed_groups, user_group_ids)
+            })
             .cloned()
             .collect::<Vec<_>>();
         let assigned_skill_ids = normalize_skill_ids(
@@ -587,17 +624,18 @@ impl AgentRuntimePolicyResolver {
                 session_source.as_str(),
                 "portal" | "portal_coding" | "portal_manager" | "system" | "document_analysis"
             );
+        let user_scoped_runtime = user_group_ids.is_some();
         let base_skill_scope = match agent.skill_binding_mode {
             SkillBindingMode::AssignedOnly => Some(assigned_skill_ids.clone()),
             SkillBindingMode::Hybrid => {
-                if restricted_scope {
+                if restricted_scope || user_scoped_runtime {
                     Some(assigned_skill_ids.clone())
                 } else {
                     None
                 }
             }
             SkillBindingMode::OnDemandOnly => {
-                if restricted_scope {
+                if restricted_scope || user_scoped_runtime {
                     Some(Vec::new())
                 } else {
                     None
@@ -946,6 +984,7 @@ fn merge_attached_team_extensions(agent: &TeamAgent) -> Vec<AttachedTeamExtensio
             refs.push(AttachedTeamExtensionRef {
                 extension_id,
                 enabled: extension.enabled,
+                allowed_groups: Vec::new(),
                 runtime_name: Some(extension.name.clone()),
                 display_name: Some(extension.name.clone()),
                 transport: Some(extension.ext_type.clone()),
@@ -970,10 +1009,12 @@ mod tests {
             AgentExtensionConfig {
                 extension: BuiltinExtension::Developer,
                 enabled: true,
+                allowed_groups: Vec::new(),
             },
             AgentExtensionConfig {
                 extension: BuiltinExtension::Skills,
                 enabled: true,
+                allowed_groups: Vec::new(),
             },
         ];
         agent.assigned_skills = vec![AgentSkillConfig {
@@ -981,6 +1022,7 @@ mod tests {
             name: "Skill Alpha".to_string(),
             description: None,
             enabled: true,
+            allowed_groups: Vec::new(),
             version: "1.0.0".to_string(),
         }];
         agent
@@ -1357,6 +1399,7 @@ mod tests {
         agent.attached_team_extensions = vec![AttachedTeamExtensionRef {
             extension_id: "ext-2".to_string(),
             enabled: true,
+            allowed_groups: Vec::new(),
             runtime_name: Some("browser_use".to_string()),
             display_name: Some("Browser Use".to_string()),
             transport: Some("stdio".to_string()),

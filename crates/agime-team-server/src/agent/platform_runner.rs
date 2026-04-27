@@ -379,7 +379,15 @@ impl PlatformExtensionRunner {
 
         let scheduled_task_runtime =
             matches!(session_source, Some(source) if source.eq_ignore_ascii_case("scheduled_task"));
-        let should_load_team_mcp = !scheduled_task_runtime
+        let actor_is_team_admin = match (&db, team_id, actor_user_id) {
+            (Some(db), Some(team_id), Some(user_id)) => AgentService::new(db.clone())
+                .is_team_admin(user_id, team_id)
+                .await
+                .unwrap_or(false),
+            _ => false,
+        };
+        let should_load_team_mcp = actor_is_team_admin
+            && !scheduled_task_runtime
             && allowed_extension_names
                 .map(|set| set.contains("team_mcp"))
                 .unwrap_or(false);
@@ -653,7 +661,15 @@ impl PlatformExtensionRunner {
             .unwrap_or("agent")
             .trim()
             .to_string();
+        let actor_can_manage_team = match actor_user_id {
+            Some(user_id) => AgentService::new(db.clone())
+                .is_team_admin(user_id, tid)
+                .await
+                .unwrap_or(false),
+            None => false,
+        };
         let provider = SkillRegistryToolsProvider::new(db.clone(), tid.to_string(), actor_id)
+            .with_actor_can_manage_team(actor_can_manage_team)
             .with_workspace_root(workspace_path.map(str::to_string));
         match Self::init_from_client("skill_registry", Box::new(provider)).await {
             Ok(entry) => {

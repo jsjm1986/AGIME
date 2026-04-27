@@ -100,6 +100,7 @@ pub struct SkillRegistryToolsProvider {
     client: Client,
     team_id: String,
     actor_id: String,
+    actor_can_manage_team: bool,
     workspace_root: Option<PathBuf>,
     info: InitializeResult,
 }
@@ -386,9 +387,15 @@ impl SkillRegistryToolsProvider {
                 .expect("skill registry http client"),
             team_id,
             actor_id,
+            actor_can_manage_team: false,
             workspace_root: None,
             info,
         }
+    }
+
+    pub fn with_actor_can_manage_team(mut self, value: bool) -> Self {
+        self.actor_can_manage_team = value;
+        self
     }
 
     pub fn with_workspace_root(mut self, workspace_root: Option<String>) -> Self {
@@ -1826,6 +1833,9 @@ impl SkillRegistryToolsProvider {
             "is_deleted": { "$ne": true },
             "metadata.import_mode": "registry_import",
         };
+        if !self.actor_can_manage_team {
+            filter.insert("created_by", self.actor_id.clone());
+        }
         if let Some(skill_id) = imported_skill_id {
             filter.insert("_id", ObjectId::parse_str(skill_id)?);
         }

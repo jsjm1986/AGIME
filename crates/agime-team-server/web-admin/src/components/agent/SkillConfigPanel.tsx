@@ -5,6 +5,7 @@ import { Badge } from '../ui/badge';
 import { AgentSkillConfig, agentApi, SkillBindingMode } from '../../api/agent';
 import { Label } from '../ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import type { UserGroupSummary } from '../../api/userGroups';
 
 interface AvailableSkill {
   id: string;
@@ -18,6 +19,7 @@ interface Props {
   teamId: string;
   assignedSkills: AgentSkillConfig[];
   skillBindingMode: SkillBindingMode;
+  availableGroups?: UserGroupSummary[];
   onSkillBindingModeChange: (mode: SkillBindingMode) => void;
   onSkillsChange: (skills: AgentSkillConfig[]) => void;
 }
@@ -27,6 +29,7 @@ export function SkillConfigPanel({
   teamId,
   assignedSkills,
   skillBindingMode,
+  availableGroups = [],
   onSkillBindingModeChange,
   onSkillsChange,
 }: Props) {
@@ -54,6 +57,7 @@ export function SkillConfigPanel({
         name: skill.name,
         description: skill.description,
         enabled: true,
+        allowed_groups: [],
         version: skill.version,
       },
     ]);
@@ -69,6 +73,24 @@ export function SkillConfigPanel({
         s.skill_id === skillId ? { ...s, enabled: !s.enabled } : s
       )
     );
+  };
+
+  const updateAllowedGroups = (skillId: string, groups: string[]) => {
+    onSkillsChange(
+      assignedSkills.map((skill) =>
+        skill.skill_id === skillId
+          ? { ...skill, allowed_groups: groups, allowedGroups: groups }
+          : skill
+      )
+    );
+  };
+
+  const toggleGroup = (skill: AgentSkillConfig, groupId: string) => {
+    const current = skill.allowed_groups ?? skill.allowedGroups ?? [];
+    const next = current.includes(groupId)
+      ? current.filter((item) => item !== groupId)
+      : [...current, groupId];
+    updateAllowedGroups(skill.skill_id, next);
   };
 
   return (
@@ -124,45 +146,78 @@ export function SkillConfigPanel({
             {assignedSkills.map((skill) => (
               <div
                 key={skill.skill_id}
-                className="flex items-center justify-between p-2 border rounded bg-accent/30"
+                className="space-y-2 p-2 border rounded bg-accent/30"
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <Badge
-                    variant={skill.enabled ? 'default' : 'outline'}
-                    className="cursor-pointer shrink-0"
-                    role="switch"
-                    aria-checked={skill.enabled}
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        handleToggle(skill.skill_id);
-                      }
-                    }}
-                    onClick={() => handleToggle(skill.skill_id)}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Badge
+                      variant={skill.enabled ? 'default' : 'outline'}
+                      className="cursor-pointer shrink-0"
+                      role="switch"
+                      aria-checked={skill.enabled}
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          handleToggle(skill.skill_id);
+                        }
+                      }}
+                      onClick={() => handleToggle(skill.skill_id)}
+                    >
+                      {skill.enabled ? '✓' : '○'}
+                    </Badge>
+                    <span className="text-sm font-medium">{skill.name}</span>
+                    {skill.version && (
+                      <span className="text-xs text-muted-foreground">v{skill.version}</span>
+                    )}
+                    {skill.description && (
+                      <span className="max-w-full truncate text-xs text-muted-foreground sm:max-w-[12rem]">
+                        {skill.description}
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 shrink-0"
+                    aria-label={t('common.remove')}
+                    onClick={() => handleRemove(skill.skill_id)}
                   >
-                    {skill.enabled ? '✓' : '○'}
-                  </Badge>
-                  <span className="text-sm font-medium">{skill.name}</span>
-                  {skill.version && (
-                    <span className="text-xs text-muted-foreground">v{skill.version}</span>
-                  )}
-                  {skill.description && (
-                    <span className="max-w-full truncate text-xs text-muted-foreground sm:max-w-[12rem]">
-                      {skill.description}
-                    </span>
-                  )}
+                    ×
+                  </Button>
                 </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 w-6 p-0 shrink-0"
-                  aria-label={t('common.remove')}
-                  onClick={() => handleRemove(skill.skill_id)}
-                >
-                  ×
-                </Button>
+                {availableGroups.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 pl-8 text-xs">
+                    <span className="text-muted-foreground">
+                      {t('agent.capabilityAccess.label', '使用权限')}
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={(skill.allowed_groups ?? skill.allowedGroups ?? []).length === 0 ? 'default' : 'outline'}
+                      className="h-6 px-2 text-xs"
+                      onClick={() => updateAllowedGroups(skill.skill_id, [])}
+                    >
+                      {t('agent.capabilityAccess.inheritAgent', '继承 Agent')}
+                    </Button>
+                    {availableGroups.map((group) => {
+                      const selected = (skill.allowed_groups ?? skill.allowedGroups ?? []).includes(group.id);
+                      return (
+                        <Button
+                          key={group.id}
+                          type="button"
+                          size="sm"
+                          variant={selected ? 'default' : 'outline'}
+                          className="h-6 px-2 text-xs"
+                          onClick={() => toggleGroup(skill, group.id)}
+                        >
+                          {group.name}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             ))}
           </div>

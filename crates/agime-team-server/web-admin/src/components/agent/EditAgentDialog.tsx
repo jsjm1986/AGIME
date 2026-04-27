@@ -50,6 +50,7 @@ type AttachedTeamExtensionWire = {
   runtimeName?: string;
   displayName?: string;
   transport?: string;
+  allowedGroups?: string[];
 };
 
 const MAX_MODEL_RUNTIME_TOKENS = 2_000_000;
@@ -260,6 +261,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
           runtimeName: item.runtime_name,
           displayName: item.display_name,
           transport: item.transport,
+          allowedGroups: item.allowed_groups ?? item.allowedGroups ?? [],
         })),
       };
       // Only include api_key if user entered a new one
@@ -601,6 +603,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
                 onCustomChange={setCustomExtensions}
                 onAttachedTeamExtensionsChange={setAttachedTeamExtensions}
                 teamId={agent?.team_id}
+                availableGroups={availableGroups}
               />
             </TabsContent>
 
@@ -611,6 +614,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
                   teamId={agent.team_id}
                   assignedSkills={assignedSkills}
                   skillBindingMode={skillBindingMode}
+                  availableGroups={availableGroups}
                   onSkillBindingModeChange={setSkillBindingMode}
                   onSkillsChange={setAssignedSkills}
                 />

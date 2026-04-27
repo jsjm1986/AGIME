@@ -88,6 +88,7 @@ use super::prompt_profiles::{
     build_portal_manager_overlay, ChannelCodingIntent, ChannelCodingProfileInput,
     ChatDelegationIntent, ChatDelegationProfileInput, PortalCodingProfileInput,
 };
+use super::resource_access::is_runtime_review_approved;
 use super::service_mongo::AgentService;
 use super::session_mongo::{
     CreateChatSessionRequest, SendChatMessageRequest, SendMessageResponse, SessionListItem,
@@ -2654,8 +2655,10 @@ fn find_extension_entry_from_agent(
 fn resolve_composer_extensions(
     agent: &TeamAgent,
     session: Option<&super::session_mongo::AgentSessionDoc>,
+    user_group_ids: Option<&HashSet<String>>,
 ) -> Vec<ComposerExtensionEntry> {
-    let runtime_snapshot = AgentRuntimePolicyResolver::resolve(agent, session, None);
+    let runtime_snapshot =
+        AgentRuntimePolicyResolver::resolve_for_user_groups(agent, session, None, user_group_ids);
     let mut entries = BTreeMap::<String, ComposerExtensionEntry>::new();
 
     for ext in runtime_snapshot
@@ -2726,8 +2729,10 @@ fn resolve_hidden_composer_extensions(agent: &TeamAgent) -> Vec<ComposerHiddenCa
 fn resolve_composer_skills(
     agent: &TeamAgent,
     session: Option<&super::session_mongo::AgentSessionDoc>,
+    user_group_ids: Option<&HashSet<String>>,
 ) -> Vec<ComposerCapabilitySkill> {
-    let runtime_snapshot = AgentRuntimePolicyResolver::resolve(agent, session, None);
+    let runtime_snapshot =
+        AgentRuntimePolicyResolver::resolve_for_user_groups(agent, session, None, user_group_ids);
     let allowed_skill_ids: Option<HashSet<String>> = runtime_snapshot
         .skills
         .effective_allowed_skill_ids
@@ -2844,7 +2849,7 @@ fn build_description_text(
 async fn enrich_composer_skills(
     db: &MongoDb,
     team_id: &str,
-    skills: &mut [ComposerCapabilitySkill],
+    skills: &mut Vec<ComposerCapabilitySkill>,
 ) {
     let Ok(team_oid) = ObjectId::parse_str(team_id) else {
         return;
@@ -2874,6 +2879,14 @@ async fn enrich_composer_skills(
             docs_by_id.insert(id.to_hex(), doc);
         }
     }
+
+    skills.retain(|skill| {
+        docs_by_id
+            .get(&skill.id)
+            .and_then(|doc| doc.get_str("review_status").ok())
+            .map(is_runtime_review_approved)
+            .unwrap_or(false)
+    });
 
     for skill in skills.iter_mut() {
         let source_doc = docs_by_id.get(&skill.id);
@@ -3136,9 +3149,10 @@ async fn build_composer_capability_catalog(
     team_id: &str,
     agent: &TeamAgent,
     session: Option<&super::session_mongo::AgentSessionDoc>,
+    user_group_ids: Option<&HashSet<String>>,
     preferred_lang: Option<&str>,
 ) -> ComposerCapabilitiesCatalog {
-    let mut skills = resolve_composer_skills(agent, session);
+    let mut skills = resolve_composer_skills(agent, session, user_group_ids);
     enrich_composer_skills(db, team_id, &mut skills).await;
     let skills = dedupe_composer_skills(skills);
 
@@ -3147,7 +3161,7 @@ async fn build_composer_capability_catalog(
         extensions: enrich_composer_extensions(
             db,
             team_id,
-            resolve_composer_extensions(agent, session),
+            resolve_composer_extensions(agent, session, user_group_ids),
             preferred_lang,
         )
         .await,
@@ -5830,10 +5844,18 @@ async fn get_agent_composer_capabilities(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let preferred_lang = preferred_lang_from_headers(&headers);
+    let user_group_ids = user_group_ids.into_iter().collect::<HashSet<_>>();
 
     Ok(Json(
-        build_composer_capability_catalog(&db, &team_id, &agent, None, preferred_lang.as_deref())
-            .await,
+        build_composer_capability_catalog(
+            &db,
+            &team_id,
+            &agent,
+            None,
+            Some(&user_group_ids),
+            preferred_lang.as_deref(),
+        )
+        .await,
     ))
 }
 
@@ -5860,6 +5882,13 @@ async fn get_session_composer_capabilities(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     let preferred_lang = preferred_lang_from_headers(&headers);
+    let user_group_ids =
+        agime_team::services::mongo::user_group_service_mongo::UserGroupService::new((*db).clone())
+            .get_user_group_ids(&agent.team_id, &user.user_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .into_iter()
+            .collect::<HashSet<_>>();
 
     Ok(Json(
         build_composer_capability_catalog(
@@ -5867,6 +5896,7 @@ async fn get_session_composer_capabilities(
             &agent.team_id,
             &agent,
             Some(&session),
+            Some(&user_group_ids),
             preferred_lang.as_deref(),
         )
         .await,

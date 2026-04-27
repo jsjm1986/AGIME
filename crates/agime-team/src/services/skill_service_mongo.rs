@@ -9,7 +9,7 @@ use crate::services::package_service::{FrontmatterMetadata, PackageService, Skil
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use futures::TryStreamExt;
-use mongodb::bson::{doc, oid::ObjectId, Regex as BsonRegex};
+use mongodb::bson::{doc, oid::ObjectId, Bson, Regex as BsonRegex};
 use mongodb::options::FindOptions;
 
 /// Generate SKILL.md content for an inline skill from its fields.
@@ -38,6 +38,10 @@ pub struct SkillService {
 impl SkillService {
     pub fn new(db: MongoDb) -> Self {
         Self { db }
+    }
+
+    pub fn is_approved(review_status: &str) -> bool {
+        review_status.trim().eq_ignore_ascii_case("approved")
     }
 
     async fn initial_review_status(&self, team_id: &str) -> Result<String> {
@@ -208,10 +212,11 @@ impl SkillService {
         self.validate_and_insert(team_id, name, skill).await
     }
 
-    /// List skills with pagination, search, and sorting
-    pub async fn list(
+    async fn list_with_filter(
         &self,
         team_id: &str,
+        owner_user_id: Option<&str>,
+        approved_only: bool,
         page: Option<u64>,
         limit: Option<u64>,
         search: Option<&str>,
@@ -221,6 +226,15 @@ impl SkillService {
         let coll = self.db.collection::<Skill>("skills");
 
         let mut filter = doc! { "team_id": team_oid, "is_deleted": { "$ne": true } };
+        if let Some(user_id) = owner_user_id {
+            filter.insert("created_by", user_id);
+        }
+        if approved_only {
+            filter.insert(
+                "review_status",
+                doc! { "$in": [Bson::String("approved".to_string()), Bson::Null] },
+            );
+        }
 
         // Apply search filter using $regex
         if let Some(q) = search {
@@ -266,6 +280,90 @@ impl SkillService {
         let items: Vec<SkillSummary> = skills.into_iter().map(SkillSummary::from).collect();
 
         Ok(PaginatedResponse::new(items, total, page, limit))
+    }
+
+    /// List skills with pagination, search, and sorting.
+    pub async fn list(
+        &self,
+        team_id: &str,
+        page: Option<u64>,
+        limit: Option<u64>,
+        search: Option<&str>,
+        sort: Option<&str>,
+    ) -> Result<PaginatedResponse<SkillSummary>> {
+        self.list_with_filter(team_id, None, false, page, limit, search, sort)
+            .await
+    }
+
+    /// List skills visible to a specific user in the resource library.
+    /// Admins pass `can_manage=true` and see all; members see only their uploads.
+    pub async fn list_visible_for_user(
+        &self,
+        team_id: &str,
+        user_id: &str,
+        can_manage: bool,
+        page: Option<u64>,
+        limit: Option<u64>,
+        search: Option<&str>,
+        sort: Option<&str>,
+    ) -> Result<PaginatedResponse<SkillSummary>> {
+        self.list_with_filter(
+            team_id,
+            (!can_manage).then_some(user_id),
+            false,
+            page,
+            limit,
+            search,
+            sort,
+        )
+        .await
+    }
+
+    /// List approved skills for runtime/on-demand tool discovery.
+    pub async fn list_runtime_approved(
+        &self,
+        team_id: &str,
+        page: Option<u64>,
+        limit: Option<u64>,
+        search: Option<&str>,
+        sort: Option<&str>,
+    ) -> Result<PaginatedResponse<SkillSummary>> {
+        self.list_with_filter(team_id, None, true, page, limit, search, sort)
+            .await
+    }
+
+    pub async fn update_review_status(
+        &self,
+        skill_id: &str,
+        reviewer_id: &str,
+        status: &str,
+        note: Option<String>,
+    ) -> Result<Skill> {
+        let normalized = status.trim().to_ascii_lowercase();
+        if !matches!(normalized.as_str(), "approved" | "rejected" | "pending_review") {
+            return Err(anyhow!("Invalid skill review status: {}", status));
+        }
+        let oid = ObjectId::parse_str(skill_id)?;
+        let coll = self.db.collection::<Skill>("skills");
+        let mut set_doc = doc! {
+            "review_status": normalized,
+            "reviewed_by": reviewer_id,
+            "reviewed_at": bson::DateTime::from_chrono(Utc::now()),
+            "updated_at": bson::DateTime::from_chrono(Utc::now()),
+        };
+        set_doc.insert(
+            "review_note",
+            note.map(Bson::String).unwrap_or(Bson::Null),
+        );
+        coll.update_one(
+            doc! { "_id": oid, "is_deleted": { "$ne": true } },
+            doc! { "$set": set_doc },
+            None,
+        )
+        .await?;
+        self.get(skill_id)
+            .await?
+            .ok_or_else(|| anyhow!("Skill not found"))
     }
 
     pub async fn delete(&self, skill_id: &str) -> Result<()> {

@@ -214,12 +214,12 @@ async fn list_agents(
     Extension(user): Extension<UserContext>,
     Query(query): Query<ListAgentsQuery>,
 ) -> Result<Json<PaginatedResponse<TeamAgent>>, StatusCode> {
-    let is_member = service
-        .is_team_member(&user.user_id, &query.team_id)
+    let is_admin = service
+        .is_team_admin(&user.user_id, &query.team_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if !is_member {
+    if !is_admin {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -290,12 +290,12 @@ async fn list_avatar_instances(
     Extension(user): Extension<UserContext>,
     Query(query): Query<TeamScopedQuery>,
 ) -> Result<Json<Vec<AvatarInstanceSummary>>, StatusCode> {
-    let is_member = service
-        .is_team_member(&user.user_id, &query.team_id)
+    let is_admin = service
+        .is_team_admin(&user.user_id, &query.team_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if !is_member {
+    if !is_admin {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -1645,12 +1645,12 @@ async fn list_available_skills(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let is_member = service
-        .is_team_member(&user.user_id, &query.team_id)
+    let is_admin = service
+        .is_team_admin(&user.user_id, &query.team_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if !is_member {
+    if !is_admin {
         return Err(StatusCode::FORBIDDEN);
     }
 

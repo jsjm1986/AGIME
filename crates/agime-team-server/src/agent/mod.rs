@@ -68,10 +68,6 @@ pub mod portal_public;
 pub mod portal_tools;
 pub mod prompt_profiles;
 pub mod smart_log;
-// NOTE: These modules disabled - require agime/agime-mcp crates
-// pub mod team_skills_extension;
-// pub mod team_mcp_extension;
-// pub mod team_tools_server;
 #[allow(unused_imports)]
 pub use rate_limit::{default_rate_limiter, task_rate_limiter, RateLimiter};
 pub use routes_mongo::router; // Use MongoDB version

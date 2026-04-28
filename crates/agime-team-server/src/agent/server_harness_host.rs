@@ -240,6 +240,10 @@ enum StreamBroadcaster {
         manager: Arc<ChatChannelManager>,
         context_id: String,
     },
+    Task {
+        manager: Arc<TaskManager>,
+        context_id: String,
+    },
     Silent,
 }
 
@@ -251,6 +255,10 @@ impl StreamBroadcaster {
                 context_id,
             } => manager.broadcast(context_id, event).await,
             Self::Channel {
+                manager,
+                context_id,
+            } => manager.broadcast(context_id, event).await,
+            Self::Task {
                 manager,
                 context_id,
             } => manager.broadcast(context_id, event).await,
@@ -625,6 +633,10 @@ fn harness_mode_for_session_source(session_source: &str) -> HarnessMode {
     if session_source.eq_ignore_ascii_case("system") {
         HarnessMode::Execute
     } else if session_source.eq_ignore_ascii_case("channel_runtime") {
+        HarnessMode::Execute
+    } else if session_source.eq_ignore_ascii_case("agent_task")
+        || session_source.eq_ignore_ascii_case("subagent")
+    {
         HarnessMode::Execute
     } else if session_source.eq_ignore_ascii_case("channel_conversation") {
         HarnessMode::Conversation
@@ -2477,6 +2489,40 @@ impl ServerHarnessHost {
         .await
     }
 
+    pub async fn execute_agent_task_host(
+        &self,
+        session: &AgentSessionDoc,
+        agent: &TeamAgent,
+        user_message: &str,
+        workspace_path: String,
+        turn_system_instruction: Option<&str>,
+        target_artifacts: Vec<String>,
+        result_contract: Vec<String>,
+        validation_mode: bool,
+        llm_overrides: Option<Value>,
+        cancel_token: CancellationToken,
+        task_id: String,
+        task_manager: Arc<TaskManager>,
+    ) -> Result<ServerHarnessHostOutcome> {
+        self.execute_session_host_with_overrides(
+            session,
+            agent,
+            user_message,
+            workspace_path,
+            turn_system_instruction,
+            target_artifacts,
+            result_contract,
+            validation_mode,
+            cancel_token,
+            llm_overrides,
+            StreamBroadcaster::Task {
+                manager: task_manager,
+                context_id: task_id,
+            },
+        )
+        .await
+    }
+
     async fn execute_session_host(
         &self,
         session: &AgentSessionDoc,
@@ -3954,6 +4000,10 @@ mod tests {
         );
         assert_eq!(
             harness_mode_for_session_source("system"),
+            HarnessMode::Execute
+        );
+        assert_eq!(
+            harness_mode_for_session_source("agent_task"),
             HarnessMode::Execute
         );
         assert_eq!(

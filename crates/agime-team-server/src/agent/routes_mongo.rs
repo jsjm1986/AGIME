@@ -37,7 +37,7 @@ use super::task_manager::TaskManager;
 use crate::config::Config;
 
 /// Create agent router (MongoDB version)
-pub fn router(db: Arc<MongoDb>) -> Router {
+pub fn router(db: Arc<MongoDb>, workspace_root: String) -> Router {
     let service = Arc::new(AgentService::new(db.clone()));
     let rate_limiter = Arc::new(RateLimiter::new(10, 60));
     let task_manager = Arc::new(TaskManager::new());
@@ -115,7 +115,7 @@ pub fn router(db: Arc<MongoDb>) -> Router {
         .route("/tasks/{id}/cancel", post(cancel_task))
         .route("/tasks/{id}/results", get(get_task_results))
         .route("/tasks/{id}/stream", get(stream_results))
-        .with_state((service, db, rate_limiter, task_manager))
+        .with_state((service, db, rate_limiter, task_manager, workspace_root))
 }
 
 type AppState = (
@@ -123,6 +123,7 @@ type AppState = (
     Arc<MongoDb>,
     Arc<RateLimiter>,
     Arc<TaskManager>,
+    String,
 );
 
 #[derive(Debug, Deserialize)]
@@ -185,7 +186,7 @@ fn build_dedicated_name(source_name: &str, requested_name: Option<&str>) -> Stri
 
 // Agent handlers
 async fn create_agent(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Json(req): Json<CreateAgentRequest>,
 ) -> Result<Json<TeamAgent>, StatusCode> {
@@ -210,7 +211,7 @@ async fn create_agent(
 }
 
 async fn list_agents(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Query(query): Query<ListAgentsQuery>,
 ) -> Result<Json<PaginatedResponse<TeamAgent>>, StatusCode> {
@@ -286,7 +287,7 @@ async fn runtime_profile_preview(
 }
 
 async fn list_avatar_instances(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Query(query): Query<TeamScopedQuery>,
 ) -> Result<Json<Vec<AvatarInstanceSummary>>, StatusCode> {
@@ -310,7 +311,7 @@ async fn list_avatar_instances(
 }
 
 async fn get_avatar_governance_state(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(portal_id): Path<String>,
     Query(query): Query<TeamScopedQuery>,
@@ -335,7 +336,7 @@ async fn get_avatar_governance_state(
 }
 
 async fn update_avatar_governance_state(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(portal_id): Path<String>,
     Query(query): Query<TeamScopedQuery>,
@@ -368,7 +369,7 @@ async fn update_avatar_governance_state(
 }
 
 async fn list_avatar_governance_events(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(portal_id): Path<String>,
     Query(query): Query<AvatarGovernanceEventsQuery>,
@@ -393,7 +394,7 @@ async fn list_avatar_governance_events(
 }
 
 async fn list_team_avatar_governance_events(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Query(query): Query<TeamAvatarGovernanceEventsQuery>,
 ) -> Result<Json<Vec<AvatarGovernanceEventPayload>>, StatusCode> {
@@ -421,7 +422,7 @@ async fn list_team_avatar_governance_events(
 }
 
 async fn list_avatar_governance_queue(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(portal_id): Path<String>,
     Query(query): Query<TeamScopedQuery>,
@@ -446,7 +447,7 @@ async fn list_avatar_governance_queue(
 }
 
 async fn get_avatar_workbench_snapshot(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(portal_id): Path<String>,
     Query(query): Query<TeamScopedQuery>,
@@ -471,7 +472,7 @@ async fn get_avatar_workbench_snapshot(
 }
 
 async fn get_agent(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
 ) -> Result<Json<TeamAgent>, StatusCode> {
@@ -499,7 +500,7 @@ async fn get_agent(
 }
 
 async fn update_agent(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
     Json(req): Json<UpdateAgentRequest>,
@@ -528,7 +529,7 @@ async fn update_agent(
 }
 
 async fn delete_agent(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
@@ -560,7 +561,7 @@ async fn delete_agent(
 }
 
 async fn clone_agent_legacy(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
     Json(req): Json<ProvisionFromTemplateRequest>,
@@ -569,7 +570,7 @@ async fn clone_agent_legacy(
 }
 
 async fn provision_agent_from_template(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
     Json(req): Json<ProvisionFromTemplateRequest>,
@@ -693,7 +694,7 @@ async fn provision_from_template_inner(
 
 // Task handlers
 async fn submit_task(
-    State((service, db, rate_limiter, task_manager)): State<AppState>,
+    State((service, db, rate_limiter, task_manager, workspace_root)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Json(req): Json<SubmitTaskRequest>,
 ) -> Result<Json<AgentTask>, StatusCode> {
@@ -757,8 +758,14 @@ async fn submit_task(
             Ok(Some(approved_task)) => {
                 tracing::info!("Auto-approved chat task {} for agent", task_id);
                 if let Err(error) =
-                    execution_admission::admit_or_queue_task(&db, &service, &task_manager, &task_id)
-                        .await
+                    execution_admission::admit_or_queue_task(
+                        &db,
+                        &service,
+                        &task_manager,
+                        &workspace_root,
+                        &task_id,
+                    )
+                    .await
                 {
                     tracing::error!("Failed to admit auto-approved task {}: {}", task_id, error);
                 }
@@ -778,7 +785,7 @@ async fn submit_task(
 }
 
 async fn list_tasks(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Query(query): Query<ListTasksQuery>,
 ) -> Result<Json<PaginatedResponse<AgentTask>>, StatusCode> {
@@ -799,7 +806,7 @@ async fn list_tasks(
 }
 
 async fn get_task(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentTask>, StatusCode> {
@@ -827,7 +834,7 @@ async fn get_task(
 }
 
 async fn approve_task(
-    State((service, db, _, task_manager)): State<AppState>,
+    State((service, db, _, task_manager, workspace_root)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentTask>, StatusCode> {
@@ -853,7 +860,14 @@ async fn approve_task(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     if let Err(error) =
-        execution_admission::admit_or_queue_task(&db, &service, &task_manager, &id).await
+        execution_admission::admit_or_queue_task(
+            &db,
+            &service,
+            &task_manager,
+            &workspace_root,
+            &id,
+        )
+        .await
     {
         tracing::error!("Failed to admit approved task {}: {}", id, error);
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -863,7 +877,7 @@ async fn approve_task(
 }
 
 async fn reject_task(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentTask>, StatusCode> {
@@ -891,7 +905,7 @@ async fn reject_task(
 }
 
 async fn cancel_task(
-    State((service, _, _, task_manager)): State<AppState>,
+    State((service, _, _, task_manager, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentTask>, StatusCode> {
@@ -921,7 +935,7 @@ async fn cancel_task(
 }
 
 async fn get_task_results(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<TaskResult>>, StatusCode> {
@@ -948,7 +962,7 @@ async fn get_task_results(
 }
 
 async fn stream_results(
-    State((service, _, _, task_manager)): State<AppState>,
+    State((service, _, _, task_manager, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
 ) -> Result<
@@ -1002,7 +1016,7 @@ struct UpdateSkillsRequest {
 
 /// Update agent access control (allowed/denied groups)
 async fn update_agent_access(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
     Json(req): Json<UpdateAccessRequest>,
@@ -1032,7 +1046,7 @@ async fn update_agent_access(
 
 /// Update agent extensions (MCP real-time load/unload)
 async fn update_agent_extensions(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
     Json(req): Json<UpdateExtensionsRequest>,
@@ -1097,7 +1111,7 @@ async fn update_agent_extensions(
 
 /// Reload agent extensions (trigger re-initialization)
 async fn reload_agent_extensions(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -1168,7 +1182,7 @@ async fn reload_agent_extensions(
 
 /// Update agent skills configuration
 async fn update_agent_skills(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
     Json(req): Json<UpdateSkillsRequest>,
@@ -1235,7 +1249,7 @@ async fn update_agent_skills(
 
 /// List sessions for an agent
 async fn list_sessions(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(agent_id): Path<String>,
     Query(mut query): Query<SessionListQuery>,
@@ -1268,7 +1282,7 @@ async fn list_sessions(
 
 /// Get session details
 async fn get_session(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -1292,7 +1306,7 @@ async fn get_session(
 
 /// Archive a session
 async fn archive_session(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
@@ -1367,7 +1381,7 @@ struct SetCustomExtensionEnabledRequest {
 
 /// Add a team shared extension to an agent's custom_extensions
 async fn add_team_extension(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
     Json(req): Json<AddTeamExtensionRequest>,
@@ -1414,7 +1428,7 @@ async fn add_team_extension(
 
 /// Add a custom MCP extension to an agent's custom_extensions.
 async fn add_custom_extension(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
     Json(req): Json<AddCustomExtensionRequest>,
@@ -1459,7 +1473,7 @@ async fn add_custom_extension(
 
 /// Enable or disable a custom MCP extension on an agent.
 async fn set_custom_extension_enabled(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path((id, name)): Path<(String, String)>,
     Query(query): Query<TeamScopedQuery>,
@@ -1502,7 +1516,7 @@ async fn set_custom_extension_enabled(
 
 /// Remove a custom MCP extension from an agent.
 async fn remove_custom_extension(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path((id, name)): Path<(String, String)>,
     Query(query): Query<TeamScopedQuery>,
@@ -1552,7 +1566,7 @@ struct AddTeamSkillRequest {
 
 /// Add a team shared skill to an agent's assigned_skills
 async fn add_team_skill(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
     Json(req): Json<AddTeamSkillRequest>,
@@ -1592,7 +1606,7 @@ async fn add_team_skill(
 
 /// Remove a skill from an agent's assigned_skills
 async fn remove_agent_skill(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path((id, skill_id)): Path<(String, String)>,
 ) -> Result<Json<TeamAgent>, StatusCode> {
@@ -1629,7 +1643,7 @@ struct AvailableSkillsQuery {
 
 /// List available team skills not yet assigned to the agent
 async fn list_available_skills(
-    State((service, _, _, _)): State<AppState>,
+    State((service, _, _, _, _)): State<AppState>,
     Extension(user): Extension<UserContext>,
     Path(id): Path<String>,
     Query(query): Query<AvailableSkillsQuery>,

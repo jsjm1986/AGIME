@@ -22,8 +22,8 @@ graph LR
     end
 
     subgraph Execution["执行层"]
-        DirectHarness[DirectHarness V4<br/>Chat/Channel/Document/Scheduled]
-        TaskExecutor[Legacy TaskExecutor<br/>Mission/AgentTask]
+        DirectHarness[DirectHarness V4<br/>Chat/Channel/Document/Scheduled/AgentTask]
+        TaskExecutor[Legacy TaskExecutor<br/>legacy task/subagent only]
         MissionExec[MissionExec]
     end
 
@@ -55,7 +55,7 @@ graph LR
 
 **当前主线：**
 
-1. `chat_executor.rs` / `chat_channel_executor.rs`
+1. `chat_executor.rs` / `chat_channel_executor.rs` / `agent_task_v4_runner.rs`
 2. `server_harness_host.rs` 的 `DirectHarness`
 3. `agime` harness
 4. `crates/agime/src/context_runtime/*`
@@ -70,7 +70,8 @@ graph LR
 
 - 修改上下文行为时，优先看 `crates/agime/src/context_runtime/*`
 - 看 direct-host chat 时，优先看 `server_harness_host.rs`
-- 看 task / executor 路径时，再看 `executor_mongo.rs`
+- 看 AgentTask 路径时，优先看 `execution_admission.rs` 和 `agent_task_v4_runner.rs`
+- 看 legacy TaskExecutor / subagent bridge 暂存路径时，再看 `executor_mongo.rs`
 
 ### 1. main.rs — 服务器启动 (977 行)
 
@@ -205,7 +206,7 @@ pub struct ApiKeyDoc {
 
 ### 4. agent/executor_mongo.rs — TaskExecutor (2000 行)
 
-`executor_mongo.rs` 现在应视为 **TaskExecutor / bridge 兼容路径**，不是当前 direct chat 主线。
+`executor_mongo.rs` 现在应视为 **TaskExecutor / bridge 兼容暂存路径**，不是当前 direct chat 或 AgentTask 主线。
 
 **核心 LLM 执行管道：**
 
@@ -286,7 +287,7 @@ pub struct ApiKeyDoc {
 - ChatManager 追踪活动会话，事件广播
 - 入口固定进入 `DirectHarness`
 - DirectHarness 主线进入 `server_harness_host.rs`，由 `agime` harness 接管对话、工具、排队恢复和压缩
-- 不再通过临时 TaskExecutor bridge 执行 chat/channel/document/scheduled-task
+- 不再通过临时 TaskExecutor bridge 执行 chat/channel/document/scheduled-task/AgentTask
 - 实时 SSE 流式传输，事件历史持久化
 - 过期会话清理 (默认 4 小时不活动)
 
@@ -306,7 +307,7 @@ pub struct ActiveChat {
 **特点:**
 - 多步自主任务，带审批工作流
 - 生命周期: Draft → Planning → Planned → Running → Completed/Failed/Cancelled
-- 这一轨仍大量依赖 TaskExecutor / `executor_mongo.rs`
+- Mission 轨道如仍存在 legacy 调用，需要单独迁移；AgentTask 已通过 `agent_task_v4_runner.rs` 进入 DirectHarness V4
 - 执行模式: Sequential 或 Adaptive (AGE)
 - 审批策略: Auto, Checkpoint, Manual
 - Token 预算和 artifact 追踪
@@ -524,7 +525,7 @@ pub enum StreamEvent {
 ## 关键设计模式
 
 1. **Service Layer Architecture**: Routes → Service → DB/Extensions
-2. **Legacy Task Bridge**: 仅 Mission/AgentTask 兼容路径继续使用 TaskExecutor
+2. **Legacy Task Bridge**: 仅 legacy TaskExecutor/subagent 暂存路径继续保留，AgentTask 已迁移到 DirectHarness V4
 3. **Factory Pattern**: provider_factory 用于 LLM 选择
 4. **Event Sourcing**: StreamEvent + MongoDB 持久化
 5. **Async Streaming**: SSE 带事件历史

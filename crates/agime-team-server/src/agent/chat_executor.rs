@@ -568,6 +568,7 @@ impl ChatExecutor {
             &self.db,
             &self.agent_service,
             &self.internal_task_manager,
+            &self.workspace_root,
             agent_id,
         )
         .await

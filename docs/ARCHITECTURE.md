@@ -40,7 +40,7 @@ graph LR
     end
 
     subgraph Layer4["执行层"]
-        Executors["DirectHarness V4 surfaces<br/>Chat/Channel/Document/Scheduled<br/>Legacy Mission/AgentTask"]
+        Executors["DirectHarness V4 surfaces<br/>Chat/Channel/Document/Scheduled/AgentTask<br/>Legacy task/subagent only"]
     end
 
     subgraph Layer5["运行时层"]
@@ -207,7 +207,7 @@ pub trait Provider {
 **runtime.rs** - Legacy TaskExecutor/subagent 兼容工具
 - create_temp_task(): 临时任务创建
 - 统一的工具执行接口
-- Mission/AgentTask/subagent 兼容路径复用
+- AgentTask 不再使用这里的 bridge；剩余代码只服务 legacy TaskExecutor/subagent 暂存路径
 
 **task_manager.rs** - 后台任务追踪
 - StreamEvent枚举 (14+变体)
@@ -429,7 +429,7 @@ services:
 
 **位置**: `runtime.rs` - legacy mission/task 兼容模块
 
-**目的**: 保留旧 Mission/AgentTask 的兼容执行能力。Chat、Channel、Document Analysis、Scheduled Task 不再通过该路径执行。
+**目的**: 保留旧 TaskExecutor/subagent 的暂存兼容能力。Chat、Channel、Document Analysis、Scheduled Task、AgentTask 不再通过该路径执行。
 
 **实现**:
 ```rust
@@ -438,8 +438,8 @@ pub fn create_temp_task() -> Task {
     // 创建临时任务包装
 }
 
-// Legacy Mission/AgentTask 使用桥接
-MissionOrLegacyTask.execute_step()
+// Legacy TaskExecutor/subagent 暂存路径使用桥接
+LegacyTaskExecutorOrSubagent.execute_step()
     → runtime::create_temp_task()
     → TaskExecutor.execute_task()
 ```
@@ -450,7 +450,7 @@ MissionOrLegacyTask.execute_step()
 graph LR
     subgraph Executors["执行器层"]
         Mission[MissionExecutor]
-        Legacy[Legacy AgentTask]
+        Legacy[Legacy TaskExecutor]
     end
 
     subgraph Bridge["桥接层"]
@@ -480,9 +480,9 @@ graph LR
 ```
 
 **当前边界**:
-- Chat/Channel/Document/Scheduled Task 使用 DirectHarness V4
-- Mission/AgentTask 暂时保留 TaskExecutor 兼容路径
-- 后续迁移 Mission/AgentTask 后，可删除该 legacy bridge
+- Chat/Channel/Document/Scheduled Task/AgentTask 使用 DirectHarness V4
+- Legacy TaskExecutor/subagent 暂时保留兼容路径
+- 后续确认无调用后，可删除该 legacy bridge
 
 ## Avatar 执行流程
 

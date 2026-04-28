@@ -9,6 +9,7 @@
 
 // Primary Mongo-backed task host
 pub mod agent_prompt_composer;
+pub mod agent_task_v4_runner;
 pub mod ai_describe;
 pub mod api_tools;
 pub mod avatar_governance_tools;

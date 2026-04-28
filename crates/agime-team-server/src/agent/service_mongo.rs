@@ -1132,6 +1132,8 @@ impl AgentService {
             | "portal_manager"
             | "system"
             | "document_analysis"
+            | "agent_task"
+            | "subagent"
             | "chat"
             | "automation_builder"
             | "automation_runtime"
@@ -4912,6 +4914,78 @@ impl AgentService {
         self.get_task(task_id).await
     }
 
+    pub async fn mark_task_running(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<AgentTask>, mongodb::error::Error> {
+        let now = Utc::now();
+        let result = self
+            .tasks()
+            .update_one(
+                doc! {
+                    "task_id": task_id,
+                    "status": { "$in": ["approved", "queued", "running"] }
+                },
+                doc! { "$set": {
+                    "status": "running",
+                    "started_at": bson::DateTime::from_chrono(now)
+                }},
+                None,
+            )
+            .await?;
+
+        if result.matched_count == 0 {
+            return Ok(None);
+        }
+        self.get_task(task_id).await
+    }
+
+    pub async fn complete_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<AgentTask>, mongodb::error::Error> {
+        let now = Utc::now();
+        let result = self
+            .tasks()
+            .update_one(
+                doc! {
+                    "task_id": task_id,
+                    "status": { "$in": ["running", "approved", "queued"] }
+                },
+                doc! { "$set": {
+                    "status": "completed",
+                    "completed_at": bson::DateTime::from_chrono(now),
+                    "error_message": bson::Bson::Null
+                }},
+                None,
+            )
+            .await?;
+
+        if result.matched_count == 0 {
+            return Ok(None);
+        }
+        self.get_task(task_id).await
+    }
+
+    pub async fn save_task_result(
+        &self,
+        task_id: &str,
+        result_type: TaskResultType,
+        content: serde_json::Value,
+    ) -> Result<TaskResult, mongodb::error::Error> {
+        let result = TaskResult::new(task_id.to_string(), result_type, content);
+        let doc = TaskResultDoc {
+            id: None,
+            result_id: result.id.clone(),
+            task_id: result.task_id.clone(),
+            result_type: result.result_type.to_string(),
+            content: result.content.clone(),
+            created_at: result.created_at,
+        };
+        self.results().insert_one(doc, None).await?;
+        Ok(result)
+    }
+
     pub async fn try_acquire_execution_slot(
         &self,
         agent_id: &str,
@@ -5763,6 +5837,8 @@ impl AgentService {
             req.portal_restricted
                 || session_source == "system"
                 || session_source == "document_analysis"
+                || session_source == "agent_task"
+                || session_source == "subagent"
                 || session_source == "scheduled_task"
                 || session_source == "portal_coding"
                 || session_source == "portal_manager"

@@ -657,12 +657,14 @@ fn build_router(state: Arc<AppState>) -> Router {
 
     // Agent routes (only available for MongoDB currently)
     let agent_routes = match &state.db {
-        DatabaseBackend::MongoDB(db) => Some(agent::router(db.clone()).layer(
-            axum::middleware::from_fn_with_state(
-                state.clone(),
-                auth::middleware_mongo::auth_middleware,
+        DatabaseBackend::MongoDB(db) => Some(
+            agent::router(db.clone(), state.config.workspace_root.clone()).layer(
+                axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::middleware_mongo::auth_middleware,
+                ),
             ),
-        )),
+        ),
         DatabaseBackend::SQLite(_) => None,
     };
 

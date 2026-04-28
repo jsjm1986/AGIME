@@ -1,10 +1,10 @@
 //! Legacy runtime utilities for TaskExecutor bridge compatibility.
 //!
-//! Chat, channel, document analysis, and scheduled-task execution do not use
+//! Chat, channel, document analysis, scheduled-task, and AgentTask execution do not use
 //! this module. They run through DirectHarness V4 and `context_runtime`.
 //!
-//! The remaining bridge helpers are retained for legacy Mission/AgentTask and
-//! subagent compatibility until those surfaces have a V4-native task host.
+//! The remaining bridge helpers are retained for legacy TaskExecutor/subagent
+//! compatibility until the legacy file can be removed safely.
 
 use agime::prompt_template;
 use agime_team::models::{BuiltinExtension, TaskResultType, TaskStatus, TeamAgent};

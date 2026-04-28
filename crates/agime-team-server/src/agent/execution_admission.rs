@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
+use super::agent_task_v4_runner::AgentTaskV4Runner;
 use super::chat_channels::ChatChannelService;
-use super::executor_mongo::TaskExecutor;
 use super::service_mongo::{AgentService, ExecutionSlotAcquireOutcome};
 use super::task_manager::{StreamEvent, TaskManager};
 use agime_team::models::AgentTask;
@@ -20,6 +20,7 @@ pub async fn admit_or_queue_task(
     db: &Arc<MongoDb>,
     agent_service: &Arc<AgentService>,
     task_manager: &Arc<TaskManager>,
+    workspace_root: &str,
     task_id: &str,
 ) -> Result<TaskAdmissionOutcome> {
     let task = agent_service
@@ -36,6 +37,7 @@ pub async fn admit_or_queue_task(
                 db.clone(),
                 agent_service.clone(),
                 task_manager.clone(),
+                workspace_root.to_string(),
                 task,
             );
             Ok(TaskAdmissionOutcome::Started)
@@ -63,6 +65,7 @@ pub async fn start_next_queued_tasks_for_agent(
     db: &Arc<MongoDb>,
     agent_service: &Arc<AgentService>,
     task_manager: &Arc<TaskManager>,
+    workspace_root: &str,
     agent_id: &str,
 ) -> Result<()> {
     loop {
@@ -83,6 +86,7 @@ pub async fn start_next_queued_tasks_for_agent(
             db.clone(),
             agent_service.clone(),
             task_manager.clone(),
+            workspace_root.to_string(),
             task,
         );
     }
@@ -94,6 +98,7 @@ fn spawn_task_runner(
     db: Arc<MongoDb>,
     agent_service: Arc<AgentService>,
     task_manager: Arc<TaskManager>,
+    workspace_root: String,
     task: AgentTask,
 ) {
     let task_id = task.id.clone();
@@ -101,8 +106,13 @@ fn spawn_task_runner(
     tokio::spawn(async move {
         let (cancel_token, _) = task_manager.register(&task_id).await;
         apply_task_surface_state(&db, &agent_service, &task, "running").await;
-        let executor = TaskExecutor::new(db.clone(), task_manager.clone());
-        if let Err(error) = executor.execute_task(&task_id, cancel_token).await {
+        let runner = AgentTaskV4Runner::new(
+            db.clone(),
+            agent_service.clone(),
+            task_manager.clone(),
+            workspace_root.clone(),
+        );
+        if let Err(error) = runner.execute_task(&task_id, cancel_token).await {
             tracing::error!("Task execution failed: {}", error);
             match agent_service.fail_task(&task_id, &error.to_string()).await {
                 Ok(None) => tracing::warn!(
@@ -114,6 +124,15 @@ fn spawn_task_runner(
                 }
                 _ => {}
             }
+            task_manager
+                .broadcast(
+                    &task_id,
+                    StreamEvent::Done {
+                        status: "failed".to_string(),
+                        error: Some(error.to_string()),
+                    },
+                )
+                .await;
         }
 
         task_manager.complete(&task_id).await;
@@ -126,7 +145,14 @@ fn spawn_task_runner(
             );
         }
         if let Err(error) =
-            start_next_queued_tasks_for_agent(&db, &agent_service, &task_manager, &agent_id).await
+            start_next_queued_tasks_for_agent(
+                &db,
+                &agent_service,
+                &task_manager,
+                &workspace_root,
+                &agent_id,
+            )
+            .await
         {
             tracing::warn!(
                 "Failed to dispatch queued work for agent {} after task {}: {}",

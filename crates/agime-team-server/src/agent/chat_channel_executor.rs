@@ -696,6 +696,7 @@ impl ChatChannelExecutor {
                 &self.db,
                 &self.agent_service,
                 &self.internal_task_manager,
+                &self.workspace_root,
                 &req.agent_id,
             )
             .await

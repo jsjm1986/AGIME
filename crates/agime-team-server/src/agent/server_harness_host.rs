@@ -55,24 +55,25 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::agent_prompt_composer::{compose_top_level_prompt, AgentPromptComposerInput};
+use super::agent_runtime_config::{
+    agent_has_extension_manager_enabled, build_api_caller, builtin_extension_configs_to_custom,
+    compute_extension_overrides, extension_allowed_by_name, find_extension_config_by_name,
+    resolve_agent_attached_team_extensions, resolve_agent_custom_extensions, TeamRuntimeSettings,
+    TeamSkillMode,
+};
 use super::capability_policy::{is_non_delegating_session_source, AgentRuntimePolicyResolver};
 use super::chat_channel_manager::ChatChannelManager;
 use super::chat_manager::ChatManager;
-use super::executor_mongo::{
-    agent_has_extension_manager_enabled, build_api_caller, builtin_extension_configs_to_custom,
-    extension_allowed_by_name, find_extension_config_by_name,
-    resolve_agent_attached_team_extensions, resolve_agent_custom_extensions, TaskExecutor,
-    TeamRuntimeSettings, TeamSkillMode,
-};
 use super::extension_installer::ExtensionInstaller;
 use super::extension_manager_client::{DynamicExtensionState, TeamExtensionManagerClient};
 use super::mcp_connector::{ElicitationBridgeCallback, McpConnector, ToolContentBlock};
 use super::platform_runner::PlatformExtensionRunner;
 use super::prompt_profiles::CHAT_DELEGATION_PROFILE_ID;
-use super::runtime;
+use super::runtime_text;
 use super::service_mongo::AgentService;
 use super::session_mongo::AgentSessionDoc;
 use super::task_manager::{StreamEvent, TaskManager};
+use super::tool_dispatch::execute_standard_tool_call;
 use super::workspace_service::{WorkspaceExecutionContext, WorkspaceService};
 
 fn parse_turn_tool_gate_allow_only(
@@ -981,7 +982,7 @@ impl HarnessPersistenceAdapter for SessionHostPersistenceAdapter {
         _output_tokens: Option<i32>,
     ) -> Result<()> {
         let messages_json = serde_json::to_string(final_conversation.messages())?;
-        let preview = runtime::extract_last_assistant_text(&messages_json).unwrap_or_default();
+        let preview = runtime_text::extract_last_assistant_text(&messages_json).unwrap_or_default();
         self.agent_service
             .update_session_after_message(
                 &self.session_id,
@@ -3080,7 +3081,7 @@ impl ServerHarnessHost {
             }
         }
         let preview = sanitize_user_visible_runtime_text(
-            runtime::extract_last_assistant_text(&messages_json).as_deref(),
+            runtime_text::extract_last_assistant_text(&messages_json).as_deref(),
         )
         .or_else(|| {
             host_result
@@ -3386,7 +3387,7 @@ If you need a tool, call it directly through the model tool interface.\n\
         drop(state);
 
         let active_set: HashSet<String> = active_names.into_iter().collect();
-        let overrides = runtime::compute_extension_overrides(agent, &active_set);
+        let overrides = compute_extension_overrides(agent, &active_set);
         if overrides.disabled.is_empty() && overrides.enabled.is_empty() {
             return;
         }
@@ -3558,7 +3559,7 @@ async fn execute_direct_tool_call(
         }
     }
 
-    let (duration_ms, result) = TaskExecutor::execute_standard_tool_call(
+    let (duration_ms, result) = execute_standard_tool_call(
         runtime.dynamic_state.clone(),
         runtime.task_manager.clone(),
         runtime.task_id.clone(),

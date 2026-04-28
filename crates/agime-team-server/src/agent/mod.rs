@@ -9,6 +9,7 @@
 
 // Primary Mongo-backed task host
 pub mod agent_prompt_composer;
+pub mod agent_runtime_config;
 pub mod agent_task_v4_runner;
 pub mod ai_describe;
 pub mod api_tools;
@@ -20,10 +21,8 @@ pub mod developer_tools;
 pub mod direct_host_admission;
 pub mod document_tools;
 pub mod execution_admission;
-pub mod executor_mongo;
 pub mod extension_installer;
 pub mod extension_manager_client;
-pub mod harness_adapter;
 pub mod harness_core;
 pub mod hook_runtime;
 pub mod local_fs_workspace_store;
@@ -42,13 +41,13 @@ pub mod streamer;
 pub mod task_manager;
 pub mod team_mcp_tools;
 pub mod team_skill_tools;
+pub mod tool_dispatch;
 pub mod workspace_physical_store;
+pub mod workspace_runtime;
 pub mod workspace_service;
 pub mod workspace_types;
 
-// Legacy bridge utilities. Chat/channel/document/scheduled-task/AgentTask surfaces use DirectHarness V4.
-pub mod runtime;
-pub mod runtime_bridge;
+pub mod runtime_text;
 
 // Chat Track (Phase 1)
 pub mod channel_coding_cards;

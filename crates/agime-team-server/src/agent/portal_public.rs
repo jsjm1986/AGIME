@@ -1979,7 +1979,7 @@ async fn create_visitor_session(
              5. 向用户提供完整的预览地址时，使用完整URL而非相对路径。",
             project_path
         ));
-        let project_ctx = super::runtime::scan_project_context(project_path, 6000);
+        let project_ctx = super::workspace_runtime::scan_project_context(project_path, 6000);
         if !project_ctx.is_empty() {
             extra_instructions_parts.push(project_ctx);
         }

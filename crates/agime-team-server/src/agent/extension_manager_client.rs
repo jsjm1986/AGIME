@@ -578,7 +578,8 @@ impl TeamExtensionManagerClient {
         let (disabled, enabled) = {
             let state = self.state.read().await;
             let active = state.active_extension_names();
-            let overrides = super::runtime::compute_extension_overrides(&state.agent, &active);
+            let overrides =
+                super::agent_runtime_config::compute_extension_overrides(&state.agent, &active);
             (overrides.disabled, overrides.enabled)
         };
 
@@ -921,7 +922,7 @@ fn collect_all_extension_names(agent: &TeamAgent) -> Vec<String> {
 pub(super) fn builtin_to_custom_config(ext: &BuiltinExtension) -> Option<CustomExtensionConfig> {
     let mcp_name = ext.mcp_name()?;
 
-    let bin = super::executor_mongo::find_agime_binary()?;
+    let bin = super::agent_runtime_config::find_agime_binary()?;
     Some(CustomExtensionConfig {
         name: mcp_name.to_string(),
         ext_type: "stdio".to_string(),

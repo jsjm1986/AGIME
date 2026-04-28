@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::executor_mongo::build_http_client;
+use super::agent_runtime_config::build_http_client;
 
 pub struct ApiToolsProvider {
     info: InitializeResult,

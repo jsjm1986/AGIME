@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use super::runtime;
+use super::workspace_runtime;
 use super::server_harness_host::ServerHarnessHost;
 use super::service_mongo::AgentService;
 use super::session_mongo::CreateSessionRequest;
@@ -520,7 +520,7 @@ async fn process_document_analysis(
         Err(error) => {
             let text = format!("文档导出到分析工作区失败：{}", error);
             let _ = agent_svc.delete_session(&session_id).await;
-            let _ = runtime::cleanup_workspace_dir(Some(&workspace_path));
+            let _ = workspace_runtime::cleanup_workspace_dir(Some(&workspace_path));
             let attached = smart_log_svc
                 .attach_analysis(&ctx.team_id, &ctx.doc_id, &text, "failed")
                 .await?;
@@ -654,7 +654,7 @@ async fn process_document_analysis(
 
     // Cleanup session and workspace regardless of smart log outcome
     let _ = agent_svc.delete_session(&session_id).await;
-    let _ = runtime::cleanup_workspace_dir(Some(&workspace_path));
+    let _ = workspace_runtime::cleanup_workspace_dir(Some(&workspace_path));
 
     let doc_name = ctx.doc_name.clone();
 

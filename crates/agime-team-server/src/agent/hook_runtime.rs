@@ -3,19 +3,19 @@ use serde_json::Value;
 use tracing::info;
 
 use super::harness_core::{HookEventKind, HookPayload, HookSpec};
-use super::runtime;
+use super::workspace_runtime;
 
 fn normalized_scope(scope: &[String]) -> Vec<String> {
     scope
         .iter()
-        .filter_map(|item| runtime::normalize_relative_workspace_path(item))
+        .filter_map(|item| workspace_runtime::normalize_relative_workspace_path(item))
         .collect()
 }
 
 fn normalized_editor_path(args: &Value) -> Option<String> {
     args.get("path")
         .and_then(Value::as_str)
-        .and_then(runtime::normalize_relative_workspace_path)
+        .and_then(workspace_runtime::normalize_relative_workspace_path)
 }
 
 pub fn builtin_hook_specs() -> Vec<HookSpec> {
@@ -131,7 +131,8 @@ pub fn apply_pre_tool_use_hooks(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let constrained = runtime::constrain_subagent_write_scope(parent_scope, &requested_scope);
+    let constrained =
+        workspace_runtime::constrain_subagent_write_scope(parent_scope, &requested_scope);
     let mut adjusted = args.clone();
     adjusted["write_scope"] = Value::Array(
         constrained

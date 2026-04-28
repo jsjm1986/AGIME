@@ -6088,7 +6088,7 @@ async fn create_portal_coding_session(
     }
 
     // Inject project directory context so the agent knows the current state
-    let project_ctx = super::runtime::scan_project_context(&project_path, 8000);
+    let project_ctx = super::workspace_runtime::scan_project_context(&project_path, 8000);
     let portal_policy_overlay = portal.agent_system_prompt.clone();
     let extra = build_portal_coding_overlay(PortalCodingProfileInput {
         portal_slug: &portal_slug,
@@ -7598,7 +7598,9 @@ async fn delete_session(
 
     if deleted {
         // P2: Best-effort workspace cleanup (after DB delete to avoid orphaned records)
-        if let Err(e) = super::runtime::cleanup_workspace_dir(session.workspace_path.as_deref()) {
+        if let Err(e) =
+            super::workspace_runtime::cleanup_workspace_dir(session.workspace_path.as_deref())
+        {
             tracing::warn!(
                 "Failed to cleanup workspace for session {}: {}",
                 session_id,

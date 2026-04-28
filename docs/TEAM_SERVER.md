@@ -22,8 +22,7 @@ graph LR
     end
 
     subgraph Execution["执行层"]
-        DirectHarness[DirectHarness V4<br/>Chat/Channel/Document/Scheduled/AgentTask]
-        TaskExecutor[Legacy TaskExecutor<br/>legacy task/subagent only]
+        DirectHarness[DirectHarness V4<br/>Chat/Channel/Document/Scheduled/AgentTask/Subagent]
         MissionExec[MissionExec]
     end
 
@@ -51,7 +50,7 @@ graph LR
 
 ### 当前执行主线与上下文主线
 
-`agime server` 当前不要再按“所有流量都会经过 `executor_mongo.rs`”去理解，也不要再按旧 `legacy_segmented / CFPM` 压缩主线去理解。
+`agime server` 当前不要再按旧任务桥接主线理解。服务器执行面已经收口到 DirectHarness V4，压缩主线是 `context_runtime`。
 
 **当前主线：**
 
@@ -71,7 +70,7 @@ graph LR
 - 修改上下文行为时，优先看 `crates/agime/src/context_runtime/*`
 - 看 direct-host chat 时，优先看 `server_harness_host.rs`
 - 看 AgentTask 路径时，优先看 `execution_admission.rs` 和 `agent_task_v4_runner.rs`
-- 看 legacy TaskExecutor / subagent bridge 暂存路径时，再看 `executor_mongo.rs`
+- 看 subagent/swarm 时，优先看 `crates/agime` harness 的 `TaskRuntime`
 
 ### 1. main.rs — 服务器启动 (977 行)
 
@@ -204,11 +203,11 @@ pub struct ApiKeyDoc {
 - 创建 UserContext
 - 注入到 Extension
 
-### 4. agent/executor_mongo.rs — TaskExecutor (2000 行)
+### 4. agent/server_harness_host.rs — DirectHarness V4 host
 
-`executor_mongo.rs` 现在应视为 **TaskExecutor / bridge 兼容暂存路径**，不是当前 direct chat 或 AgentTask 主线。
+`server_harness_host.rs` 是当前 chat/channel/document/scheduled-task/AgentTask 的统一执行入口。AgentTask 由 `agent_task_v4_runner.rs` 负责队列和状态结算，再进入同一个 host。
 
-**核心 LLM 执行管道：**
+**核心执行管道：**
 
 1. **加载代理配置**
    - API key, model, extensions, skills
@@ -287,7 +286,7 @@ pub struct ApiKeyDoc {
 - ChatManager 追踪活动会话，事件广播
 - 入口固定进入 `DirectHarness`
 - DirectHarness 主线进入 `server_harness_host.rs`，由 `agime` harness 接管对话、工具、排队恢复和压缩
-- 不再通过临时 TaskExecutor bridge 执行 chat/channel/document/scheduled-task/AgentTask
+- 不通过临时任务桥接执行 chat/channel/document/scheduled-task/AgentTask/subagent
 - 实时 SSE 流式传输，事件历史持久化
 - 过期会话清理 (默认 4 小时不活动)
 
@@ -525,7 +524,7 @@ pub enum StreamEvent {
 ## 关键设计模式
 
 1. **Service Layer Architecture**: Routes → Service → DB/Extensions
-2. **Legacy Task Bridge**: 仅 legacy TaskExecutor/subagent 暂存路径继续保留，AgentTask 已迁移到 DirectHarness V4
+2. **DirectHarness V4 Runtime**: 统一 chat/channel/document/scheduled-task/AgentTask/subagent 执行面
 3. **Factory Pattern**: provider_factory 用于 LLM 选择
 4. **Event Sourcing**: StreamEvent + MongoDB 持久化
 5. **Async Streaming**: SSE 带事件历史

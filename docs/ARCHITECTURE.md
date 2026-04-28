@@ -204,10 +204,11 @@ pub trait Provider {
 
 #### 6.3 核心支撑模块
 
-**runtime.rs** - Legacy TaskExecutor/subagent 兼容工具
-- create_temp_task(): 临时任务创建
-- 统一的工具执行接口
-- AgentTask 不再使用这里的 bridge；剩余代码只服务 legacy TaskExecutor/subagent 暂存路径
+**DirectHarness V4 runtime helpers** - 服务器执行辅助层
+- `agent_runtime_config.rs`: agent runtime 配置、API caller、扩展解析
+- `tool_dispatch.rs`: DirectHarness 工具派发
+- `runtime_text.rs`: 文本/JSON/Provider 边界判断
+- `workspace_runtime.rs`: workspace 路径、扫描和清理工具
 
 **task_manager.rs** - 后台任务追踪
 - StreamEvent枚举 (14+变体)
@@ -313,7 +314,7 @@ flowchart LR
     B --> C[AI生成计划]
     C --> D[Goal Tree解析]
     D --> E[执行Goal]
-    E --> F[TaskExecutor]
+    E --> F[DirectHarness V4]
     F --> G[Tool调用]
     G --> H{完成?}
     H -->|是| J[下一Goal]
@@ -425,39 +426,24 @@ services:
 
 ## 关键设计模式
 
-### Legacy Bridge Pattern (任务兼容路径)
+### DirectHarness V4 Pattern (唯一执行面)
 
-**位置**: `runtime.rs` - legacy TaskExecutor 兼容模块
+**位置**: `server_harness_host.rs` + `agent_task_v4_runner.rs` + `crates/agime` harness
 
-**目的**: 保留旧 TaskExecutor/subagent 的暂存兼容能力。Chat、Channel、Document Analysis、Scheduled Task、AgentTask 不再通过该路径执行。
+**目的**: Chat、Channel、Document Analysis、Scheduled Task、AgentTask、subagent/swarm 都进入同一 V4 执行面。AgentTask 仍保留 HTTP API 和结果集合，但不再通过 Mongo 临时任务桥接执行。
 
-**实现**:
-```rust
-// runtime.rs 提供桥接函数
-pub fn create_temp_task() -> Task {
-    // 创建临时任务包装
-}
-
-// Legacy TaskExecutor/subagent 暂存路径使用桥接
-LegacyTaskExecutorOrSubagent.execute_step()
-    → runtime::create_temp_task()
-    → TaskExecutor.execute_task()
-```
-
-**桥接模式架构图**:
+**执行模式架构图**:
 
 ```mermaid
 graph LR
     subgraph Executors["执行器层"]
-        Legacy[Legacy TaskExecutor]
-    end
-
-    subgraph Bridge["桥接层"]
-        TempTask[create_temp_task]
+        Chat[Chat/Channel/Document/Scheduled]
+        AgentTask[AgentTaskV4Runner]
     end
 
     subgraph Core["核心层"]
-        TaskExec[TaskExecutor]
+        Host[ServerHarnessHost]
+        Runtime[agime TaskRuntime]
     end
 
     subgraph Shared["共享资源"]
@@ -466,21 +452,21 @@ graph LR
         Context[上下文]
     end
 
-    Legacy --> TempTask
-    TempTask --> TaskExec
-    TaskExec --> Tools
-    TaskExec --> LLM
-    TaskExec --> Context
+    Chat --> Host
+    AgentTask --> Host
+    Host --> Runtime
+    Runtime --> Tools
+    Runtime --> LLM
+    Runtime --> Context
 
-    style Bridge fill:#f093fb,stroke:#f093fb,color:#ffffff
     style Core fill:#667eea,stroke:#667eea,color:#ffffff
     style Shared fill:#43e97b,stroke:#43e97b,color:#ffffff
 ```
 
 **当前边界**:
-- Chat/Channel/Document/Scheduled Task/AgentTask 使用 DirectHarness V4
-- Legacy TaskExecutor/subagent 暂时保留兼容路径
-- 后续确认无调用后，可删除该 legacy bridge
+- 服务器侧 legacy executor 已删除
+- subagent/swarm 使用 `crates/agime` harness 内置 `TaskRuntime`
+- 不创建临时 `agent_tasks` 作为执行桥
 
 ## Avatar 执行流程
 

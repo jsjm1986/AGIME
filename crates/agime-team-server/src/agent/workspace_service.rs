@@ -8,7 +8,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::local_fs_workspace_store::LocalFsWorkspaceStore;
-use super::runtime;
+use super::workspace_runtime;
 use super::session_mongo::AgentSessionDoc;
 use super::workspace_physical_store::WorkspacePhysicalStore;
 pub use super::workspace_types::{
@@ -465,7 +465,7 @@ impl WorkspaceService {
                     .iter()
                     .map(|(segment, label)| (segment.as_str(), *label))
                     .collect::<Vec<_>>();
-                runtime::create_workspace_dir(&self.workspace_root, &segments)?
+                workspace_runtime::create_workspace_dir(&self.workspace_root, &segments)?
             }
         };
 

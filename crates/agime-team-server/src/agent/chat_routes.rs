@@ -265,7 +265,8 @@ fn sanitize_download_filename(name: &str) -> String {
         .trim()
         .chars()
         .map(|ch| match ch {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ';' => '_',
+            ch if ch.is_control() => '_',
             _ => ch,
         })
         .collect::<String>();
@@ -277,10 +278,116 @@ fn sanitize_download_filename(name: &str) -> String {
     }
 }
 
+fn ascii_download_filename_part(value: &str) -> String {
+    let mut output = String::new();
+    let mut replaced_non_ascii = false;
+    for ch in value.chars() {
+        let mapped = match ch {
+            'A'..='Z' | 'a'..='z' | '0'..='9' => ch,
+            ' ' | '.' | '_' | '-' | '(' | ')' | '[' | ']' => ch,
+            ch if ch.is_ascii() && !ch.is_ascii_control() && !matches!(ch, '"' | '\\' | ';') => {
+                ch
+            }
+            _ => {
+                replaced_non_ascii = true;
+                '_'
+            }
+        };
+        if mapped == '_' && output.ends_with('_') {
+            continue;
+        }
+        output.push(mapped);
+    }
+    let normalized = if replaced_non_ascii {
+        let mut compact = String::new();
+        let mut pending_separator = false;
+        for ch in output.chars() {
+            if ch == '_' || ch.is_whitespace() {
+                pending_separator = true;
+                continue;
+            }
+            if pending_separator && !compact.is_empty() && ch != '.' {
+                compact.push('_');
+            }
+            compact.push(ch);
+            pending_separator = false;
+        }
+        compact
+    } else {
+        output
+    };
+    normalized
+        .trim_matches(|ch| matches!(ch, ' ' | '.' | '_'))
+        .to_string()
+}
+
+fn ascii_download_filename_fallback(name: &str) -> String {
+    let sanitized = sanitize_download_filename(name);
+    let (stem, extension) = sanitized
+        .rsplit_once('.')
+        .filter(|(stem, extension)| {
+            !stem.trim().is_empty()
+                && !extension.is_empty()
+                && extension.len() <= 16
+                && extension.chars().all(|ch| ch.is_ascii_alphanumeric())
+        })
+        .map(|(stem, extension)| (stem, Some(extension)))
+        .unwrap_or((sanitized.as_str(), None));
+    let fallback_stem = ascii_download_filename_part(stem);
+    let mut fallback = if fallback_stem
+        .chars()
+        .any(|ch| ch.is_ascii_alphanumeric())
+    {
+        fallback_stem
+    } else {
+        "download".to_string()
+    };
+    if let Some(extension) = extension {
+        fallback.push('.');
+        fallback.push_str(extension);
+    }
+    fallback
+}
+
+fn rfc5987_encode_filename(value: &str) -> String {
+    fn attr_char(byte: u8) -> bool {
+        matches!(
+            byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'!'
+                | b'#'
+                | b'$'
+                | b'&'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+    }
+
+    let mut encoded = String::new();
+    for byte in value.as_bytes() {
+        if attr_char(*byte) {
+            encoded.push(*byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
 fn content_disposition_value(label: &str, attachment: bool) -> String {
-    let fallback = sanitize_download_filename(label).replace('"', "");
+    let filename = sanitize_download_filename(label);
+    let fallback = ascii_download_filename_fallback(&filename);
+    let encoded = rfc5987_encode_filename(&filename);
     let mode = if attachment { "attachment" } else { "inline" };
-    format!("{mode}; filename=\"{fallback}\"")
+    format!("{mode}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 fn escape_html(value: &str) -> String {
@@ -6872,11 +6979,11 @@ mod tests {
     use super::{
         build_child_evidence_next_steps, build_workspace_artifact_resolution_snapshot,
         classify_chat_delegation_intent, classify_coding_thread_intent,
-        coding_thread_mentions_explicit_planning, load_persisted_child_evidence_snapshot,
-        load_persisted_child_transcript_resume_snapshot, load_runtime_diagnostics_snapshot,
-        manager_message_mentions_extension_inventory, manager_message_mentions_registry,
-        manager_message_mentions_skill_inventory, message_mentions_mcp_install,
-        message_mentions_skill_import,
+        coding_thread_mentions_explicit_planning, content_disposition_value,
+        load_persisted_child_evidence_snapshot, load_persisted_child_transcript_resume_snapshot,
+        load_runtime_diagnostics_snapshot, manager_message_mentions_extension_inventory,
+        manager_message_mentions_registry, manager_message_mentions_skill_inventory,
+        message_mentions_mcp_install, message_mentions_skill_import,
     };
     use crate::agent::prompt_profiles::{ChannelCodingIntent, ChatDelegationIntent};
     use crate::agent::session_mongo::AgentSessionDoc;
@@ -6900,6 +7007,28 @@ mod tests {
         ));
         assert!(manager_message_mentions_skill_inventory("有哪些技能"));
         assert!(!manager_message_mentions_skill_inventory("帮我打开访客页"));
+    }
+
+    #[test]
+    fn content_disposition_uses_utf8_filename_star_for_non_ascii_labels() {
+        let header = content_disposition_value("V4 预览下载验收 v4-preview-5ce09939.html", true);
+
+        assert!(header.is_ascii());
+        assert!(header.starts_with("attachment;"));
+        assert!(header.contains("filename=\"V4_v4-preview-5ce09939.html\""));
+        assert!(header.contains("filename*=UTF-8''V4%20"));
+        assert!(header.contains("%E9%A2%84%E8%A7%88"));
+        assert!(header.ends_with("v4-preview-5ce09939.html"));
+    }
+
+    #[test]
+    fn content_disposition_keeps_readable_ascii_fallback_for_ascii_labels() {
+        let header = content_disposition_value("report final.md", false);
+
+        assert_eq!(
+            header,
+            "inline; filename=\"report final.md\"; filename*=UTF-8''report%20final.md"
+        );
     }
 
     #[test]

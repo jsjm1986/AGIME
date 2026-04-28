@@ -1387,6 +1387,7 @@ mod tests {
             parent_session_id.clone(),
             signals.clone(),
         );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 
         let handle = runtime
             .spawn_task(super::super::task_runtime::TaskSpec {

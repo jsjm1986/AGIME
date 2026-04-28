@@ -1418,7 +1418,7 @@ mod tests {
         let validator = runtime
             .spawn_task(super::super::task_runtime::TaskSpec {
                 task_id: "validator-1".to_string(),
-                parent_session_id: "parent-1".to_string(),
+                parent_session_id: parent_session_id.clone(),
                 depth: 1,
                 kind: TaskKind::ValidationWorker,
                 description: None,
@@ -1442,10 +1442,30 @@ mod tests {
             .await
             .expect("complete validator");
 
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let mut snapshot = Vec::new();
+        for _ in 0..20 {
+            snapshot = signals.snapshot().await;
+            let has_worker = snapshot.iter().any(|signal| {
+                matches!(
+                    signal,
+                    CoordinatorSignal::WorkerCompleted { task_id, .. } if task_id == "worker-1"
+                )
+            });
+            let has_validator = snapshot.iter().any(|signal| {
+                matches!(
+                    signal,
+                    CoordinatorSignal::ValidationReported { report }
+                        if report.validator_task_id.as_deref() == Some("validator-1")
+                            && report.status == ValidationStatus::Passed
+                )
+            });
+            if has_worker && has_validator {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
         bridge.abort();
 
-        let snapshot = signals.snapshot().await;
         assert!(snapshot.iter().any(|signal| matches!(
             signal,
             CoordinatorSignal::WorkerCompleted { task_id, .. } if task_id == "worker-1"

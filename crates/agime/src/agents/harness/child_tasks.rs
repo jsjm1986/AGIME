@@ -328,9 +328,16 @@ pub fn classify_child_task_result(
         };
     }
 
-    let produced_delta = summary_indicates_material_progress(summary);
     let terminal_non_failure =
         !summary.trim().is_empty() && !summary.trim_start().starts_with("FAIL:");
+    let produced_delta = match expectation {
+        ChildExecutionExpectation::MaterializingChange => {
+            summary_indicates_material_progress(summary)
+        }
+        ChildExecutionExpectation::ReadOnlyInspection | ChildExecutionExpectation::Validation => {
+            false
+        }
+    };
     let accepted_targets = match expectation {
         ChildExecutionExpectation::ReadOnlyInspection => {
             if terminal_non_failure {

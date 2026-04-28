@@ -126,7 +126,7 @@
     "compactNowNew": "Run memory checkpoint",
     "autoCompactAt": "Auto compact at",
     "contextStrategy": "Context strategy",
-    "strategyLegacy": "Legacy segmented",
+    "strategyRuntime": "Context runtime",
     "strategyNew": "CFPM memory",
     "cfpmRuntimeVisibility": "CFPM runtime",
     "cfpmToolGateVisibility": "CFPM tool gate",

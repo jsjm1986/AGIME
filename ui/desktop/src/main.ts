@@ -1119,7 +1119,6 @@ const openDirectoryDialog = async (): Promise<OpenDialogReturnValue> => {
       undefined,
       deeplinkData?.config,
       undefined,
-      undefined,
       deeplinkData?.parameters
     );
   }

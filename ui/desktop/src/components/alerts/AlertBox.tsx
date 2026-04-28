@@ -24,14 +24,14 @@ import {
 } from '../../lib/api/cfpmMemory';
 
 const CONTEXT_STRATEGY_CONFIG_KEY = 'AGIME_CONTEXT_COMPACTION_STRATEGY';
-const LEGACY_CONTEXT_STRATEGY = 'legacy_segmented';
+const CONTEXT_RUNTIME_STRATEGY = 'context_runtime';
 const CFPM_CONTEXT_STRATEGY = 'cfpm_memory_v1';
 const CFPM_RUNTIME_VISIBILITY_CONFIG_KEY = 'AGIME_CFPM_RUNTIME_VISIBILITY';
 const CFPM_TOOL_GATE_VISIBILITY_CONFIG_KEY = 'AGIME_CFPM_TOOL_GATE_VISIBILITY';
 const MEMORY_AUTO_REFRESH_MS = 5000;
 const MEMORY_AUTO_REFRESH_EDIT_SUSPEND_MS = 4000;
 
-type ContextStrategy = typeof LEGACY_CONTEXT_STRATEGY | typeof CFPM_CONTEXT_STRATEGY;
+type ContextStrategy = typeof CONTEXT_RUNTIME_STRATEGY | typeof CFPM_CONTEXT_STRATEGY;
 type CfpmRuntimeVisibility = 'off' | 'brief' | 'debug';
 
 const CFPM_RUNTIME_VISIBILITY_ORDER: CfpmRuntimeVisibility[] = ['off', 'brief', 'debug'];
@@ -46,7 +46,7 @@ const MEMORY_STATUS_OPTIONS: MemoryFact['status'][] = [
 
 function normalizeContextStrategy(value: unknown): ContextStrategy {
   if (typeof value !== 'string') {
-    return LEGACY_CONTEXT_STRATEGY;
+    return CONTEXT_RUNTIME_STRATEGY;
   }
 
   const normalized = value.trim().toLowerCase();
@@ -61,7 +61,7 @@ function normalizeContextStrategy(value: unknown): ContextStrategy {
     return CFPM_CONTEXT_STRATEGY;
   }
 
-  return LEGACY_CONTEXT_STRATEGY;
+  return CONTEXT_RUNTIME_STRATEGY;
 }
 
 function normalizeCfpmRuntimeVisibility(value: unknown): CfpmRuntimeVisibility {
@@ -106,7 +106,7 @@ export const AlertBox = ({ alert, className }: AlertBoxProps) => {
   const [thresholdValue, setThresholdValue] = useState(80);
   const [isSaving, setIsSaving] = useState(false);
   const [contextStrategy, setContextStrategy] =
-    useState<ContextStrategy>(LEGACY_CONTEXT_STRATEGY);
+    useState<ContextStrategy>(CONTEXT_RUNTIME_STRATEGY);
   const [isSavingStrategy, setIsSavingStrategy] = useState(false);
   const [cfpmRuntimeVisibility, setCfpmRuntimeVisibility] =
     useState<CfpmRuntimeVisibility>('brief');
@@ -339,7 +339,7 @@ export const AlertBox = ({ alert, className }: AlertBoxProps) => {
     if (isSavingStrategy) return;
 
     const nextStrategy =
-      contextStrategy === CFPM_CONTEXT_STRATEGY ? LEGACY_CONTEXT_STRATEGY : CFPM_CONTEXT_STRATEGY;
+      contextStrategy === CFPM_CONTEXT_STRATEGY ? CONTEXT_RUNTIME_STRATEGY : CFPM_CONTEXT_STRATEGY;
 
     setIsSavingStrategy(true);
     try {
@@ -1089,7 +1089,7 @@ export const AlertBox = ({ alert, className }: AlertBoxProps) => {
                 isSavingStrategy ? 'opacity-50 cursor-not-allowed' : 'hover:bg-white/10 cursor-pointer'
               )}
             >
-              {isCfpmMode ? t('alert.strategyNew') : t('alert.strategyLegacy')}
+              {isCfpmMode ? t('alert.strategyNew') : t('alert.strategyRuntime')}
             </button>
           </div>
 

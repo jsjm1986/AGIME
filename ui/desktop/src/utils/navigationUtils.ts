@@ -31,6 +31,7 @@ export type ViewOptions = {
   parentViewOptions?: ViewOptions;
   disableAnimation?: boolean;
   initialMessage?: string;
+  pendingScheduleDeepLink?: string;
   resetChat?: boolean;
   shareToken?: string;
   resumeSessionId?: string;

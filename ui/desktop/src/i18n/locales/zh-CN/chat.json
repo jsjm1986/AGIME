@@ -126,7 +126,7 @@
     "compactNowNew": "执行记忆检查点",
     "autoCompactAt": "自动压缩阈值",
     "contextStrategy": "上下文策略",
-    "strategyLegacy": "旧版分段压缩",
+    "strategyRuntime": "上下文运行时",
     "strategyNew": "CFPM 记忆方案",
     "cfpmRuntimeVisibility": "CFPM 运行可见性",
     "cfpmToolGateVisibility": "CFPM 门控可见性",

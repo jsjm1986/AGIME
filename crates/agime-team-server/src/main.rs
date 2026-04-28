@@ -304,7 +304,7 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
     // Load .env file if present
     dotenvy::dotenv().ok();
 
-    // Generate unique server instance ID for orphaned mission recovery
+    // Generate a unique server instance ID for schedulers and runtime diagnostics.
     let instance_id = uuid::Uuid::new_v4().to_string();
     std::env::set_var("TEAM_SERVER_INSTANCE_ID", &instance_id);
 
@@ -771,7 +771,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             DatabaseBackend::SQLite(_) => None,
         };
 
-    // Chat routes (Phase 1 - Chat Track, MongoDB only)
+    // Direct chat/channel routes (MongoDB only)
     let chat_routes = match (&state.db, &chat_manager, &shared_channel_manager) {
         (DatabaseBackend::MongoDB(db), Some(cm), Some(channel_manager)) => Some(
             agent::chat_router(

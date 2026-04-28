@@ -12,7 +12,7 @@ graph LR
         Auth[Auth]
         Brand[Brand]
         Agent[Agent]
-        Mission[Mission]
+        Channel[Channel]
     end
 
     subgraph Service["服务层"]
@@ -23,7 +23,7 @@ graph LR
 
     subgraph Execution["执行层"]
         DirectHarness[DirectHarness V4<br/>Chat/Channel/Document/Scheduled/AgentTask/Subagent]
-        MissionExec[MissionExec]
+        AgentTask[AgentTaskV4Runner]
     end
 
     subgraph Extension["扩展层"]
@@ -108,8 +108,8 @@ enum Commands {
 
 **后台任务：**
 - Chat 清理: 每 60 秒，移除 4 小时不活动会话
-- Mission 清理: 每 120 秒，移除 3 小时不活动任务
-- 孤儿 Mission 恢复: 启动时恢复卡住的任务
+- Chat/运行时清理: 移除不活动会话和过期运行态
+- Scheduled Task 调度: missed recovery、run ledger、delivery 结算
 - Auth Session 清理: 每 600 秒，移除过期会话
 - 分析清理: 每 300 秒，取消待处理分析
 
@@ -245,7 +245,7 @@ pub struct ApiKeyDoc {
 9. **返回最终结果**
 
 **Workspace 集成：**
-- 每个 session/mission 独立文件系统
+- 每个 session/task 独立文件系统
 - 自动创建目录结构
 - 环境变量设置 (.bash_env)
 
@@ -265,23 +265,22 @@ pub struct ApiKeyDoc {
 - `save_chat_stream_events()`: 批量持久化 (128 事件, 25ms flush)
 - `reset_stuck_processing()`: 恢复卡住的会话
 
-**Mission 管理:**
-- `create_mission()`, `get_mission()`, `list_missions()`
-- `update_mission_status()`, `update_mission_step()`
-- `save_mission_stream_events()`: 批量持久化
-- `recover_orphaned_missions()`: 恢复孤儿任务
+**AgentTask 管理:**
+- `/api/team/agent/tasks` 保留创建、审批、取消、结果和 SSE stream API
+- `execution_admission.rs` 负责队列和并发 slot
+- `agent_task_v4_runner.rs` 负责 V4 执行和结果结算
 
 **Admin 工具:**
 - `is_team_admin(user_id, team_id)`
 - `backfill_session_source_and_visibility()`: 数据迁移
 - `ensure_*_indexes()`: 索引创建
 
-### 6. 两阶段执行系统
+### 6. DirectHarness V4 执行系统
 
-**Phase 1: Chat Track** (chat_manager.rs, chat_executor.rs, chat_routes.rs)
+**Direct Chat / Channel** (chat_manager.rs, chat_executor.rs, chat_channel_executor.rs, chat_routes.rs)
 
 **特点:**
-- 直接多轮对话，绕过正式 Task 系统
+- 直接多轮对话，绕过 AgentTask HTTP API
 - 流程: 用户 → Chat Session → Agent → 多轮对话 → 归档
 - ChatManager 追踪活动会话，事件广播
 - 入口固定进入 `DirectHarness`
@@ -301,64 +300,35 @@ pub struct ActiveChat {
 }
 ```
 
-**Phase 2: Mission Track** (mission_executor.rs, mission_routes.rs)
+**AgentTask 后台执行** (routes_mongo.rs, execution_admission.rs, agent_task_v4_runner.rs)
 
 **特点:**
-- 多步自主任务，带审批工作流
-- 生命周期: Draft → Planning → Planned → Running → Completed/Failed/Cancelled
-- Mission 轨道如仍存在 legacy 调用，需要单独迁移；AgentTask 已通过 `agent_task_v4_runner.rs` 进入 DirectHarness V4
-- 执行模式: Sequential 或 Adaptive (AGE)
-- 审批策略: Auto, Checkpoint, Manual
-- Token 预算和 artifact 追踪
-- 孤儿任务恢复 (启动时)
+- 保留 `/api/team/agent/tasks` 对外 API、审批、取消、结果集合和 SSE surface
+- 生命周期: Approved/Queued → Running → Completed/Failed/Cancelled
+- `execution_admission.rs` 获取 agent execution slot；饱和时进入 queued
+- `agent_task_v4_runner.rs` 复用/创建 hidden session，然后进入 `ServerHarnessHost`
+- 不再创建临时 Mongo task 作为 chat/channel/subagent 执行桥
 
-**MissionDoc 结构:**
-```rust
-pub struct MissionDoc {
-    pub mission_id: String,
-    pub team_id: String,
-    pub creator_id: String,
-    pub goal: String,
-    pub context: Option<String>,
-    pub status: MissionStatus,
-    pub execution_mode: ExecutionMode,
-    pub execution_profile: ExecutionProfile,
-    pub approval_policy: ApprovalPolicy,
-    pub steps: Vec<MissionStep>,
-    pub artifacts: Vec<MissionArtifactDoc>,
-    pub token_budget: i32,
-    pub step_timeout_seconds: Option<u64>,
-    pub step_max_retries: Option<u32>,
-}
-```
+**AgentTask content 兼容字段:**
+- `messages`
+- `session_id`
+- `workspace_path`
+- `turn_system_instruction`
+- `llm_overrides`
+- `target_artifacts`
+- `result_contract`
+- `allowed_extensions`
+- `allowed_skill_ids`
 
-### 7. agent/adaptive_executor.rs — AGE 引擎
+**执行流程:**
+1. 解析 AgentTask content 为用户消息、上下文、workspace 和 contract
+2. 加载 agent 配置和 V4 execution policy
+3. 创建或复用 hidden session，写入 `session_source = "agent_task"`
+4. 调用 `ServerHarnessHost`
+5. 将 final summary、completion report、artifact truth 写入 `agent_task_results`
+6. 释放 slot，并唤醒同 agent 的下一条 queued task
 
-**Adaptive Goal Execution:**
-
-1. 解析 mission goal 为 goal tree
-2. 执行每个 goal 并评估进度
-3. 完成后检查完成标准
-4. Pivot 协议: 失败时切换方法
-5. 最大 pivot: 每 goal 3 次, 每 mission 15 次
-6. 追踪失败教训
-
-**Pivot 决策:**
-```rust
-enum PivotDecision {
-    Retry { approach: String },
-    Abandon { reason: String },
-}
-```
-
-**超时管理:**
-- 默认 goal 执行: 20 分钟
-- Planning phase: 5 分钟
-- 默认 step: 20 分钟
-- 可配置，带验证
-- 优雅取消，清理窗口
-
-### 8. agent/mcp_connector.rs — MCP 客户端 (1000 行)
+### 7. agent/mcp_connector.rs — MCP 客户端 (1000 行)
 
 **功能:**
 - Tool 定义收集和缓存 (TTL-based)
@@ -376,7 +346,7 @@ enum PivotDecision {
 4. Server 执行并返回结果
 5. Agent 将结果整合到对话
 
-### 9. agent/platform_runner.rs — 内置扩展
+### 8. agent/platform_runner.rs — 内置扩展
 
 **支持的扩展:**
 
@@ -384,14 +354,14 @@ enum PivotDecision {
 2. **PortalTools**: create, update, publish portals
 3. **DeveloperTools**: shell commands, text editor
 4. **TeamSkillTools**: 动态技能加载
-5. **MissionPreflightTools**: preflight 验证
+5. **ChatDeliveryTools**: 普通对话文件预览与下载交付
 
 **实现:**
 - 每个扩展实现 McpClientTrait
 - Tool 定义收集并加前缀
 - Tool 调用路由到正确扩展
 
-### 10. agent/task_manager.rs — 任务追踪
+### 9. agent/task_manager.rs — 任务追踪
 
 **StreamEvent 枚举 (14+ 变体):**
 ```rust
@@ -406,18 +376,15 @@ pub enum StreamEvent {
     Compaction { strategy, before_tokens, after_tokens },
     SessionId { session_id: String },
     Done { status: String, error: Option<String> },
-    // AGE events:
-    GoalStart { goal_id, title, depth },
-    GoalComplete { goal_id, signal },
-    Pivot { goal_id, from_approach, to_approach, learnings },
-    GoalAbandoned { goal_id, reason },
+    PermissionRequested { request_id, tool_name },
+    PermissionResolved { request_id, decision },
 }
 ```
 
 **事件持久化:**
 - 批量写入 MongoDB (128 事件, 25ms flush)
 - SSE 流式传输，带 last_event_id 恢复
-- TaskManager/ChatManager/MissionManager 维护事件历史
+- TaskManager/ChatManager 维护事件历史
 
 ## API 路由总览
 
@@ -443,21 +410,13 @@ pub enum StreamEvent {
 - POST /api/team/agent/tasks/{id}/approve|reject
 - GET /api/team/agent/tasks/{id}/stream (SSE)
 
-### 聊天会话 API (Phase 1)
+### 聊天会话 API
 - POST /api/team/agent/chat/sessions
 - GET /api/team/agent/chat/sessions (list)
 - GET /api/team/agent/chat/sessions/{id}
 - POST /api/team/agent/chat/sessions/{id}/send
 - GET /api/team/agent/chat/sessions/{id}/stream (SSE)
 - POST /api/team/agent/chat/sessions/{id}/archive
-
-### 使命 API (Phase 2)
-- POST /api/team/agent/mission/missions
-- GET /api/team/agent/mission/missions (list)
-- GET /api/team/agent/mission/missions/{id}
-- POST /api/team/agent/mission/missions/{id}/execute|pause|resume|cancel
-- POST /api/team/agent/mission/missions/{id}/steps/{step_id}/approve|reject|skip
-- GET /api/team/agent/mission/missions/{id}/stream (SSE)
 
 ### Portal API (公开)
 - GET /api/portal/{slug}
@@ -475,9 +434,9 @@ pub enum StreamEvent {
 │       │   └── {session_id}/
 │       │       ├── files/
 │       │       └── artifacts/
-│       ├── missions/
-│       │   └── {mission_id}/
-│       │       ├── steps/
+│       ├── tasks/
+│       │   └── {task_id}/
+│       │       ├── runs/
 │       │       └── artifacts/
 │       └── portals/
 │           └── {portal_id}/
@@ -493,8 +452,8 @@ pub enum StreamEvent {
 ## 后台清理任务
 
 1. **Chat 清理** (每 60 秒): 移除过期会话 (>4 小时不活动)，可配置 TEAM_CHAT_STALE_MAX_AGE_SECS, 最小间隔 15 秒
-2. **Mission 清理** (每 120 秒): 移除过期任务 (>3 小时)，可配置 TEAM_MISSION_STALE_SECS
-3. **孤儿 Mission 恢复** (启动时): 恢复卡在 Running/Planning 的任务，使用 server instance ID 追踪
+2. **DirectHarness/AgentTask 队列恢复**: V4 run 释放 slot 后唤醒同 agent 的 queued task
+3. **Scheduled Task 调度**: missed recovery、backoff、run ledger 和 delivery 结算
 4. **Auth Session 清理** (每 600 秒): 移除过期会话，sliding window 续期
 5. **分析清理** (每 300 秒): 取消待处理 AI 分析
 
@@ -768,12 +727,12 @@ pub struct AvatarGovernanceCounts {
 agime-team-server 提供完整的团队协作后端，核心特性：
 
 1. **双数据库支持**: MongoDB (主) + SQLite (基础)
-2. **两阶段执行**: Chat Track (直接对话) + Mission Track (AGE)
+2. **DirectHarness V4 执行面**: Chat/Channel/Document/Scheduled Task/AgentTask/Subagent
 3. **实时流式**: SSE 事件流，带恢复机制
 4. **Workspace 隔离**: 每个会话/任务独立文件系统
 5. **MCP 集成**: 完整 MCP 客户端，支持 stdio/HTTP
 6. **Platform Extensions**: 内置 Document/Portal/Developer 工具
-7. **AGE 引擎**: 自适应目标执行，带 pivot 协议
+7. **AgentTask V4 Runner**: 保留任务 API，执行进入统一 V4 host
 8. **认证系统**: Session Cookie + API Key + Bearer Token
 9. **后台任务**: 自动清理、恢复、维护
 10. **企业级**: 限速、审计、CORS、安全

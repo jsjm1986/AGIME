@@ -28,11 +28,11 @@ graph LR
 ```mermaid
 graph LR
     subgraph Layer1["HTTP路由层"]
-        Routes["Chat/Mission/Agent<br/>Portal/Avatar路由"]
+        Routes["Chat/Channel/Agent<br/>Portal/Avatar路由"]
     end
 
     subgraph Layer2["管理器层"]
-        Managers["ChatManager<br/>MissionManager<br/>TaskManager<br/>AvatarManager"]
+        Managers["ChatManager<br/>TaskManager<br/>AvatarManager"]
     end
 
     subgraph Layer3["服务层"]
@@ -40,7 +40,7 @@ graph LR
     end
 
     subgraph Layer4["执行层"]
-        Executors["DirectHarness V4 surfaces<br/>Chat/Channel/Document/Scheduled/AgentTask<br/>Legacy task/subagent only"]
+        Executors["DirectHarness V4 surfaces<br/>Chat/Channel/Document/Scheduled/AgentTask/Subagent"]
     end
 
     subgraph Layer5["运行时层"]
@@ -148,13 +148,13 @@ pub trait Provider {
 
 ### 4. Context 管理 (agime/src/context_mgmt/)
 
-**三种压缩策略：**
+**当前服务器主线：**
 
-1. **LegacySegmented**: 分段保留，保留最近 N 条消息，丢弃中间历史
-2. **CfpmMemoryV1**: 渐进式记忆 v1，提取关键事实，去重与合并
-3. **CfpmMemoryV2**: 渐进式记忆 v2 (推荐)，自动事实提取，智能去重，上下文门控通知
+1. **context_runtime**: DirectHarness V4 使用的上下文运行时，负责 provider 前投影、staged collapse、committed collapse、session memory 与 overflow recovery。
+2. **ContextRuntimeState**: 持久化在 `agent_sessions.context_runtime_state`，用于普通对话、频道、文档、定时任务和 AgentTask。
+3. **手动压缩**: `/compact` 进入同一 context_runtime 状态机，不再回退到 server legacy executor。
 
-**触发条件：** 默认 80% context 使用率，手动 `/compact` 命令，最大尝试次数 3 (CFPM: 6)
+**触发条件：** 默认 80% context 使用率，手动 `/compact` 命令，以及 provider overflow recovery。
 
 ### 5. MCP 协议集成 (agime-mcp/)
 
@@ -172,11 +172,11 @@ pub trait Provider {
 
 **agime-team (共享库):** Skills/Recipes/Extensions 共享，4 级保护 (Public/TeamInstallable/TeamOnlineOnly/Controlled)，版本控制 (semver)，Git 同步
 
-**agime-team-server (后端):** MongoDB/SQLite 双数据库，认证 (Session Cookie + API Key)，两阶段执行 (Phase 1 Chat Track 直接对话，Phase 2 Mission Track 目标驱动)
+**agime-team-server (后端):** MongoDB/SQLite 双数据库，认证 (Session Cookie + API Key)，DirectHarness V4 统一执行面 (Chat/Channel/Document/Scheduled Task/AgentTask/Subagent)
 
 **Web Admin (前端):** React 19 + TypeScript + Vite + Tailwind CSS 4，实时 SSE 流式通信，文档管理 (版本控制/悲观锁)，Portal 系统，i18n 中英双语
 
-#### 6.1 Chat Track (Phase 1) - 直接对话
+#### 6.1 Direct Chat / Channel - 直接对话
 
 **核心模块：**
 - `chat_manager.rs` (319行): ActiveChat结构，会话追踪，事件广播
@@ -189,18 +189,19 @@ pub trait Provider {
 - 批量持久化 (128事件/25ms)
 - 自动清理 (4小时不活动)
 
-#### 6.2 Mission Track (Phase 2) - 目标驱动
+#### 6.2 AgentTask / Scheduled Task - 受控后台执行
 
 **核心模块：**
-- `mission_executor.rs` (3700+行): Mission生命周期管理
-- `mission_manager.rs`: 任务追踪，孤儿恢复
-- `mission_routes.rs`: HTTP路由，审批工作流
+- `agent_task_v4_runner.rs`: `/api/team/agent/tasks` 的 V4-native runner
+- `execution_admission.rs`: AgentTask 队列和并发 slot 控制
+- `scheduled_tasks/*`: 定时任务调度、运行记录和结果结算
 
-**生命周期：** Draft → Planning → Planned → Running → Completed/Failed/Cancelled
+**生命周期：** Approved/Queued → Running → Completed/Failed/Cancelled
 
-**执行模式：**
-- Sequential: 顺序执行步骤
-- Adaptive: 自适应目标执行 (见下方AGE)
+**执行原则：**
+- AgentTask 保留 HTTP API 和结果集合，但不创建临时任务桥。
+- Scheduled Task 由 scheduler/runtime 负责 channel、artifact、publish 等 delivery 结算。
+- subagent/swarm 由 `crates/agime` harness 内置 `TaskRuntime` 承载，不通过 server legacy executor。
 
 #### 6.3 核心支撑模块
 
@@ -256,26 +257,19 @@ pub trait Provider {
 - build_portal_coding_overlay()
 - build_portal_manager_overlay()
 
-### 7. Adaptive Goal Execution (自适应目标执行)
+### 7. DirectHarness V4 执行收口
 
-**adaptive_executor.rs** - AGE引擎实现
+服务器侧已经不再保留独立 legacy executor。维护执行问题时，应按下面顺序定位：
 
-**执行流程：**
-1. 解析mission goal为goal tree
-2. 执行每个goal并评估进度 (ProgressSignal: Advancing/Stalled/Blocked)
-3. 完成后检查完成标准
-4. Pivot协议: 失败时切换方法 (PivotDecision: Retry/Abandon)
-5. 最大pivot: 每goal 3次，每mission 15次
-6. 追踪失败教训 (AttemptRecord)
-
-**超时管理：**
-- 默认goal执行: 20分钟 (DEFAULT_GOAL_EXECUTION_TIMEOUT_SECS=1200)
-- Planning phase: 5分钟
-- 可配置，带验证
+1. HTTP/API surface：`chat_routes.rs`、`chat_channel_executor.rs`、`routes_mongo.rs`、`scheduled_tasks/*`
+2. V4 host：`server_harness_host.rs`
+3. AgentTask 队列与结算：`execution_admission.rs`、`agent_task_v4_runner.rs`
+4. subagent/swarm：`crates/agime` harness 内置 `TaskRuntime`
+5. 上下文：`crates/agime/src/context_runtime/*`
 
 ## 数据流
 
-### Chat Track流程 (Phase 1 - 直接对话)
+### Direct Chat 流程
 
 ```mermaid
 sequenceDiagram
@@ -306,31 +300,26 @@ sequenceDiagram
     Executor->>DB: 批量持久化<br/>(128事件/25ms)
 ```
 
-### Mission Track流程 (Phase 2 - 目标驱动)
+### AgentTask 流程
 
 ```mermaid
 flowchart LR
-    A[创建Mission] --> B[执行请求]
-    B --> C[AI生成计划]
-    C --> D[Goal Tree解析]
-    D --> E[执行Goal]
-    E --> F[DirectHarness V4]
-    F --> G[Tool调用]
-    G --> H{完成?}
-    H -->|是| J[下一Goal]
-    H -->|否| K[Pivot决策]
-    K -->|Retry| E
-    K -->|Abandon| M[放弃]
-    J --> N{全部完成?}
-    N -->|否| E
-    N -->|是| O[归档]
-    O --> P[完成]
+    A[提交 AgentTask] --> B[execution_admission]
+    B --> C{agent slot 可用?}
+    C -->|是| D[AgentTaskV4Runner]
+    C -->|否| E[Queued]
+    E --> C
+    D --> F[ServerHarnessHost]
+    F --> G[agime harness / TaskRuntime]
+    G --> H[工具调用与上下文投影]
+    H --> I[写 agent_task_results]
+    I --> J[完成/失败/取消]
 
     style A fill:#667eea,stroke:#667eea,color:#ffffff
-    style C fill:#764ba2,stroke:#764ba2,color:#ffffff
-    style E fill:#f093fb,stroke:#f093fb,color:#ffffff
-    style K fill:#ff6b6b,stroke:#ff6b6b,color:#ffffff
-    style P fill:#43e97b,stroke:#43e97b,color:#ffffff
+    style B fill:#764ba2,stroke:#764ba2,color:#ffffff
+    style D fill:#f093fb,stroke:#f093fb,color:#ffffff
+    style F fill:#4facfe,stroke:#4facfe,color:#ffffff
+    style J fill:#43e97b,stroke:#43e97b,color:#ffffff
 ```
 
 ### Agent CRUD流程 (管理接口)
@@ -422,7 +411,7 @@ services:
 - 分析缓存: 100 条目
 - Tool 缓存 TTL: 5 秒 (300 秒 with list_changed)
 - 日志保留: 14 天
-- Session 清理: 4 小时不活动 (chat), 3 小时 (mission)
+- Session 清理: 4 小时不活动 (chat/direct surfaces)
 
 ## 关键设计模式
 

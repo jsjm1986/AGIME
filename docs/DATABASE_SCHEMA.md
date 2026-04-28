@@ -17,9 +17,9 @@ erDiagram
     portals ||--o{ avatar_instances : "绑定"
     avatar_instances ||--o{ avatar_governance_states : "治理"
     agents ||--o{ chat_sessions : "执行"
-    agents ||--o{ missions : "运行"
+    agents ||--o{ agent_tasks : "运行"
     chat_sessions ||--o{ chat_messages : "包含"
-    missions ||--o{ mission_steps : "包含"
+    agent_tasks ||--o{ agent_task_results : "产出"
     portals ||--o{ portal_sessions : "访问"
 
     users {
@@ -54,8 +54,8 @@ erDiagram
         string agent_id FK
     }
 
-    missions {
-        string mission_id PK
+    agent_tasks {
+        string id PK
         string agent_id FK
         string status
     }
@@ -281,7 +281,7 @@ erDiagram
 
   // 来源追踪
   session_source: String,       // 会话来源 (默认"chat")
-  source_mission_id: String,    // 来源任务ID
+  source_mission_id: String,    // 历史 lineage 兼容字段
 
   // 时间戳
   created_at: DateTime,
@@ -316,133 +316,35 @@ erDiagram
 { created_at: -1 }
 ```
 
-### 8. missions (使命)
+### 8. agent_tasks (AgentTask)
 
 ```javascript
 {
   _id: ObjectId,
-  mission_id: String,
+  id: String,
   team_id: String,
-  creator_id: String,
   agent_id: String,
-
-  // 目标与上下文
-  goal: String,
-  context: String,
-
-  // 状态与模式
-  status: String,               // "draft" | "planning" | "planned" | "running" | "paused" | "completed" | "failed" | "cancelled"
-  execution_mode: String,       // "sequential" | "adaptive"
-  execution_profile: String,    // "auto" | "fast" | "full"
-  approval_policy: String,      // "auto" | "checkpoint" | "manual"
-
-  // 执行追踪
-  current_step: Number,         // 当前步骤索引
-  session_id: String,           // 关联会话ID
-  source_chat_session_id: String, // 来源聊天会话
-  priority: Number,             // 优先级
-  plan_version: Number,         // 计划版本号
-  current_run_id: String,       // 当前运行ID
-
-  // AGE相关 (Adaptive模式)
-  goal_tree: [Object],          // 目标树 GoalNode[]
-  current_goal_id: String,      // 当前目标ID
-  total_pivots: Number,         // 总转向次数
-  total_abandoned: Number,      // 总放弃次数
-
-  // 步骤定义
-  steps: [
-    {
-      step_id: String,
-      description: String,
-      status: String,           // "pending" | "awaiting_approval" | "running" | "completed" | "failed" | "skipped"
-      result: String,
-      started_at: DateTime,
-      completed_at: DateTime,
-
-      // 扩展字段
-      is_checkpoint: Boolean,
-      approved_by: String,
-      tokens_used: Number,
-      output_summary: String,
-      retry_count: Number,
-      max_retries: Number,
-      timeout_seconds: Number,
-      required_artifacts: [String],
-      completion_checks: [String],
-      runtime_contract: Object,
-      contract_verification: Object,
-      use_subagent: Boolean,
-      tool_calls: [Object]      // ToolCallRecord[]
-    }
-  ],
-
-  // 产物
-  artifacts: [
-    {
-      artifact_id: String,
-      type: String,             // "code" | "document" | "config" | "image" | "data" | "other"
-      path: String,
-      content: String,
-      created_at: DateTime
-    }
-  ],
-
-  // 资源管理
-  token_budget: Number,         // 0 = unlimited
-  token_usage: Number,
-  step_timeout_seconds: Number,
-  step_max_retries: Number,
-  workspace_path: String,       // 工作空间路径
-  attached_document_ids: [String], // 附加文档
-
-  // 总结
-  final_summary: String,        // 最终总结
-
-  // 时间戳
+  creator_id: String,
+  status: String,               // "approved" | "queued" | "running" | "completed" | "failed" | "cancelled"
+  task_type: String,            // "chat" | "recipe" | "skill"
+  content: Object,              // messages/session_id/workspace_path/result_contract 等
   created_at: DateTime,
   updated_at: DateTime,
   started_at: DateTime,
   completed_at: DateTime
 }
-      content: String,
-      created_at: DateTime
-    }
-  ],
-  token_budget: Number,         // 0 = unlimited
-  token_usage: Number,
-  step_timeout_seconds: Number,
-  step_max_retries: Number,
-  created_at: DateTime,
-  updated_at: DateTime,
-  started_at: DateTime,
-  completed_at: DateTime
-}
-
-// 索引
-{ mission_id: 1 } unique
-{ team_id: 1, status: 1 }
-{ creator_id: 1 }
-{ agent_id: 1 }
-{ created_at: -1 }
 ```
 
-### 9. mission_stream_events (使命流事件)
+### 9. agent_task_results (AgentTask 结果)
 
 ```javascript
 {
   _id: ObjectId,
-  mission_id: String,
-  event_id: String,
-  event_type: String,           // "goal_start" | "goal_complete" | "pivot" | ...
-  event_data: Object,
-  sequence: Number,
+  task_id: String,
+  result_type: String,          // "message" | "artifact" | "diagnostic"
+  content: Object,              // final summary、completion report、artifacts、runtime session
   created_at: DateTime
 }
-
-// 索引
-{ mission_id: 1, sequence: 1 }
-{ event_id: 1 }
 ```
 
 ### 10. documents (文档)
@@ -474,7 +376,7 @@ erDiagram
   // 血缘追踪
   source_snapshots: [Object],   // 来源快照 SourceDocumentSnapshot[]
   source_session_id: String,    // 来源会话
-  source_mission_id: String,    // 来源任务
+  source_mission_id: String,    // 历史 lineage 兼容字段
   supersedes_id: String,        // 替代文档ID (原parent_document_id)
   lineage_description: String,  // 血缘描述
 
@@ -743,9 +645,9 @@ db.agent_sessions.createIndex({ session_id: 1 }, { unique: true })
 db.agent_sessions.createIndex({ team_id: 1, agent_id: 1 })
 db.agent_sessions.createIndex({ last_message_at: -1 })
 
-// missions
-db.missions.createIndex({ mission_id: 1 }, { unique: true })
-db.missions.createIndex({ team_id: 1, status: 1 })
+// agent_tasks
+db.agent_tasks.createIndex({ id: 1 }, { unique: true })
+db.agent_tasks.createIndex({ team_id: 1, agent_id: 1, status: 1 })
 
 // documents
 db.documents.createIndex({ document_id: 1 }, { unique: true })

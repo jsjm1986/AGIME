@@ -191,7 +191,7 @@ sequenceDiagram
 - Query: `?last_event_id={id}` (恢复)
 - 事件: status, text, thinking, toolcall, toolresult, done
 
-### 聊天会话 API (Phase 1)
+### 聊天会话 API
 
 **POST /api/team/agent/chat/sessions** (protected)
 - 描述: 创建聊天会话
@@ -268,91 +268,6 @@ sequenceDiagram
 **POST /api/team/agent/chat/sessions/{id}/archive** (protected)
 - 描述: 归档会话
 - 响应: `{session: {status: "archived"}}`
-
-### 使命 API (Phase 2 - AGE)
-
-**POST /api/team/agent/mission/missions** (protected)
-- 描述: 创建使命
-- 请求:
-```json
-{
-  "goal": "Build a web scraper for news articles",
-  "context": "Target site: example.com",
-  "agent_id": "agent-123",
-  "execution_mode": "adaptive",
-  "execution_profile": "full",
-  "approval_policy": "checkpoint",
-  "token_budget": 100000,
-  "step_timeout_seconds": 1200,
-  "step_max_retries": 3
-}
-```
-- 响应: `{mission: {mission_id, status: "draft", ...}}`
-
-**GET /api/team/agent/mission/missions** (protected)
-- 描述: 列出使命 (分页)
-- Query: `?page=1&limit=20&status=running&agent_id={id}`
-- 响应: `{missions: [...], total, page, limit}`
-
-**GET /api/team/agent/mission/missions/{id}** (protected)
-- 描述: 获取使命详情 (含 steps/artifacts)
-- 响应:
-```json
-{
-  "mission": {
-    "mission_id": "mission-123",
-    "goal": "...",
-    "status": "running",
-    "steps": [
-      {"step_id": "step-1", "description": "...", "status": "completed"},
-      {"step_id": "step-2", "description": "...", "status": "running"}
-    ],
-    "artifacts": [
-      {"artifact_id": "art-1", "type": "code", "path": "scraper.py"}
-    ],
-    "token_usage": 5000
-  }
-}
-```
-
-**POST /api/team/agent/mission/missions/{id}/execute** (protected)
-- 描述: 开始执行使命
-- 响应: `{mission: {status: "planning"}}`
-
-**POST /api/team/agent/mission/missions/{id}/pause** (protected)
-- 描述: 暂停使命
-- 响应: `{mission: {status: "paused"}}`
-
-**POST /api/team/agent/mission/missions/{id}/resume** (protected)
-- 描述: 恢复使命
-- 响应: `{mission: {status: "running"}}`
-
-**POST /api/team/agent/mission/missions/{id}/cancel** (protected)
-- 描述: 取消使命
-- 响应: `{mission: {status: "cancelled"}}`
-
-**POST /api/team/agent/mission/missions/{id}/steps/{step_id}/approve** (protected)
-- 描述: 批准步骤 (Manual/Checkpoint 策略)
-- 响应: `{step: {status: "approved"}}`
-
-**POST /api/team/agent/mission/missions/{id}/steps/{step_id}/reject** (protected)
-- 描述: 拒绝步骤
-- 请求: `{reason?}`
-- 响应: `{step: {status: "rejected"}}`
-
-**POST /api/team/agent/mission/missions/{id}/steps/{step_id}/skip** (protected)
-- 描述: 跳过步骤
-- 响应: `{step: {status: "skipped"}}`
-
-**GET /api/team/agent/mission/missions/{id}/stream** (protected, SSE)
-- 描述: 流式使命执行事件
-- Headers: `Accept: text/event-stream`
-- Query: `?last_event_id={id}`
-- 事件类型 (包含所有 chat 事件 +):
-  - `goal_start`: `{goal_id, title, depth}`
-  - `goal_complete`: `{goal_id, signal: "success"}`
-  - `pivot`: `{goal_id, from_approach, to_approach, learnings: [...]}`
-  - `goal_abandoned`: `{goal_id, reason}`
 
 ### 文档 API
 
@@ -799,7 +714,7 @@ data: {"status": "completed"}
 AGIME 提供完整的 REST API 和 SSE 流式接口，支持：
 
 1. **认证**: Session Cookie + API Key + Bearer Token
-2. **两阶段执行**: Chat (直接对话) + Mission (AGE)
+2. **DirectHarness V4 执行**: Chat/Channel/Document/Scheduled Task/AgentTask/Subagent
 3. **实时流式**: SSE 事件流，带恢复机制
 4. **文档管理**: CRUD + 版本控制 + 锁定
 5. **Portal 系统**: 公开访问端点

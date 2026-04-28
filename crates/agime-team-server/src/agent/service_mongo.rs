@@ -6546,7 +6546,7 @@ impl AgentService {
         Ok(result.modified_count > 0)
     }
 
-    // ========== Chat Track Methods (Phase 1) ==========
+    // ========== Direct chat methods ==========
 
     /// List user sessions with lightweight items (no messages_json).
     /// Joins agent_name from team_agents collection.

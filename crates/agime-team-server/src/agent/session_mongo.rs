@@ -1,7 +1,7 @@
 //! MongoDB session document types for agent conversations
 //!
 //! Sessions persist multi-turn conversation state, enabling:
-//! - Conversation history across multiple task submissions
+//! - Conversation history across direct chat turns and AgentTask submissions
 //! - Token counting and context runtime state persistence
 //! - Session lifecycle management (active/archived)
 
@@ -44,7 +44,7 @@ pub struct AgentSessionDoc {
     pub created_at: bson::DateTime,
     pub updated_at: bson::DateTime,
 
-    // === Chat Track fields (Phase 1) ===
+    // === Direct chat fields ===
     /// Session title (auto-generated from first message)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -79,7 +79,7 @@ pub struct AgentSessionDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_delegation_runtime: Option<DelegationRuntimeResponse>,
 
-    // === Phase 2: Document attachment ===
+    // === Document attachment ===
     /// Document IDs attached to this session as context
     #[serde(default)]
     pub attached_document_ids: Vec<String>,
@@ -292,9 +292,9 @@ fn default_limit() -> u32 {
     20
 }
 
-// === Chat Track types (Phase 1) ===
+// === Direct chat types ===
 
-/// Request to send a chat message (bypasses Task system)
+/// Request to send a chat message (bypasses the AgentTask HTTP API).
 #[derive(Debug, Deserialize)]
 pub struct SendChatMessageRequest {
     pub content: String,

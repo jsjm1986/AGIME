@@ -48,7 +48,7 @@
 
 **路由**: `/teams/:teamId/chat` 及 `/teams/:teamId/chat/:sessionId`
 
-Phase 1 核心交互页面，用于直接与 Agent 对话。
+核心交互页面，用于直接与 Agent 对话。
 
 **布局**:
 - **左侧面板**: `AgentSelector`（智能体选择器）+ `ChatSessionList`（会话列表，支持按 Agent 过滤）
@@ -88,36 +88,16 @@ Phase 1 核心交互页面，用于直接与 Agent 对话。
 - URL query 参数 `?section=` 控制当前激活的 Tab
 - 侧边栏折叠状态持久化到 `localStorage`
 
-### 3. MissionDetailPage — 任务执行详情
+### 3. TaskQueuePanel — AgentTask 队列
 
-**路由**: `/teams/:teamId/missions/:missionId`
-
-Phase 2 AGE (Adaptive Goal Execution) 系统的核心界面。
+AgentTask 使用 DirectHarness V4 执行，前端只保留任务创建、审批、取消、结果和 stream 展示能力，不再维护旧目标树专用页面。
 
 **功能特性**:
-- 自适应任务执行可视化
-- 实时 Goal 事件流：`goal_start`、`goal_complete`、`pivot`、`goal_abandoned`
-- Step 审批面板 (`StepApprovalPanel`)
-- Goal 树形视图 (`GoalTreeView`)
-- Mission 事件列表 (`MissionEventList`)
-- 制品（Artifact）预览与列表
+- 展示 queued/running/completed/failed/cancelled 状态
+- 通过 `/api/team/agent/tasks` 创建和管理任务
+- SSE 展示文本、工具调用、worker/subagent、权限和完成事件
 
-**相关组件** (位于 `src/components/mission/`):
-- `MissionCard` — 任务卡片
-- `MissionStepList` / `MissionStepDetail` — 步骤列表与详情
-- `GoalTreeView` — 目标树形展示
-- `MissionEventList` — 事件时间线
-- `StepApprovalPanel` — 步骤审批
-- `ArtifactList` / `ArtifactPreview` — 制品管理
-- `CreateMissionDialog` — 创建任务对话框
-
-### 4. MissionBoardPage — 任务看板
-
-**路由**: `/teams/:teamId/missions`
-
-任务总览看板页面，展示团队所有 Mission 的状态与进度。
-
-### 5. LoginPage — 登录
+### 4. LoginPage — 登录
 
 **功能特性**:
 - 密码 / API Key 双模式登录
@@ -166,7 +146,7 @@ graph LR
     subgraph Pages["页面层"]
         P1[Login/Dashboard]
         P2[Teams/Chat]
-        P3[Mission]
+        P3[AgentTask/ScheduledTask]
     end
 
     subgraph Components["组件层"]
@@ -260,7 +240,6 @@ sequenceDiagram
 | `compaction` | 上下文压缩事件 |
 | `status` | Agent 状态变更 |
 | `workspace_changed` | 工作区变更 |
-| `goal_*` | Goal 相关事件（goal_start, goal_complete 等） |
 | `done` | 流式传输结束 |
 
 **自动滚动**: 当用户距底部不超过 150px 时自动滚动到最新消息
@@ -334,7 +313,6 @@ sequenceDiagram
 | `LaboratorySection` | 实验室功能 |
 | `SettingsTab` | 团队设置 |
 | `TeamAdminSection` | 管理员功能 |
-| `MissionsPanel` | Mission 面板 |
 | `TeamCard` | 团队卡片 |
 
 #### Portal 子组件 (`src/components/team/portal/`)
@@ -444,7 +422,6 @@ export class ApiError extends Error {
 |------|------|------|
 | Chat | `chat.ts` | 会话管理、消息发送、SSE 流连接 |
 | Agent | `agent.ts` | 智能体 CRUD、状态管理 |
-| Mission | `mission.ts` | Mission 创建、事件查询、步骤审批 |
 | Documents | `documents.ts` | 文档 CRUD、版本管理、上传/下载 |
 | Portal | `portal.ts` | Portal 管理、文件操作 |
 | Brand | `brand.ts` | 品牌配置、License 管理 |

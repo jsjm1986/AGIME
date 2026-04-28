@@ -1,6 +1,6 @@
 //! Skill Registry tools — discover and import remote skills into the team skill library.
 //!
-//! Phase 1 scope:
+//! Current scope:
 //! - search skills via skills.sh
 //! - preview a GitHub-backed skill package
 //! - import a GitHub-backed skill package into Mongo skills

@@ -1,13 +1,12 @@
-//! Agent module for team task queue management
+//! Agent module for team execution and agent management.
 //!
 //! This module provides:
 //! - Team agent configuration management
-//! - Task submission and approval workflow
-//! - Task execution and result streaming
+//! - DirectHarness V4 chat/channel/document/scheduled-task execution
+//! - AgentTask submission, queueing, V4 execution, and result streaming
 //! - Rate limiting for API protection
-//! - Task manager for background task tracking
+//! - Task manager for background stream tracking
 
-// Primary Mongo-backed task host
 pub mod agent_prompt_composer;
 pub mod agent_runtime_config;
 pub mod agent_task_v4_runner;
@@ -49,7 +48,7 @@ pub mod workspace_types;
 
 pub mod runtime_text;
 
-// Chat Track (Phase 1)
+// Direct chat/channel surfaces
 pub mod channel_coding_cards;
 pub mod channel_project_workspace;
 pub mod channel_workspace_governance;
@@ -83,7 +82,7 @@ pub use streamer::stream_task_results;
 #[allow(unused_imports)]
 pub use task_manager::{create_task_manager, TaskManager};
 
-// Chat Track exports
+// Direct chat exports
 #[allow(unused_imports)]
 pub use chat_manager::ChatManager;
 #[allow(unused_imports)]

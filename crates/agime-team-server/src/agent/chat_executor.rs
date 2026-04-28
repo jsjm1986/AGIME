@@ -43,7 +43,7 @@ pub struct ChatExecutor {
     db: Arc<MongoDb>,
     chat_manager: Arc<ChatManager>,
     agent_service: Arc<AgentService>,
-    /// Internal task manager retained for legacy queue wakeups after V4 runs release a slot.
+    /// Internal manager used to wake queued AgentTask work after V4 chat releases a slot.
     internal_task_manager: Arc<TaskManager>,
     workspace_root: String,
 }
@@ -61,13 +61,13 @@ impl ChatExecutor {
         }
     }
 
-    /// Execute a chat message in a session (bypasses Task system).
+    /// Execute a chat message in a session (bypasses the AgentTask HTTP API).
     ///
     /// Strategy: execute directly through Harness V4. When the agent is
     /// saturated, the request stays queued until a DirectHarness slot opens.
     ///
-    /// C3 fix: All cleanup (is_processing, temp task, done event) is
-    /// guaranteed via the inner method + cleanup-on-all-paths pattern.
+    /// All cleanup (processing flags, stream events, slot release, queued work wakeup)
+    /// is guaranteed via the inner method + cleanup-on-all-paths pattern.
     pub async fn execute_chat(
         &self,
         session_id: &str,

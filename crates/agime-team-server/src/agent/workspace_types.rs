@@ -10,7 +10,6 @@ pub enum WorkspaceKind {
     DocumentAnalysis,
     PortalProject,
     McpAdmin,
-    Mission,
 }
 
 impl WorkspaceKind {
@@ -22,7 +21,6 @@ impl WorkspaceKind {
             Self::DocumentAnalysis => "document_analysis",
             Self::PortalProject => "portal_project",
             Self::McpAdmin => "mcp_admin",
-            Self::Mission => "mission",
         }
     }
 }

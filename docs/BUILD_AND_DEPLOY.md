@@ -456,15 +456,6 @@ WantedBy=multi-user.target
 | `AI_DESCRIBE_API_URL` | — | API 端点 |
 | `AI_DESCRIBE_API_FORMAT` | — | API 格式：`anthropic` 或 `openai` |
 
-### 任务超时配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `TEAM_MISSION_MIN_STEP_TIMEOUT_SECS` | `300` | 单步最小超时（秒） |
-| `TEAM_MISSION_COMPLEX_STEP_TIMEOUT_SECS` | `900` | 复杂步骤超时（秒） |
-| `TEAM_MISSION_MIN_GOAL_TIMEOUT_SECS` | `600` | 目标最小超时（秒） |
-| `TEAM_MISSION_STALE_SECS` | `10800` | 过期任务清理阈值（默认 3 小时） |
-
 ### MCP 配置
 
 | 变量 | 默认值 | 说明 |

@@ -2,7 +2,7 @@
 
 **版本**: 2.8.0 | **许可证**: Apache-2.0 | **语言**: Rust + TypeScript
 
-AGIME 是一个基于 Rust 构建的 AI Agent 框架，提供从单人 CLI 到多人协作的完整 AI 工作流解决方案。框架核心围绕 **Model Context Protocol (MCP)** 协议设计，支持 14+ 种 LLM Provider，并通过独创的**双阶段执行系统**（Chat Track + Mission Track）满足从简单对话到复杂自主任务的全场景需求。
+AGIME 是一个基于 Rust 构建的 AI Agent 框架，提供从单人 CLI 到多人协作的完整 AI 工作流解决方案。框架核心围绕 **Model Context Protocol (MCP)** 协议设计，支持 14+ 种 LLM Provider，并在团队服务器中统一使用 **DirectHarness V4** 承载对话、频道、文档、定时任务和 AgentTask 执行。
 
 ## 先看这份（非技术用户）
 
@@ -39,10 +39,10 @@ chmod +x serve.sh
 - **Provider 自动检测**: 根据环境变量与配置自动选择最佳 Provider
 - **Declarative Providers**: 通过 YAML 配置文件声明自定义 Provider
 
-### 双阶段执行系统
-- **Phase 1 - Chat Track**: 直接多轮对话，Session 持久化，支持实时 SSE 流式输出
-- **Phase 2 - Mission Track**: 多步骤自主任务执行，包含规划、执行、验证的完整生命周期
-- **AGE (Adaptive Goal Execution) 引擎**: 基于目标树的自适应执行，支持 Pivot 协议（重试/放弃策略）
+### DirectHarness V4 执行系统
+- **Direct Chat / Channel**: 直接多轮对话，Session 持久化，支持实时 SSE 流式输出。
+- **AgentTask**: 保留 `/api/team/agent/tasks` 产品入口和结果集合，但执行进入 DirectHarness V4，不再通过临时 Mongo 任务桥接。
+- **Document / Scheduled Task**: 文档分析和定时任务复用同一 V4 host，由运行时负责结果、产物和状态结算。
 
 ### Extension 系统
 - **MCP Client 架构**: 基于 rmcp 0.15 实现，支持 stdio 和 Streamable HTTP 两种传输方式
@@ -128,7 +128,7 @@ graph TB
 | **agime-cli** | 命令行客户端：交互式终端、Session 管理、Recipe 执行 | clap, rustyline, cliclack, bat (语法高亮), axum (内嵌 Web 服务) |
 | **agime-server** | HTTP API 服务器：RESTful API、WebSocket、SSE 流式输出 | axum, tower-http, utoipa (OpenAPI), tokio-tungstenite |
 | **agime-team** | 团队协作核心库：数据模型、MongoDB/SQLite 持久化、路由、同步 | mongodb, sqlx, git2, validator, zip |
-| **agime-team-server** | 团队协作服务器：Agent 执行、认证、Portal、文档管理、Chat/Mission Track | axum, mongodb, argon2, ed25519-dalek, pulldown-cmark |
+| **agime-team-server** | 团队协作服务器：Agent 执行、认证、Portal、文档管理、DirectHarness V4 执行面 | axum, mongodb, argon2, ed25519-dalek, pulldown-cmark |
 | **agime-bench** | 基准测试框架：LLM 能力评估、自动化测试套件 | criterion (间接), agime core |
 | **agime-test** | 测试基础设施：请求/响应捕获工具 | clap, serde_json |
 

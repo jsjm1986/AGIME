@@ -315,15 +315,16 @@ Token 使用量预估模块，在发送请求前预估 token 消耗，辅助 con
 
 ## Context 管理
 
-位于 `context_mgmt/` 目录，是保证长对话可持续运行的关键模块。
+当前主线位于 `context_runtime/`，是 DirectHarness V4 保证长对话可持续运行的关键模块。旧 `context_mgmt/` 口径只作为历史背景，不再作为 team-server 执行主线。
 
-### 三种 Compaction 策略
+### Context Runtime 策略
 
 | 策略 | 说明 |
 |------|------|
-| **LegacySegmented** | 传统分段压缩，按消息段落截断旧内容 |
-| **CfpmMemoryV1** | CFPM (Context-Free Progressive Memory) 第一版，基于事实提取的渐进式记忆 |
-| **CfpmMemoryV2** | CFPM 第二版，改进的渐进式记忆，更精确的事实提取和重要性评分 |
+| **Provider Projection** | Provider 调用前按模型窗口和工具上下文投影消息 |
+| **Staged Collapse** | 运行中先生成可回滚的压缩快照 |
+| **Committed Collapse** | 成功后把压缩结果提交进 `context_runtime_state` |
+| **Session Memory** | 长会话保留关键事实、决策和恢复线索 |
 
 ### Progressive Memory
 

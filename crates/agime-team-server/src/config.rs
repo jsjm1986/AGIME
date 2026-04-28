@@ -114,7 +114,7 @@ pub struct Config {
     /// AI Describe: API format - "anthropic" or "openai" (falls back to team agent config)
     pub ai_describe_api_format: Option<String>,
 
-    /// Root directory for per-mission/per-session workspace isolation
+    /// Root directory for per-session and per-task workspace isolation
     #[serde(default = "default_workspace_root")]
     pub workspace_root: String,
 

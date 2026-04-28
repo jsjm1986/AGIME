@@ -146,24 +146,6 @@ pub enum StreamEvent {
         status: String,
         error: Option<String>,
     },
-    // ─── AGE Events ───
-    /// Goal execution started
-    GoalStart {
-        goal_id: String,
-        title: String,
-        depth: u32,
-    },
-    /// Goal execution completed
-    GoalComplete { goal_id: String, signal: String },
-    /// Goal pivoted to new approach
-    Pivot {
-        goal_id: String,
-        from_approach: String,
-        to_approach: String,
-        learnings: String,
-    },
-    /// Goal abandoned
-    GoalAbandoned { goal_id: String, reason: String },
 }
 
 impl StreamEvent {
@@ -188,10 +170,6 @@ impl StreamEvent {
             Self::Compaction { .. } => "compaction",
             Self::SessionId { .. } => "session_id",
             Self::Done { .. } => "done",
-            Self::GoalStart { .. } => "goal_start",
-            Self::GoalComplete { .. } => "goal_complete",
-            Self::Pivot { .. } => "pivot",
-            Self::GoalAbandoned { .. } => "goal_abandoned",
         }
     }
 

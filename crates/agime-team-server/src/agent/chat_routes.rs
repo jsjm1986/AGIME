@@ -1,6 +1,6 @@
-//! Chat API routes (Phase 1 - Chat Track)
+//! Direct chat/channel API routes.
 //!
-//! These routes handle direct chat sessions that bypass the Task system.
+//! These routes handle direct chat sessions that bypass the AgentTask HTTP API.
 //! Mounted at `/api/team/agent/chat`.
 
 use axum::{
@@ -3751,7 +3751,7 @@ pub fn chat_router(
         )
         .route("/sessions/{id}/cancel", post(cancel_chat))
         .route("/sessions/{id}/archive", post(archive_session))
-        // Phase 2: Document attachment
+        // Document attachment
         .route(
             "/sessions/{id}/documents",
             get(list_attached_documents)
@@ -7743,7 +7743,7 @@ async fn delete_session(
     }
 }
 
-// ── Phase 2: Document attachment routes ──
+// ── Document attachment routes ──
 
 #[derive(serde::Deserialize)]
 struct DocumentIdsBody {

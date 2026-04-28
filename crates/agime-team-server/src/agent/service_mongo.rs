@@ -5042,6 +5042,26 @@ impl AgentService {
         Ok(())
     }
 
+    /// Reset runtime-only execution slot counters after process restart.
+    /// In-memory runners do not survive a restart, so persisted slot counters
+    /// must not continue to throttle new V4 executions.
+    pub async fn reset_execution_slots(&self) -> Result<u64, mongodb::error::Error> {
+        let result = self
+            .agents()
+            .update_many(
+                doc! { "active_execution_slots": { "$gt": 0 } },
+                doc! {
+                    "$set": {
+                        "active_execution_slots": 0i32,
+                        "updated_at": bson::DateTime::now()
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(result.modified_count)
+    }
+
     pub async fn get_task_results(
         &self,
         task_id: &str,

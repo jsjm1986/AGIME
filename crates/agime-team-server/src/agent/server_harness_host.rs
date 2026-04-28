@@ -512,15 +512,6 @@ fn host_target_artifacts(session: &AgentSessionDoc) -> Vec<String> {
             targets.push(format!("channel:{}", channel_id));
         }
     }
-    if !session.attached_document_ids.is_empty() {
-        targets.extend(
-            session
-                .attached_document_ids
-                .iter()
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| format!("document:{}", value.trim())),
-        );
-    }
     targets.sort();
     targets.dedup();
     targets
@@ -3718,7 +3709,7 @@ mod tests {
     }
 
     #[test]
-    fn host_targets_include_channel_thread_and_documents() {
+    fn host_targets_include_channel_thread_but_not_attached_documents() {
         let session = AgentSessionDoc {
             id: None,
             session_id: "session-1".to_string(),
@@ -3779,9 +3770,7 @@ mod tests {
         };
 
         let targets = host_target_artifacts(&session);
-        assert!(targets.contains(&"channel:channel-1/thread:thread-1".to_string()));
-        assert!(targets.contains(&"document:doc-a".to_string()));
-        assert!(targets.contains(&"document:doc-b".to_string()));
+        assert_eq!(targets, vec!["channel:channel-1/thread:thread-1"]);
     }
 
     #[test]

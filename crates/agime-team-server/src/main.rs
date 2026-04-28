@@ -691,6 +691,15 @@ fn build_router(state: Arc<AppState>) -> Router {
                         Err(e) => tracing::error!("Startup: failed to reset stuck sessions: {}", e),
                         _ => {}
                     }
+                    match svc.reset_execution_slots().await {
+                        Ok(n) if n > 0 => {
+                            tracing::warn!("Startup: reset {} stale agent execution slots", n)
+                        }
+                        Err(e) => {
+                            tracing::error!("Startup: failed to reset execution slots: {}", e)
+                        }
+                        _ => {}
+                    }
                 });
             }
 

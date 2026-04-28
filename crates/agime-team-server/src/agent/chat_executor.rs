@@ -466,13 +466,10 @@ impl ChatExecutor {
         let workspace_path = workspace_binding.root_path;
 
         let cancel_token_direct = cancel_token.clone();
-        let target_artifacts = session
-            .attached_document_ids
-            .iter()
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| format!("document:{}", value.trim()))
-            .collect::<Vec<_>>();
-        let result_contract = target_artifacts.clone();
+        // Attached documents are input context. Explicit deliverables are
+        // inferred later from the user message, not from readable documents.
+        let target_artifacts = Vec::new();
+        let result_contract = Vec::new();
 
         match self
             .agent_service

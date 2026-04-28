@@ -579,13 +579,6 @@ impl ChatChannelExecutor {
         } else {
             targets.push(format!("channel:{}", req.channel_id));
         }
-        targets.extend(
-            session
-                .attached_document_ids
-                .iter()
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| format!("document:{}", value.trim())),
-        );
         let target_artifacts = targets.clone();
         let result_contract = targets;
 

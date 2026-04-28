@@ -22,7 +22,7 @@ use crate::agent::chat_manager::ChatManager;
 use crate::agent::server_harness_host::ServerHarnessHost;
 use crate::agent::service_mongo::AgentService;
 use crate::agent::session_mongo::CreateSessionRequest;
-use crate::agent::task_manager::TaskManager;
+use crate::agent::task_manager::create_task_manager;
 
 use super::models::{
     ScheduledTaskDoc, ScheduledTaskExecutionContract, ScheduledTaskKind, ScheduledTaskOutputMode,
@@ -398,7 +398,7 @@ async fn generate_self_evaluation(
     let host = ServerHarnessHost::new(
         db.clone(),
         Arc::new(AgentService::new(db)),
-        Arc::new(TaskManager::new()),
+        create_task_manager(),
     );
     let eval_session = agent_service
         .create_session(CreateSessionRequest {
@@ -865,6 +865,15 @@ pub async fn start_task_run(
         &fire_message.message_id,
     )
     .await?;
+    let run = scheduled_service
+        .create_run(
+            &task,
+            trigger_source,
+            &fire_message.message_id,
+            &runtime_session_id,
+            expected_fire_at(&task),
+        )
+        .await?;
     let (cancel_token, _, channel_run_id) = channel_manager
         .register(
             &task.channel_id,
@@ -875,19 +884,15 @@ pub async fn start_task_run(
         .await
         .ok_or_else(|| anyhow!("scheduled task channel already has an active run"))?;
 
-    channel_service
+    if let Err(error) = channel_service
         .set_processing(&task.channel_id, &channel_run_id, true)
-        .await?;
-
-    let run = scheduled_service
-        .create_run(
-            &task,
-            trigger_source,
-            &fire_message.message_id,
-            &runtime_session_id,
-            expected_fire_at(&task),
-        )
-        .await?;
+        .await
+    {
+        channel_manager
+            .unregister(&task.channel_id, Some(&fire_message.message_id))
+            .await;
+        return Err(error.into());
+    }
 
     let workspace_root_for_eval = workspace_root.clone();
     let executor = ChatChannelExecutor::new(db.clone(), channel_manager.clone(), workspace_root);
@@ -1031,17 +1036,32 @@ pub async fn start_task_run(
                     initial_evaluation = Some(evaluation.clone());
                     improvement_loop_applied = true;
                     improvement_loop_count = 1;
-                    let improvement_executor = ChatChannelExecutor::new(
-                        db_for_eval.clone(),
-                        channel_manager_for_eval,
-                        workspace_root_for_eval,
-                    );
                     let mut retry_request = improvement_request.clone();
                     retry_request.user_message =
                         improvement_loop_prompt(&task_for_eval, evaluation);
-                    let improvement_result = improvement_executor
-                        .execute_channel_message(retry_request, CancellationToken::new())
-                        .await;
+                    let improvement_result = if let Some((retry_cancel, _, _)) =
+                        channel_manager_for_eval
+                            .register(
+                                &retry_request.channel_id,
+                                retry_request.run_scope_id.clone(),
+                                retry_request.thread_root_id.clone(),
+                                Some(retry_request.root_message_id.clone()),
+                            )
+                            .await
+                    {
+                        let improvement_executor = ChatChannelExecutor::new(
+                            db_for_eval.clone(),
+                            channel_manager_for_eval.clone(),
+                            workspace_root_for_eval,
+                        );
+                        improvement_executor
+                            .execute_channel_message(retry_request, retry_cancel)
+                            .await
+                    } else {
+                        Err(anyhow!(
+                            "scheduled task improvement loop could not register an active channel run"
+                        ))
+                    };
                     if improvement_result.is_ok() {
                         let refreshed_session = eval_agent_service
                             .get_session(&runtime_session_for_eval)

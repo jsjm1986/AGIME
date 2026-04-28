@@ -73,14 +73,28 @@ pub(crate) fn detect_system_proxy() -> Option<String> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TeamResourceMode {
+    Explicit,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TeamSkillMode {
     Assigned,
     OnDemand,
 }
 
 #[derive(Debug, Clone)]
+pub(crate) enum TeamAutoExtensionPolicy {
+    ReviewedOnly,
+    All,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct TeamRuntimeSettings {
+    pub(crate) resource_mode: TeamResourceMode,
     pub(crate) skill_mode: TeamSkillMode,
+    pub(crate) auto_extension_policy: TeamAutoExtensionPolicy,
     pub(crate) auto_install_extensions: AutoInstallPolicy,
     pub(crate) extension_cache_root: String,
     pub(crate) portal_base_url: String,
@@ -89,6 +103,14 @@ pub(crate) struct TeamRuntimeSettings {
 
 impl TeamRuntimeSettings {
     pub(crate) fn from_env() -> Self {
+        let resource_mode = match std::env::var("TEAM_AGENT_RESOURCE_MODE")
+            .unwrap_or_else(|_| "explicit".to_string())
+            .to_lowercase()
+            .as_str()
+        {
+            "auto" => TeamResourceMode::Auto,
+            _ => TeamResourceMode::Explicit,
+        };
         let skill_mode = match std::env::var("TEAM_AGENT_SKILL_MODE")
             .unwrap_or_else(|_| "on_demand".to_string())
             .to_lowercase()
@@ -96,6 +118,14 @@ impl TeamRuntimeSettings {
         {
             "on_demand" | "ondemand" => TeamSkillMode::OnDemand,
             _ => TeamSkillMode::Assigned,
+        };
+        let auto_extension_policy = match std::env::var("TEAM_AGENT_AUTO_EXTENSION_POLICY")
+            .unwrap_or_else(|_| "reviewed_only".to_string())
+            .to_lowercase()
+            .as_str()
+        {
+            "all" => TeamAutoExtensionPolicy::All,
+            _ => TeamAutoExtensionPolicy::ReviewedOnly,
         };
         let auto_install_extensions = if std::env::var("TEAM_AGENT_AUTO_INSTALL_EXTENSIONS")
             .map(|s| s.eq_ignore_ascii_case("true"))
@@ -113,13 +143,68 @@ impl TeamRuntimeSettings {
             std::env::var("WORKSPACE_ROOT").unwrap_or_else(|_| "./data/workspaces".to_string());
 
         Self {
+            resource_mode,
             skill_mode,
+            auto_extension_policy,
             auto_install_extensions,
             extension_cache_root,
             portal_base_url,
             workspace_root,
         }
     }
+}
+
+pub(crate) async fn load_team_shared_extensions(
+    db: &MongoDb,
+    team_id: &str,
+    policy: TeamAutoExtensionPolicy,
+    installer: &ExtensionInstaller,
+) -> Vec<CustomExtensionConfig> {
+    use agime_team::services::mongo::extension_service_mongo::ExtensionService;
+
+    let ext_service = ExtensionService::new(db.clone());
+    let extensions = match policy {
+        TeamAutoExtensionPolicy::ReviewedOnly => ext_service.list_reviewed_for_team(team_id).await,
+        TeamAutoExtensionPolicy::All => ext_service.list_active_for_team(team_id).await,
+    };
+    let extensions = match extensions {
+        Ok(exts) => exts,
+        Err(error) => {
+            tracing::warn!(
+                "Failed to load team shared extensions for team {}: {}",
+                team_id,
+                error
+            );
+            return Vec::new();
+        }
+    };
+
+    let mut configs = Vec::new();
+    for ext in extensions {
+        if !super::resource_access::is_runtime_resource_allowed(
+            &ext.visibility,
+            &ext.protection_level,
+        ) {
+            tracing::debug!(
+                "Skipping team extension '{}' due to runtime policy (visibility={}, protection_level={})",
+                ext.name,
+                ext.visibility,
+                ext.protection_level
+            );
+            continue;
+        }
+        match installer.resolve_team_extension(team_id, &ext).await {
+            Ok(cfg) => configs.push(cfg),
+            Err(error) => {
+                tracing::warn!(
+                    "Skipping team extension '{}' due to runtime resolve error: {}",
+                    ext.name,
+                    error
+                );
+            }
+        }
+    }
+    configs
 }
 
 pub(crate) fn agent_has_extension_manager_enabled(agent: &TeamAgent) -> bool {

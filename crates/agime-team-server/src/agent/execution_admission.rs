@@ -94,6 +94,34 @@ pub async fn start_next_queued_tasks_for_agent(
     Ok(())
 }
 
+pub async fn resume_queued_tasks(
+    db: &Arc<MongoDb>,
+    agent_service: &Arc<AgentService>,
+    task_manager: &Arc<TaskManager>,
+    workspace_root: &str,
+) -> Result<usize> {
+    let agent_ids = agent_service.list_agents_with_queued_tasks().await?;
+    let count = agent_ids.len();
+    for agent_id in agent_ids {
+        if let Err(error) = start_next_queued_tasks_for_agent(
+            db,
+            agent_service,
+            task_manager,
+            workspace_root,
+            &agent_id,
+        )
+        .await
+        {
+            tracing::warn!(
+                "Failed to resume queued AgentTask work for agent {}: {}",
+                agent_id,
+                error
+            );
+        }
+    }
+    Ok(count)
+}
+
 fn spawn_task_runner(
     db: Arc<MongoDb>,
     agent_service: Arc<AgentService>,
@@ -105,6 +133,7 @@ fn spawn_task_runner(
     let agent_id = task.agent_id.clone();
     tokio::spawn(async move {
         let (cancel_token, _) = task_manager.register(&task_id).await;
+        let cancel_token_for_result = cancel_token.clone();
         apply_task_surface_state(&db, &agent_service, &task, "running").await;
         let runner = AgentTaskV4Runner::new(
             db.clone(),
@@ -114,25 +143,37 @@ fn spawn_task_runner(
         );
         if let Err(error) = runner.execute_task(&task_id, cancel_token).await {
             tracing::error!("Task execution failed: {}", error);
-            match agent_service.fail_task(&task_id, &error.to_string()).await {
-                Ok(None) => tracing::warn!(
-                    "fail_task: no update for task {} (already terminal?)",
-                    task_id
-                ),
-                Err(db_error) => {
-                    tracing::error!("Failed to update task status to failed: {}", db_error)
+            if cancel_token_for_result.is_cancelled() {
+                task_manager
+                    .broadcast(
+                        &task_id,
+                        StreamEvent::Done {
+                            status: "cancelled".to_string(),
+                            error: None,
+                        },
+                    )
+                    .await;
+            } else {
+                match agent_service.fail_task(&task_id, &error.to_string()).await {
+                    Ok(None) => tracing::warn!(
+                        "fail_task: no update for task {} (already terminal?)",
+                        task_id
+                    ),
+                    Err(db_error) => {
+                        tracing::error!("Failed to update task status to failed: {}", db_error)
+                    }
+                    _ => {}
                 }
-                _ => {}
+                task_manager
+                    .broadcast(
+                        &task_id,
+                        StreamEvent::Done {
+                            status: "failed".to_string(),
+                            error: Some(error.to_string()),
+                        },
+                    )
+                    .await;
             }
-            task_manager
-                .broadcast(
-                    &task_id,
-                    StreamEvent::Done {
-                        status: "failed".to_string(),
-                        error: Some(error.to_string()),
-                    },
-                )
-                .await;
         }
 
         task_manager.complete(&task_id).await;

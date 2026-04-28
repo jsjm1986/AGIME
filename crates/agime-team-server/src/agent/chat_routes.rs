@@ -5230,8 +5230,7 @@ async fn send_channel_message_internal(
     } else {
         None
     };
-
-    let user_message = channel_service
+    let user_message = match channel_service
         .create_message(
             &channel,
             thread_root_id.clone(),
@@ -5257,7 +5256,23 @@ async fn send_channel_message_internal(
             }),
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    {
+        Ok(message) => message,
+        Err(error) => {
+            tracing::error!(
+                "Failed to create channel user message; rolling back active run: {}",
+                error
+            );
+            if pending_run.is_some() {
+                if let Some(scope_id) = thread_root_id.as_deref() {
+                    channel_manager
+                        .unregister(&channel.channel_id, Some(scope_id))
+                        .await;
+                }
+            }
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
     let effective_root_message_id = thread_root_id
         .clone()
         .unwrap_or_else(|| user_message.message_id.clone());
@@ -5287,14 +5302,23 @@ async fn send_channel_message_internal(
             .await
             .ok_or(StatusCode::CONFLICT)?
     };
-    channel_service
+    if let Err(error) = channel_service
         .mark_read(
             &channel,
             &user.user_id,
             Some(user_message.message_id.clone()),
         )
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    {
+        tracing::error!(
+            "Failed to mark channel read after run registration; rolling back active run: {}",
+            error
+        );
+        channel_manager
+            .unregister(&channel.channel_id, Some(&effective_root_message_id))
+            .await;
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     let executor = ChatChannelExecutor::new(db.clone(), channel_manager.clone(), workspace_root);
     let request_for_exec = ExecuteChannelMessageRequest {

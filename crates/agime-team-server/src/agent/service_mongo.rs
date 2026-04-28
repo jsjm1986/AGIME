@@ -4833,6 +4833,22 @@ impl AgentService {
             .map(|doc| doc.map(AgentTask::from))
     }
 
+    pub async fn list_agents_with_queued_tasks(
+        &self,
+    ) -> Result<Vec<String>, mongodb::error::Error> {
+        let values = self
+            .tasks()
+            .distinct("agent_id", doc! { "status": "queued" }, None)
+            .await?;
+        Ok(values
+            .into_iter()
+            .filter_map(|value| match value {
+                Bson::String(agent_id) if !agent_id.trim().is_empty() => Some(agent_id),
+                _ => None,
+            })
+            .collect())
+    }
+
     pub async fn reject_task(
         &self,
         task_id: &str,

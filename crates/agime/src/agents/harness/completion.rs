@@ -271,6 +271,12 @@ fn summary_indicates_runtime_internal_only(summary: &str) -> bool {
         return true;
     }
 
+    if normalized.starts_with("ran into this error:")
+        && normalized.contains("please retry if you think this is a transient or recoverable error")
+    {
+        return true;
+    }
+
     if normalized.starts_with("permission requested for `")
         || normalized.starts_with("permission bridge timed out while waiting for `")
         || (normalized.starts_with("permission `") && normalized.contains(" resolved for `"))
@@ -1201,6 +1207,23 @@ mod tests {
         assert_eq!(report.status, "completed");
         assert_eq!(report.summary, "hi there");
         assert_eq!(report.blocking_reason, None);
+    }
+
+    #[test]
+    fn provider_error_text_does_not_count_as_terminal_completion() {
+        let mut conversation = Conversation::empty();
+        conversation.push(Message::user().with_text("hello"));
+        conversation.push(Message::assistant().with_text(
+            "Ran into this error: upstream timeout.\n\nPlease retry if you think this is a transient or recoverable error.",
+        ));
+
+        let report = build_conversation_completion_report(&conversation, None, None);
+
+        assert_eq!(report.status, "blocked");
+        assert_eq!(
+            report.blocking_reason.as_deref(),
+            Some("runtime exited without a user-visible assistant response")
+        );
     }
 
     #[test]

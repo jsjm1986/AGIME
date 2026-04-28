@@ -21,6 +21,7 @@ pub struct ApiClient {
 }
 
 pub enum AuthMethod {
+    None,
     BearerToken(String),
     ApiKey {
         header_name: String,
@@ -172,6 +173,7 @@ pub struct ApiResponse {
 impl fmt::Debug for AuthMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            AuthMethod::None => f.debug_tuple("None").finish(),
             AuthMethod::BearerToken(_) => f.debug_tuple("BearerToken").field(&"[hidden]").finish(),
             AuthMethod::ApiKey { header_name, .. } => f
                 .debug_struct("ApiKey")
@@ -375,6 +377,7 @@ impl<'a> ApiRequestBuilder<'a> {
         }
 
         request = match &self.client.auth {
+            AuthMethod::None => request,
             AuthMethod::BearerToken(token) => {
                 request.header("Authorization", format!("Bearer {}", token))
             }

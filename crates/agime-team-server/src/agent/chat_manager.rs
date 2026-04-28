@@ -243,12 +243,15 @@ impl ChatManager {
         }
     }
 
-    /// Cancel an active chat session and remove it from tracking
+    /// Cancel an active chat session.
+    ///
+    /// The entry stays registered until the executor broadcasts the terminal
+    /// event and calls `complete`, otherwise refresh/SSE clients can miss `Done`.
     pub async fn cancel(&self, session_id: &str) -> bool {
-        let mut chats = self.chats.write().await;
-        if let Some(chat) = chats.remove(session_id) {
+        let chats = self.chats.read().await;
+        if let Some(chat) = chats.get(session_id) {
             chat.cancel_token.cancel();
-            warn!("Chat session cancelled and removed: {}", session_id);
+            warn!("Chat session cancellation requested: {}", session_id);
             true
         } else {
             false

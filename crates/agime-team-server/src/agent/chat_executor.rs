@@ -18,7 +18,7 @@ use super::direct_host_admission;
 use super::execution_admission;
 use super::server_harness_host::ServerHarnessHost;
 use super::service_mongo::{AgentService, ExecutionSlotAcquireOutcome};
-use super::task_manager::{StreamEvent, TaskManager};
+use super::task_manager::{create_task_manager, StreamEvent, TaskManager};
 use super::workspace_service::WorkspaceService;
 
 const CHAT_DELIVERY_FALLBACK_TEXT: &str = "已准备文件，可直接预览或下载。";
@@ -51,7 +51,7 @@ pub struct ChatExecutor {
 impl ChatExecutor {
     pub fn new(db: Arc<MongoDb>, chat_manager: Arc<ChatManager>, workspace_root: String) -> Self {
         let agent_service = Arc::new(AgentService::new(db.clone()));
-        let internal_task_manager = Arc::new(TaskManager::new());
+        let internal_task_manager = create_task_manager();
         Self {
             db,
             chat_manager,

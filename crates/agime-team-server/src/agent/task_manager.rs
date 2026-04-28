@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -259,12 +260,15 @@ impl TaskManager {
         }
     }
 
-    /// Cancel a running task and remove it from tracking
+    /// Cancel a running task.
+    ///
+    /// Keep the task registered until the runner emits its terminal `Done` event.
+    /// Removing it here makes the final event invisible to `/tasks/{id}/stream`.
     pub async fn cancel(&self, task_id: &str) -> bool {
-        let mut tasks = self.tasks.write().await;
-        if let Some(task) = tasks.remove(task_id) {
+        let tasks = self.tasks.read().await;
+        if let Some(task) = tasks.get(task_id) {
             task.cancel_token.cancel();
-            warn!("Task cancelled and removed: {}", task_id);
+            warn!("Task cancellation requested: {}", task_id);
             true
         } else {
             false
@@ -312,14 +316,16 @@ impl Default for TaskManager {
 }
 
 /// Create a shared task manager
-#[allow(dead_code)]
 pub fn create_task_manager() -> Arc<TaskManager> {
-    Arc::new(TaskManager::new())
+    static GLOBAL_TASK_MANAGER: OnceLock<Arc<TaskManager>> = OnceLock::new();
+    GLOBAL_TASK_MANAGER
+        .get_or_init(|| Arc::new(TaskManager::new()))
+        .clone()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::StreamEvent;
+    use super::{StreamEvent, TaskManager};
 
     #[test]
     fn worker_followup_and_permission_timeout_event_types_are_stable() {
@@ -348,5 +354,29 @@ mod tests {
             .event_type(),
             "permission_timed_out"
         );
+    }
+
+    #[tokio::test]
+    async fn cancel_keeps_stream_registered_until_complete() {
+        let manager = TaskManager::new();
+        let (token, _) = manager.register("task-1").await;
+        let receiver = manager.subscribe("task-1").await;
+
+        assert!(manager.cancel("task-1").await);
+        assert!(token.is_cancelled());
+        assert!(manager.is_running("task-1").await);
+        assert!(receiver.is_some());
+
+        manager
+            .broadcast(
+                "task-1",
+                StreamEvent::Done {
+                    status: "cancelled".to_string(),
+                    error: None,
+                },
+            )
+            .await;
+        manager.complete("task-1").await;
+        assert!(!manager.is_running("task-1").await);
     }
 }

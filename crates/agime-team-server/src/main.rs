@@ -679,8 +679,12 @@ fn build_router(state: Arc<AppState>) -> Router {
             // Startup: immediately reset any stuck is_processing sessions from previous run
             {
                 let startup_db = db.clone();
+                let startup_task_manager = agent::create_task_manager();
+                let startup_workspace_root = state.config.workspace_root.clone();
                 tokio::spawn(async move {
-                    let svc = agent::service_mongo::AgentService::new(startup_db);
+                    let svc = Arc::new(agent::service_mongo::AgentService::new(
+                        startup_db.clone(),
+                    ));
                     match svc
                         .reset_stuck_processing(std::time::Duration::from_secs(0))
                         .await
@@ -697,6 +701,25 @@ fn build_router(state: Arc<AppState>) -> Router {
                         }
                         Err(e) => {
                             tracing::error!("Startup: failed to reset execution slots: {}", e)
+                        }
+                        _ => {}
+                    }
+                    match agent::execution_admission::resume_queued_tasks(
+                        &startup_db,
+                        &svc,
+                        &startup_task_manager,
+                        &startup_workspace_root,
+                    )
+                    .await
+                    {
+                        Ok(n) if n > 0 => {
+                            tracing::warn!(
+                                "Startup: resumed queued AgentTask dispatch for {} agents",
+                                n
+                            )
+                        }
+                        Err(e) => {
+                            tracing::error!("Startup: failed to resume queued AgentTasks: {}", e)
                         }
                         _ => {}
                     }

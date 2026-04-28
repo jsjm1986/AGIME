@@ -18,12 +18,9 @@ use std::sync::Arc;
 /// - `ApiFormat::Anthropic` → `AnthropicProvider::new()`
 /// - `ApiFormat::OpenAI` → `OpenAiProvider::new()` or `LiteLLMProvider::from_env()` in compat mode
 /// - `ApiFormat::LiteLLM` → `LiteLLMProvider::from_env()`
-/// - `ApiFormat::Local` → returns error (Local uses direct HTTP, not Provider)
+/// - `ApiFormat::Local` → OpenAI-compatible local endpoint, without auth when no key is set
 pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>> {
-    let api_key = agent
-        .api_key
-        .as_deref()
-        .ok_or_else(|| anyhow!("API key not configured for agent '{}'", agent.name))?;
+    let api_key = agent.api_key.as_deref();
 
     let model_name = agent.model.as_deref().unwrap_or(match agent.api_format {
         ApiFormat::Anthropic => "claude-sonnet-4-5",
@@ -46,6 +43,8 @@ pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>>
 
     match agent.api_format {
         ApiFormat::Anthropic => {
+            let api_key =
+                api_key.ok_or_else(|| anyhow!("API key not configured for agent '{}'", agent.name))?;
             let provider = create_anthropic_provider(agent, api_key, model)?;
             Ok(Arc::new(provider))
         }
@@ -54,6 +53,8 @@ pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>>
                 let provider = create_litellm_provider(agent, model)?;
                 Ok(Arc::new(provider))
             } else {
+                let api_key = api_key
+                    .ok_or_else(|| anyhow!("API key not configured for agent '{}'", agent.name))?;
                 let provider = create_openai_provider(agent, api_key, model)?;
                 Ok(Arc::new(provider))
             }
@@ -62,9 +63,10 @@ pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>>
             let provider = create_litellm_provider(agent, model)?;
             Ok(Arc::new(provider))
         }
-        ApiFormat::Local => Err(anyhow!(
-            "Local API format does not use Provider abstraction"
-        )),
+        ApiFormat::Local => {
+            let provider = create_local_openai_compatible_provider(agent, api_key, model)?;
+            Ok(Arc::new(provider))
+        }
     }
 }
 
@@ -142,6 +144,55 @@ fn create_openai_provider(
     Ok(OpenAiProvider::new(api_client, model))
 }
 
+fn create_local_openai_compatible_provider(
+    agent: &TeamAgent,
+    api_key: Option<&str>,
+    model: ModelConfig,
+) -> Result<OpenAiProvider> {
+    let raw_url = agent
+        .api_url
+        .as_deref()
+        .unwrap_or("http://127.0.0.1:11434/v1/chat/completions")
+        .trim();
+    let (host, base_path) = split_local_openai_url(raw_url)?;
+    let auth = api_key
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| AuthMethod::BearerToken(value.to_string()))
+        .unwrap_or(AuthMethod::None);
+    let api_client = ApiClient::new(host, auth)?;
+    Ok(OpenAiProvider::new_with_base_path(
+        api_client,
+        model,
+        base_path,
+        true,
+        "local-openai-compatible",
+    ))
+}
+
+fn split_local_openai_url(raw_url: &str) -> Result<(String, String)> {
+    let url = reqwest::Url::parse(raw_url)
+        .map_err(|error| anyhow!("Invalid local API URL '{}': {}", raw_url, error))?;
+    let host = if let Some(port) = url.port() {
+        format!(
+            "{}://{}:{}",
+            url.scheme(),
+            url.host_str().unwrap_or_default(),
+            port
+        )
+    } else {
+        format!("{}://{}", url.scheme(), url.host_str().unwrap_or_default())
+    };
+    let path = url.path().trim_start_matches('/').trim_end_matches('/');
+    let base_path = if path.is_empty() {
+        "v1/chat/completions".to_string()
+    } else if path == "v1" {
+        "v1/chat/completions".to_string()
+    } else {
+        path.to_string()
+    };
+    Ok((host, base_path))
+}
+
 fn create_litellm_provider(agent: &TeamAgent, model: ModelConfig) -> Result<LiteLLMProvider> {
     if let Some(base_url) = agent
         .api_url
@@ -156,4 +207,31 @@ fn create_litellm_provider(agent: &TeamAgent, model: ModelConfig) -> Result<Lite
         );
     }
     futures::executor::block_on(LiteLLMProvider::from_env(model))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_local_openai_url;
+
+    #[test]
+    fn local_url_defaults_to_openai_chat_completions_path() {
+        let (host, path) = split_local_openai_url("http://127.0.0.1:11434").unwrap();
+        assert_eq!(host, "http://127.0.0.1:11434");
+        assert_eq!(path, "v1/chat/completions");
+    }
+
+    #[test]
+    fn local_url_accepts_explicit_v1_base() {
+        let (host, path) = split_local_openai_url("http://localhost:11434/v1").unwrap();
+        assert_eq!(host, "http://localhost:11434");
+        assert_eq!(path, "v1/chat/completions");
+    }
+
+    #[test]
+    fn local_url_preserves_explicit_completion_path() {
+        let (host, path) =
+            split_local_openai_url("http://localhost:11434/v1/chat/completions").unwrap();
+        assert_eq!(host, "http://localhost:11434");
+        assert_eq!(path, "v1/chat/completions");
+    }
 }

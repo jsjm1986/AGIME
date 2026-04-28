@@ -298,17 +298,18 @@ impl ChatChannelManager {
     }
 
     pub async fn cancel(&self, channel_id: &str, run_scope_id: Option<&str>) -> bool {
-        let mut runs = self.runs.write().await;
-        if let Some(channel) = runs.get_mut(channel_id) {
+        let runs = self.runs.read().await;
+        if let Some(channel) = runs.get(channel_id) {
             let scope_id = run_scope_id
                 .map(str::to_string)
                 .or_else(|| channel.runs.keys().next().cloned())
                 .unwrap_or_else(Self::default_run_scope_id);
-            if let Some(run) = channel.runs.remove(&scope_id) {
+            if let Some(run) = channel.runs.get(&scope_id) {
                 run.cancel_token.cancel();
-                if channel.runs.is_empty() {
-                    runs.remove(channel_id);
-                }
+                warn!(
+                    "Chat channel run cancellation requested: {} scope={}",
+                    channel_id, scope_id
+                );
                 return true;
             }
         }

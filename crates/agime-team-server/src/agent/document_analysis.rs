@@ -24,7 +24,7 @@ use super::workspace_runtime;
 use super::server_harness_host::ServerHarnessHost;
 use super::service_mongo::AgentService;
 use super::session_mongo::CreateSessionRequest;
-use super::task_manager::TaskManager;
+use super::task_manager::create_task_manager;
 use super::workspace_service::WorkspaceService;
 use agime::agents::format_execution_host_completion_text;
 
@@ -606,7 +606,7 @@ async fn process_document_analysis(
         "[doc-analysis] Calling execution host for session={}",
         session_id
     );
-    let host = ServerHarnessHost::new(db.clone(), agent_svc.clone(), Arc::new(TaskManager::new()));
+    let host = ServerHarnessHost::new(db.clone(), agent_svc.clone(), create_task_manager());
     let exec_result = tokio::time::timeout(
         std::time::Duration::from_secs(AGENT_TIMEOUT_SECS),
         host.execute_document_analysis_host(

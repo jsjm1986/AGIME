@@ -138,6 +138,25 @@ impl OpenAiProvider {
         }
     }
 
+    pub fn new_with_base_path(
+        api_client: ApiClient,
+        model: ModelConfig,
+        base_path: impl Into<String>,
+        supports_streaming: bool,
+        name: impl Into<String>,
+    ) -> Self {
+        Self {
+            api_client,
+            base_path: base_path.into(),
+            organization: None,
+            project: None,
+            model,
+            custom_headers: None,
+            supports_streaming,
+            name: name.into(),
+        }
+    }
+
     pub fn from_custom_config(
         model: ModelConfig,
         config: DeclarativeProviderConfig,

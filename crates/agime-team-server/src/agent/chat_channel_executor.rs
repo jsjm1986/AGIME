@@ -15,7 +15,7 @@ use super::direct_host_admission;
 use super::execution_admission;
 use super::server_harness_host::ServerHarnessHost;
 use super::service_mongo::{AgentService, ExecutionSlotAcquireOutcome};
-use super::task_manager::{StreamEvent, TaskManager};
+use super::task_manager::{create_task_manager, StreamEvent, TaskManager};
 use super::workspace_service::WorkspaceService;
 
 fn direct_host_timeout_secs() -> u64 {
@@ -249,7 +249,7 @@ impl ChatChannelExecutor {
     ) -> Self {
         Self {
             agent_service: Arc::new(AgentService::new(db.clone())),
-            internal_task_manager: Arc::new(TaskManager::new()),
+            internal_task_manager: create_task_manager(),
             db,
             channel_manager,
             workspace_root,

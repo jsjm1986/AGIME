@@ -43,7 +43,7 @@ use agime::session::{SessionManager, SessionType};
 use agime::utils::normalize_delegation_summary_text;
 use agime_team::models::{ApiFormat, ApprovalMode, TeamAgent};
 use agime_team::MongoDb;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use regex::Regex;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Content, ErrorCode, ErrorData};
@@ -58,15 +58,17 @@ use super::agent_prompt_composer::{compose_top_level_prompt, AgentPromptComposer
 use super::agent_runtime_config::{
     agent_has_extension_manager_enabled, build_api_caller, builtin_extension_configs_to_custom,
     compute_extension_overrides, extension_allowed_by_name, find_extension_config_by_name,
-    resolve_agent_attached_team_extensions, resolve_agent_custom_extensions, TeamRuntimeSettings,
-    TeamSkillMode,
+    load_team_shared_extensions, resolve_agent_attached_team_extensions,
+    resolve_agent_custom_extensions, TeamResourceMode, TeamRuntimeSettings, TeamSkillMode,
 };
 use super::capability_policy::{is_non_delegating_session_source, AgentRuntimePolicyResolver};
 use super::chat_channel_manager::ChatChannelManager;
 use super::chat_manager::ChatManager;
 use super::extension_installer::ExtensionInstaller;
 use super::extension_manager_client::{DynamicExtensionState, TeamExtensionManagerClient};
-use super::mcp_connector::{ElicitationBridgeCallback, McpConnector, ToolContentBlock};
+use super::mcp_connector::{
+    ElicitationBridgeCallback, ElicitationBridgeEvent, McpConnector, ToolContentBlock,
+};
 use super::platform_runner::PlatformExtensionRunner;
 use super::prompt_profiles::CHAT_DELEGATION_PROFILE_ID;
 use super::runtime_text;
@@ -2646,12 +2648,6 @@ impl ServerHarnessHost {
         };
         let effective_agent = apply_llm_overrides(&base_agent, llm_overrides.as_ref());
 
-        if effective_agent.api_format == ApiFormat::Local {
-            return Err(anyhow!(
-                "Direct harness host does not support Local API format yet"
-            ));
-        }
-
         let user_group_ids = agime_team::services::mongo::user_group_service_mongo::UserGroupService::new(
             (*self.db).clone(),
         )
@@ -2794,6 +2790,7 @@ impl ServerHarnessHost {
                 &effective_agent,
                 &workspace_path,
                 effective_turn_system_instruction.as_deref(),
+                broadcaster.clone(),
             )
             .await?;
         tracing::info!(
@@ -3123,6 +3120,7 @@ impl ServerHarnessHost {
         agent: &TeamAgent,
         workspace_path: &str,
         turn_system_instruction: Option<&str>,
+        broadcaster: StreamBroadcaster,
     ) -> Result<DirectHostPreparedRuntime> {
         let runtime_settings = TeamRuntimeSettings::from_env();
         let api_caller = build_api_caller(agent);
@@ -3180,6 +3178,28 @@ impl ServerHarnessHost {
             )
             .await,
         );
+        if runtime_settings.resource_mode == TeamResourceMode::Auto {
+            let team_extensions = load_team_shared_extensions(
+                &self.db,
+                &session.team_id,
+                runtime_settings.auto_extension_policy.clone(),
+                &installer,
+            )
+            .await;
+            if !team_extensions.is_empty() {
+                let mut existing_names: HashSet<String> =
+                    all_extensions.iter().map(|ext| ext.name.clone()).collect();
+                for team_ext in team_extensions {
+                    if existing_names.insert(team_ext.name.clone()) {
+                        tracing::info!(
+                            "Auto-discovered team extension '{}' for DirectHarness V4 runtime",
+                            team_ext.name
+                        );
+                        all_extensions.push(team_ext);
+                    }
+                }
+            }
+        }
 
         if !session.disabled_extensions.is_empty() {
             let disabled_set: HashSet<&str> = session
@@ -3206,7 +3226,30 @@ impl ServerHarnessHost {
                 .retain(|ext| extension_allowed_by_name(&ext.name, &allowed_extension_names));
         }
 
-        let elicitation_bridge: ElicitationBridgeCallback = Arc::new(move |_event| {});
+        let elicitation_bridge: ElicitationBridgeCallback = {
+            let broadcaster = broadcaster.clone();
+            Arc::new(move |event: ElicitationBridgeEvent| {
+                let broadcaster = broadcaster.clone();
+                tokio::spawn(async move {
+                    let mut detail = format!(
+                        "MCP elicitation requested (type={}): {}",
+                        event.request_type, event.message
+                    );
+                    if let Some(url) = event.url {
+                        detail.push_str(&format!(" | url={}", url));
+                    }
+                    if let Some(elicitation_id) = event.elicitation_id {
+                        detail.push_str(&format!(" | elicitation_id={}", elicitation_id));
+                    }
+                    broadcaster
+                        .emit(StreamEvent::Status {
+                            status: "mcp_elicitation_requested".to_string(),
+                        })
+                        .await;
+                    broadcaster.emit(StreamEvent::Text { content: detail }).await;
+                });
+            })
+        };
         let mcp = if all_extensions.is_empty() {
             None
         } else {

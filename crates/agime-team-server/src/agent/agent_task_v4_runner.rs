@@ -66,6 +66,10 @@ impl AgentTaskV4Runner {
             .get_task(task_id)
             .await?
             .ok_or_else(|| anyhow!("Task {} not found", task_id))?;
+        if matches!(task.status, TaskStatus::Cancelled) {
+            self.settle_cancelled(task_id, None).await;
+            return Ok(());
+        }
         if !matches!(task.status, TaskStatus::Approved | TaskStatus::Queued) {
             return Err(anyhow!("Task {} is not ready to run", task_id));
         }
@@ -129,15 +133,24 @@ impl AgentTaskV4Runner {
         .await;
 
         match host_result {
-            Ok(Ok(outcome)) => self.settle_success_or_contract_failure(task_id, &session, outcome).await,
+            Ok(Ok(outcome)) => {
+                self.settle_success_or_contract_failure(task_id, &session, outcome)
+                    .await
+            }
             Ok(Err(error)) => {
-                self.settle_failure(task_id, Some(&session), &error.to_string())
-                    .await;
+                if cancel_token.is_cancelled() {
+                    self.settle_cancelled(task_id, Some(&session)).await;
+                    return Ok(());
+                }
+                self.settle_failure(task_id, Some(&session), &error.to_string()).await;
                 Err(error)
             }
             Err(_) => {
                 cancel_token.cancel();
-                let error = format!("DirectHarness V4 AgentTask timed out after {}s", timeout_secs);
+                let error = format!(
+                    "DirectHarness V4 AgentTask timed out after {}s",
+                    timeout_secs
+                );
                 self.settle_failure(task_id, Some(&session), &error).await;
                 Err(anyhow!(error))
             }
@@ -292,7 +305,15 @@ impl AgentTaskV4Runner {
         session: &AgentSessionDoc,
         outcome: ServerHarnessHostOutcome,
     ) -> Result<()> {
+        if self.task_is_cancelled(task_id).await {
+            self.settle_cancelled(task_id, Some(session)).await;
+            return Ok(());
+        }
         let status = outcome.execution_status().to_string();
+        if status.eq_ignore_ascii_case("cancelled") {
+            self.settle_cancelled(task_id, Some(session)).await;
+            return Ok(());
+        }
         let summary = outcome
             .user_visible_summary()
             .or_else(|| {
@@ -360,12 +381,50 @@ impl AgentTaskV4Runner {
         Ok(())
     }
 
+    async fn settle_cancelled(&self, task_id: &str, session: Option<&AgentSessionDoc>) {
+        let content = json!({
+            "text": "Task execution was cancelled.",
+            "runtime": "direct_harness_v4",
+            "session_id": session.map(|value| value.session_id.as_str()),
+            "execution_status": "cancelled"
+        });
+        if let Err(db_error) = self
+            .agent_service
+            .save_task_result(task_id, TaskResultType::Message, content)
+            .await
+        {
+            tracing::warn!(task_id = %task_id, error = %db_error, "failed to save AgentTask cancellation result");
+        }
+        if let Err(db_error) = self.agent_service.cancel_task(task_id).await {
+            tracing::warn!(task_id = %task_id, error = %db_error, "failed to mark AgentTask cancelled");
+        }
+        if let Some(session) = session {
+            let _ = self
+                .agent_service
+                .update_session_execution_result(&session.session_id, "cancelled", None)
+                .await;
+        }
+        self.task_manager
+            .broadcast(
+                task_id,
+                StreamEvent::Done {
+                    status: "cancelled".to_string(),
+                    error: None,
+                },
+            )
+            .await;
+    }
+
     async fn settle_failure(
         &self,
         task_id: &str,
         session: Option<&AgentSessionDoc>,
         error: &str,
     ) {
+        if self.task_is_cancelled(task_id).await {
+            self.settle_cancelled(task_id, session).await;
+            return;
+        }
         let content = json!({
             "text": error,
             "runtime": "direct_harness_v4",
@@ -397,6 +456,15 @@ impl AgentTaskV4Runner {
                 },
             )
             .await;
+    }
+
+    async fn task_is_cancelled(&self, task_id: &str) -> bool {
+        self.agent_service
+            .get_task(task_id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|task| matches!(task.status, TaskStatus::Cancelled))
     }
 }
 

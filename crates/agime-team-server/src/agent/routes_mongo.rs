@@ -33,14 +33,14 @@ use super::service_mongo::{
 };
 use super::session_mongo::SessionListQuery;
 use super::streamer::stream_task_results;
-use super::task_manager::TaskManager;
+use super::task_manager::{create_task_manager, TaskManager};
 use crate::config::Config;
 
 /// Create agent router (MongoDB version)
 pub fn router(db: Arc<MongoDb>, workspace_root: String) -> Router {
     let service = Arc::new(AgentService::new(db.clone()));
     let rate_limiter = Arc::new(RateLimiter::new(10, 60));
-    let task_manager = Arc::new(TaskManager::new());
+    let task_manager = create_task_manager();
 
     // Background cleanup for stale tasks (stuck > 2 hours)
     {

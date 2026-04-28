@@ -526,6 +526,9 @@ impl CoordinatorSignalSummary {
             || reason.contains("no document tools")
             || reason.contains("document read tools")
             || reason.contains("missing document access")
+            || reason.contains("missing required document access tools")
+            || reason.contains("document validation requires document_tools")
+            || reason.contains("runtime tool surface")
     }
 
     pub fn has_hard_blocking_signals(&self) -> bool {
@@ -1682,6 +1685,36 @@ mod tests {
         assert!(!summary.has_hard_blocking_signals());
         assert_eq!(summary.validation_status(), Some("passed"));
         assert!(summary.document_content_accessed());
+        assert_eq!(summary.default_blocking_reason(), None);
+    }
+
+    #[test]
+    fn document_read_evidence_overrides_direct_host_validation_tool_surface_failure() {
+        let summary = CoordinatorSignalSummary::from_signals(&[
+            CoordinatorSignal::ToolCompleted {
+                request_id: "req-1".to_string(),
+                tool_name: "document_tools__read_document".to_string(),
+                transport: ToolTransportKind::ServerLocal,
+            },
+            CoordinatorSignal::ValidationReported {
+                report: ValidationReport {
+                    status: ValidationStatus::Failed,
+                    reason: Some(
+                        "Missing required document access tools. The runtime tool surface only includes skills__loadSkill and recipe__final_output. Document validation requires document_tools."
+                            .to_string(),
+                    ),
+                    reason_code: None,
+                    validator_task_id: Some("validator-1".to_string()),
+                    target_artifacts: vec!["document:doc-1".to_string()],
+                    evidence_summary: None,
+                    content_accessed: false,
+                    analysis_complete: false,
+                },
+            },
+        ]);
+
+        assert!(!summary.has_hard_blocking_signals());
+        assert_eq!(summary.validation_status(), Some("passed"));
         assert_eq!(summary.default_blocking_reason(), None);
     }
 

@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use agime::agents::types::RetryConfig;
+use agime::context_runtime::ContextRuntimeState;
 use agime::conversation::message::Message;
 use agime_team::models::{AgentTask, TaskResultType, TaskStatus};
 use agime_team::MongoDb;
@@ -185,6 +186,13 @@ impl AgentTaskV4Runner {
         }
         if !payload.attached_document_ids.is_empty() {
             session.attached_document_ids = payload.attached_document_ids.clone();
+        }
+        if session.context_runtime_state.is_none() {
+            let context_runtime_state = ContextRuntimeState::default();
+            self.agent_service
+                .set_session_context_runtime_state(&session.session_id, &context_runtime_state)
+                .await?;
+            session.context_runtime_state = Some(context_runtime_state);
         }
         Ok(session)
     }

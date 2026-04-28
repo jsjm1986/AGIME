@@ -1216,6 +1216,9 @@ class TeamServerE2ESuite:
             self.collection("task_results").delete_many(
                 {"task_id": {"$in": list(self.temp_tasks)}}
             )
+            self.collection("agent_task_results").delete_many(
+                {"task_id": {"$in": list(self.temp_tasks)}}
+            )
             self.collection("agent_tasks").delete_many({"id": {"$in": list(self.temp_tasks)}})
         if self.temp_chat_sessions:
             self.collection("agent_chat_events").delete_many(
@@ -2447,7 +2450,9 @@ class TeamServerE2ESuite:
         task_id = payload["id"]
         self.temp_tasks.add(task_id)
         task_doc = self.wait_for_task_completion(auth, task_id)
-        result_doc = self.collection("task_results").find_one({"task_id": task_id})
+        result_doc = self.collection("agent_task_results").find_one(
+            {"task_id": task_id}
+        ) or self.collection("task_results").find_one({"task_id": task_id})
         hidden_session = self.find_hidden_agent_session_by_marker(marker)
         self.expect(hidden_session is not None, "task hidden session not found")
         hidden_session_id = hidden_session["session_id"]

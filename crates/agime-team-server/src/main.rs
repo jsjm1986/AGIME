@@ -355,7 +355,7 @@ async fn run_server(port_override: Option<u16>) -> Result<()> {
         auto_compact_threshold * 100.0
     );
     info!(
-        "Chat/channel/document/scheduled-task surfaces use DirectHarness V4 with context_runtime; executor_mongo remains isolated for legacy mission/task execution"
+        "Chat/channel/document/scheduled-task/AgentTask surfaces use DirectHarness V4 with context_runtime; executor_mongo remains isolated for legacy-only compatibility code"
     );
 
     info!(

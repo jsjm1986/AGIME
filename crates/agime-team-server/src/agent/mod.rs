@@ -46,7 +46,7 @@ pub mod workspace_physical_store;
 pub mod workspace_service;
 pub mod workspace_types;
 
-// Legacy mission/task bridge utilities. Chat/channel/document surfaces use DirectHarness V4.
+// Legacy bridge utilities. Chat/channel/document/scheduled-task/AgentTask surfaces use DirectHarness V4.
 pub mod runtime;
 pub mod runtime_bridge;
 

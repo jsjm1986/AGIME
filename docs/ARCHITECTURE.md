@@ -427,7 +427,7 @@ services:
 
 ### Legacy Bridge Pattern (任务兼容路径)
 
-**位置**: `runtime.rs` - legacy mission/task 兼容模块
+**位置**: `runtime.rs` - legacy TaskExecutor 兼容模块
 
 **目的**: 保留旧 TaskExecutor/subagent 的暂存兼容能力。Chat、Channel、Document Analysis、Scheduled Task、AgentTask 不再通过该路径执行。
 
@@ -449,7 +449,6 @@ LegacyTaskExecutorOrSubagent.execute_step()
 ```mermaid
 graph LR
     subgraph Executors["执行器层"]
-        Mission[MissionExecutor]
         Legacy[Legacy TaskExecutor]
     end
 
@@ -467,7 +466,6 @@ graph LR
         Context[上下文]
     end
 
-    Mission --> TempTask
     Legacy --> TempTask
     TempTask --> TaskExec
     TaskExec --> Tools

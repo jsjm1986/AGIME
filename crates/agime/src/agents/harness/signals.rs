@@ -407,10 +407,17 @@ impl CoordinatorSignalSummary {
                             reason: if status.eq_ignore_ascii_case("passed") {
                                 None
                             } else {
-                                report.summary.clone()
+                                report
+                                    .blocking_reason
+                                    .clone()
+                                    .or_else(|| report.summary.clone())
                             },
                             validator_task_id: Some("completion-ready".to_string()),
-                            target_artifacts: report.produced_targets.clone(),
+                            target_artifacts: if report.produced_targets.is_empty() {
+                                report.accepted_targets.clone()
+                            } else {
+                                report.produced_targets.clone()
+                            },
                             evidence_summary: report.summary.clone(),
                             reason_code: report.reason_code.clone(),
                             content_accessed: report.content_accessed.unwrap_or(false),

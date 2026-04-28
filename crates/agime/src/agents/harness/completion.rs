@@ -934,7 +934,10 @@ pub fn derive_execute_completion_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::harness::{TaskKind, WorkerOutcome};
+    use crate::agents::harness::{
+        CoordinatorSignal, StructuredCompletionSignal, TaskKind, ToolTransportKind,
+        ValidationReport, ValidationStatus, WorkerOutcome,
+    };
     use crate::conversation::message::Message;
     use crate::conversation::Conversation;
 

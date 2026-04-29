@@ -1103,6 +1103,9 @@ export default {
       autoCompactThreshold: "自动压缩阈值",
       promptCachingMode: "Prompt 缓存",
       cacheEditMode: "缓存编辑",
+      supportsMultimodal: "支持多模态输入",
+      supportsMultimodalHint:
+        "仅当这个 Agent 对应的模型和代理端点可以接收图片输入时开启。关闭后，图片文档会以文本和工具引用形式提供。",
       thinkingEnabled: "启用 Think 模式",
       thinkingEnabledHint:
         "默认开启。若当前 provider/runtime 不支持 Think，会在执行时自动降级，但不会清空你的设置。",

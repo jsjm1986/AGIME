@@ -504,6 +504,9 @@ pub struct TeamAgent {
     /// Optional auto-compact threshold override for context runtime.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auto_compact_threshold: Option<f64>,
+    /// Whether this agent's configured model/provider should receive image inputs.
+    #[serde(default)]
+    pub supports_multimodal: bool,
     /// Prompt caching preference for providers that support it.
     #[serde(default)]
     pub prompt_caching_mode: RuntimeOptimizationMode,
@@ -590,6 +593,7 @@ impl TeamAgent {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
+            supports_multimodal: false,
             prompt_caching_mode: RuntimeOptimizationMode::Auto,
             cache_edit_mode: RuntimeOptimizationMode::Auto,
             assigned_skills: vec![],
@@ -684,6 +688,8 @@ pub struct CreateAgentRequest {
     #[serde(default)]
     pub auto_compact_threshold: Option<f64>,
     #[serde(default)]
+    pub supports_multimodal: Option<bool>,
+    #[serde(default)]
     pub prompt_caching_mode: Option<RuntimeOptimizationMode>,
     #[serde(default)]
     pub cache_edit_mode: Option<RuntimeOptimizationMode>,
@@ -750,6 +756,8 @@ pub struct UpdateAgentRequest {
     pub output_reserve_tokens: Option<usize>,
     #[serde(default)]
     pub auto_compact_threshold: Option<f64>,
+    #[serde(default)]
+    pub supports_multimodal: Option<bool>,
     #[serde(default)]
     pub prompt_caching_mode: Option<RuntimeOptimizationMode>,
     #[serde(default)]

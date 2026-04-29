@@ -224,6 +224,7 @@ type TeamAgentWire = Partial<TeamAgent> & {
   reasoningEffort?: string;
   outputReserveTokens?: number;
   autoCompactThreshold?: number;
+  supportsMultimodal?: boolean;
   promptCachingMode?: RuntimeOptimizationMode;
   cacheEditMode?: RuntimeOptimizationMode;
   assignedSkills?: AgentSkillConfig[];
@@ -267,6 +268,7 @@ function normalizeAgent(raw: TeamAgentWire): TeamAgent {
     reasoning_effort: raw.reasoning_effort ?? raw.reasoningEffort,
     output_reserve_tokens: raw.output_reserve_tokens ?? raw.outputReserveTokens,
     auto_compact_threshold: raw.auto_compact_threshold ?? raw.autoCompactThreshold,
+    supports_multimodal: raw.supports_multimodal ?? raw.supportsMultimodal ?? false,
     prompt_caching_mode:
       raw.prompt_caching_mode ?? raw.promptCachingMode ?? 'auto',
     cache_edit_mode: raw.cache_edit_mode ?? raw.cacheEditMode ?? 'auto',
@@ -340,6 +342,7 @@ export interface TeamAgent {
   reasoning_effort?: string;
   output_reserve_tokens?: number;
   auto_compact_threshold?: number;
+  supports_multimodal: boolean;
   prompt_caching_mode: RuntimeOptimizationMode;
   cache_edit_mode: RuntimeOptimizationMode;
   assigned_skills: AgentSkillConfig[];
@@ -468,6 +471,7 @@ export interface CreateAgentRequest {
   reasoning_effort?: string;
   output_reserve_tokens?: number;
   auto_compact_threshold?: number;
+  supports_multimodal?: boolean;
   prompt_caching_mode?: RuntimeOptimizationMode;
   cache_edit_mode?: RuntimeOptimizationMode;
   assigned_skills?: AgentSkillConfig[];
@@ -502,6 +506,7 @@ export interface UpdateAgentRequest {
   reasoning_effort?: string;
   output_reserve_tokens?: number;
   auto_compact_threshold?: number;
+  supports_multimodal?: boolean;
   prompt_caching_mode?: RuntimeOptimizationMode;
   cache_edit_mode?: RuntimeOptimizationMode;
   assigned_skills?: AgentSkillConfig[];

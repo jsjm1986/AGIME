@@ -76,6 +76,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
   const [reasoningEffort, setReasoningEffort] = useState('auto');
   const [outputReserveTokens, setOutputReserveTokens] = useState<string>('');
   const [autoCompactThreshold, setAutoCompactThreshold] = useState<string>('');
+  const [supportsMultimodal, setSupportsMultimodal] = useState(false);
   const [promptCachingMode, setPromptCachingMode] = useState<RuntimeOptimizationMode>('auto');
   const [cacheEditMode, setCacheEditMode] = useState<RuntimeOptimizationMode>('auto');
   const [runtimePreview, setRuntimePreview] = useState<RuntimeProfilePreview | null>(null);
@@ -114,6 +115,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
       setAutoCompactThreshold(
         agent.auto_compact_threshold != null ? String(agent.auto_compact_threshold) : ''
       );
+      setSupportsMultimodal(agent.supports_multimodal ?? false);
       setPromptCachingMode(agent.prompt_caching_mode || 'auto');
       setCacheEditMode(agent.cache_edit_mode || 'auto');
       setEnabledExtensions(agent.enabled_extensions || []);
@@ -245,6 +247,7 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
         reasoning_effort: reasoningEffort === 'auto' ? undefined : reasoningEffort.trim(),
         output_reserve_tokens: outputReserveTokens ? parseInt(outputReserveTokens) : undefined,
         auto_compact_threshold: autoCompactThreshold ? parseFloat(autoCompactThreshold) : undefined,
+        supports_multimodal: supportsMultimodal,
         prompt_caching_mode: promptCachingMode,
         cache_edit_mode: cacheEditMode,
         assigned_skills: assignedSkills,
@@ -569,6 +572,27 @@ export function EditAgentDialog({ agent, open, onOpenChange, onUpdated }: Props)
                       </SelectContent>
                     </Select>
                   </div>
+                </div>
+                <div className="mt-3 rounded-md border border-border/70 p-3">
+                  <label className="flex items-start justify-between gap-3 cursor-pointer">
+                    <div className="space-y-1">
+                      <div className="text-sm font-medium">
+                        {t('agent.create.supportsMultimodal', 'Supports multimodal input')}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {t(
+                          'agent.create.supportsMultimodalHint',
+                          'Enable only when this agent model/provider can accept image inputs. Attached image documents will otherwise stay as text/tool references.'
+                        )}
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={supportsMultimodal}
+                      onChange={(e) => setSupportsMultimodal(e.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-border"
+                    />
+                  </label>
                 </div>
                 <div className="mt-3 rounded-md border border-border/70 p-3">
                   <label className="flex items-start justify-between gap-3 cursor-pointer">

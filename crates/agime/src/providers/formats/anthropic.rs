@@ -38,6 +38,8 @@ const DATA_FIELD: &str = "data";
 fn format_messages_with_prompt_caching(
     messages: &[Message],
     enable_prompt_caching: bool,
+    vision_supported: bool,
+    model_name: &str,
 ) -> Vec<Value> {
     let mut anthropic_messages = Vec::new();
 
@@ -98,6 +100,17 @@ fn format_messages_with_prompt_caching(
                                     }));
                                 }
                                 RawContent::Image(image) => {
+                                    if !vision_supported {
+                                        tool_content.push(json!({
+                                            TYPE_FIELD: TEXT_TYPE,
+                                            TEXT_TYPE: format!(
+                                                "Tool returned image content (MIME: {}), but current agent is not configured for multimodal input (model: {}). Use the workspace path in the surrounding tool text, developer shell, Python, OCR, or another local tool to inspect it.",
+                                                image.mime_type,
+                                                model_name
+                                            )
+                                        }));
+                                        continue;
+                                    }
                                     // Defer images to sibling content blocks instead of embedding in tool_result
                                     // This improves compatibility with proxy endpoints that may not handle
                                     // images inside tool_result content correctly
@@ -204,7 +217,17 @@ fn format_messages_with_prompt_caching(
                     }));
                 }
                 MessageContent::Image(image) => {
-                    content.push(convert_image(image, &ImageFormat::Anthropic));
+                    if vision_supported {
+                        content.push(convert_image(image, &ImageFormat::Anthropic));
+                    } else {
+                        content.push(json!({
+                            TYPE_FIELD: TEXT_TYPE,
+                            TEXT_TYPE: format!(
+                                "[Image omitted because current agent is not configured for multimodal input (model: {}): {}]",
+                                model_name, image.mime_type
+                            )
+                        }));
+                    }
                 }
                 MessageContent::FrontendToolRequest(tool_request) => {
                     if let Ok(tool_call) = &tool_request.tool_call {
@@ -269,7 +292,7 @@ fn format_messages_with_prompt_caching(
 }
 
 pub fn format_messages(messages: &[Message]) -> Vec<Value> {
-    format_messages_with_prompt_caching(messages, true)
+    format_messages_with_prompt_caching(messages, true, true, "unknown model")
 }
 
 fn anthropic_flavored_input_schema(input_schema: Arc<JsonObject>) -> Arc<JsonObject> {
@@ -465,7 +488,12 @@ pub fn create_request_with_tool_choice(
     tool_choice_mode: Option<ToolChoiceMode>,
 ) -> Result<Value> {
     let enable_prompt_caching = !model_config.prompt_caching_mode.is_disabled();
-    let anthropic_messages = format_messages_with_prompt_caching(messages, enable_prompt_caching);
+    let anthropic_messages = format_messages_with_prompt_caching(
+        messages,
+        enable_prompt_caching,
+        model_config.supports_multimodal,
+        &model_config.model_name,
+    );
     let tool_specs = format_tools_with_prompt_caching(tools, enable_prompt_caching);
     let system_spec = format_system_with_prompt_caching(system, enable_prompt_caching);
 

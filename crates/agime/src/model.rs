@@ -6,6 +6,10 @@ use crate::config::env_compat::get_env_compat;
 
 const DEFAULT_CONTEXT_LIMIT: usize = 128_000;
 
+fn default_supports_multimodal() -> bool {
+    true
+}
+
 #[derive(Error, Debug)]
 pub enum ConfigError {
     #[error("Environment variable '{0}' not found")]
@@ -27,6 +31,8 @@ pub struct ModelConfig {
     pub reasoning_effort: Option<String>,
     pub output_reserve_tokens: Option<usize>,
     pub auto_compact_threshold: Option<f64>,
+    #[serde(default = "default_supports_multimodal")]
+    pub supports_multimodal: bool,
     #[serde(default)]
     pub prompt_caching_mode: PromptCachingMode,
     #[serde(default)]
@@ -122,6 +128,7 @@ impl ModelConfig {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
+            supports_multimodal: true,
             prompt_caching_mode: PromptCachingMode::Auto,
             cache_edit_mode: CacheEditMode::Auto,
             toolshim,
@@ -254,6 +261,11 @@ impl ModelConfig {
         if threshold.is_some() {
             self.auto_compact_threshold = threshold;
         }
+        self
+    }
+
+    pub fn with_supports_multimodal(mut self, supports_multimodal: bool) -> Self {
+        self.supports_multimodal = supports_multimodal;
         self
     }
 

@@ -1120,6 +1120,9 @@ export default {
       autoCompactThreshold: "Auto Compact Threshold",
       promptCachingMode: "Prompt Caching",
       cacheEditMode: "Cache Edit",
+      supportsMultimodal: "Supports multimodal input",
+      supportsMultimodalHint:
+        "Enable only when this agent model and proxy endpoint can accept image inputs. When off, image documents stay available as text and tool references.",
       thinkingEnabled: "Enable Think Mode",
       thinkingEnabledHint:
         "Enabled by default. If the current provider/runtime does not support Think, execution will downgrade automatically without clearing your settings.",

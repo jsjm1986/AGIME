@@ -358,6 +358,9 @@ pub struct TeamAgentDoc {
     /// Optional auto-compact threshold override for context runtime.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auto_compact_threshold: Option<f64>,
+    /// Whether this agent's configured model/provider should receive image inputs.
+    #[serde(default)]
+    pub supports_multimodal: bool,
     /// Prompt caching preference for providers that support it.
     #[serde(default)]
     pub prompt_caching_mode: RuntimeOptimizationMode,
@@ -904,6 +907,7 @@ impl From<TeamAgentDoc> for TeamAgent {
             reasoning_effort: doc.reasoning_effort,
             output_reserve_tokens: doc.output_reserve_tokens,
             auto_compact_threshold: doc.auto_compact_threshold,
+            supports_multimodal: doc.supports_multimodal,
             prompt_caching_mode: doc.prompt_caching_mode,
             cache_edit_mode: doc.cache_edit_mode,
             assigned_skills: sanitize_assigned_skills(doc.assigned_skills),
@@ -3223,6 +3227,7 @@ impl AgentService {
             reasoning_effort: req.reasoning_effort,
             output_reserve_tokens: req.output_reserve_tokens,
             auto_compact_threshold: req.auto_compact_threshold,
+            supports_multimodal: req.supports_multimodal.unwrap_or(false),
             prompt_caching_mode: req.prompt_caching_mode.unwrap_or_default(),
             cache_edit_mode: req.cache_edit_mode.unwrap_or_default(),
             assigned_skills: sanitize_assigned_skills(req.assigned_skills.unwrap_or_default()),
@@ -4619,6 +4624,9 @@ impl AgentService {
         if let Some(auto_compact_threshold) = req.auto_compact_threshold {
             set_doc.insert("auto_compact_threshold", auto_compact_threshold);
         }
+        if let Some(supports_multimodal) = req.supports_multimodal {
+            set_doc.insert("supports_multimodal", supports_multimodal);
+        }
         if let Some(prompt_caching_mode) = req.prompt_caching_mode {
             set_doc.insert(
                 "prompt_caching_mode",
@@ -5279,6 +5287,7 @@ impl AgentService {
                 reasoning_effort: None,
                 output_reserve_tokens: None,
                 auto_compact_threshold: None,
+                supports_multimodal: None,
                 prompt_caching_mode: None,
                 cache_edit_mode: None,
                 assigned_skills: None,
@@ -5410,6 +5419,7 @@ impl AgentService {
                         reasoning_effort: None,
                         output_reserve_tokens: None,
                         auto_compact_threshold: None,
+                        supports_multimodal: None,
                         prompt_caching_mode: None,
                         cache_edit_mode: None,
                         assigned_skills: None,
@@ -5484,6 +5494,7 @@ impl AgentService {
                         reasoning_effort: None,
                         output_reserve_tokens: None,
                         auto_compact_threshold: None,
+                        supports_multimodal: None,
                         prompt_caching_mode: None,
                         cache_edit_mode: None,
                         assigned_skills: None,
@@ -5561,6 +5572,7 @@ impl AgentService {
                 reasoning_effort: None,
                 output_reserve_tokens: None,
                 auto_compact_threshold: None,
+                supports_multimodal: None,
                 prompt_caching_mode: None,
                 cache_edit_mode: None,
                 assigned_skills: None,
@@ -5626,6 +5638,7 @@ impl AgentService {
                 reasoning_effort: None,
                 output_reserve_tokens: None,
                 auto_compact_threshold: None,
+                supports_multimodal: None,
                 prompt_caching_mode: None,
                 cache_edit_mode: None,
                 assigned_skills: None,
@@ -5688,6 +5701,7 @@ impl AgentService {
                 reasoning_effort: None,
                 output_reserve_tokens: None,
                 auto_compact_threshold: None,
+                supports_multimodal: None,
                 prompt_caching_mode: None,
                 cache_edit_mode: None,
                 assigned_skills: None,

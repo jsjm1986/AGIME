@@ -38,6 +38,7 @@ pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>>
         .with_reasoning_effort(agent.reasoning_effort.clone())
         .with_output_reserve_tokens(agent.output_reserve_tokens)
         .with_auto_compact_threshold(agent.auto_compact_threshold)
+        .with_supports_multimodal(agent.supports_multimodal)
         .with_prompt_caching_mode(map_prompt_caching_mode(agent.prompt_caching_mode))
         .with_cache_edit_mode(map_cache_edit_mode(agent.cache_edit_mode));
 

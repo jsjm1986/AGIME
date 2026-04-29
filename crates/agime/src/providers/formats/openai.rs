@@ -63,6 +63,16 @@ pub fn format_messages(
     image_format: &ImageFormat,
     caps: Option<&ResolvedCapabilities>,
 ) -> Vec<Value> {
+    format_messages_with_multimodal(messages, image_format, caps, true)
+}
+
+#[allow(clippy::too_many_lines)]
+fn format_messages_with_multimodal(
+    messages: &[Message],
+    image_format: &ImageFormat,
+    caps: Option<&ResolvedCapabilities>,
+    supports_multimodal: bool,
+) -> Vec<Value> {
     // Check if we need to include reasoning_content field (DeepSeek style)
     let thinking_config = caps
         .filter(|c| c.thinking_enabled)
@@ -80,6 +90,10 @@ pub fn format_messages(
     // OpenAI-compatible endpoints are more robust when tool-result images are moved to a
     // dedicated user message instead of being embedded in tool message content.
     let should_defer_images = true;
+    let vision_supported = supports_multimodal;
+    let model_name = caps
+        .map(|c| c.model_name.as_str())
+        .unwrap_or("unknown model");
 
     let mut messages_spec = Vec::new();
     for message in messages.iter().filter(|m| m.is_agent_visible()) {
@@ -101,11 +115,22 @@ pub fn format_messages(
                 MessageContent::Text(text) => {
                     if !text.text.is_empty() {
                         if let Some(image_path) = detect_image_path(&text.text) {
-                            if let Ok(image) = load_image_file(image_path) {
-                                content_array.push(json!({"type": "text", "text": text.text}));
-                                content_array.push(convert_image(&image, image_format));
+                            if vision_supported {
+                                if let Ok(image) = load_image_file(image_path) {
+                                    content_array.push(json!({"type": "text", "text": text.text}));
+                                    content_array.push(convert_image(&image, image_format));
+                                } else {
+                                    text_array.push(text.text.clone());
+                                }
                             } else {
-                                text_array.push(text.text.clone());
+                                content_array.push(json!({"type": "text", "text": text.text}));
+                                content_array.push(json!({
+                                    "type": "text",
+                                    "text": format!(
+                                        "[Image path omitted because current agent is not configured for multimodal input (model: {}). Use local tools if image inspection is required.]",
+                                        model_name
+                                    )
+                                }));
                             }
                         } else {
                             text_array.push(text.text.clone());
@@ -218,6 +243,17 @@ pub fn format_messages(
                             for content in abridged {
                                 match content.deref() {
                                     RawContent::Image(image) => {
+                                        if !vision_supported {
+                                            tool_content_json.push(json!({
+                                                "type": "text",
+                                                "text": format!(
+                                                    "Tool returned image content (MIME: {}), but current agent is not configured for multimodal input (model: {}). Use the workspace path in the surrounding tool text, developer shell, Python, OCR, or another local tool to inspect it.",
+                                                    image.mime_type,
+                                                    model_name
+                                                )
+                                            }));
+                                            continue;
+                                        }
                                         // Debug: log image info for troubleshooting
                                         {
                                             use std::collections::hash_map::DefaultHasher;
@@ -326,7 +362,14 @@ pub fn format_messages(
                 MessageContent::ToolConfirmationRequest(_) => {}
                 MessageContent::ActionRequired(_) => {}
                 MessageContent::Image(image) => {
-                    content_array.push(convert_image(image, image_format));
+                    if vision_supported {
+                        content_array.push(convert_image(image, image_format));
+                    } else {
+                        text_array.push(format!(
+                            "[Image omitted because current agent is not configured for multimodal input (model: {}): {}]",
+                            model_name, image.mime_type
+                        ));
+                    }
                 }
                 MessageContent::FrontendToolRequest(request) => match &request.tool_call {
                     Ok(tool_call) => {
@@ -963,7 +1006,12 @@ pub fn create_request_with_tool_choice(
         "content": system
     });
 
-    let messages_spec = format_messages(messages, image_format, Some(&caps));
+    let messages_spec = format_messages_with_multimodal(
+        messages,
+        image_format,
+        Some(&caps),
+        model_config.supports_multimodal,
+    );
     let mut tools_spec = if !tools.is_empty() {
         format_tools(tools)?
     } else {
@@ -1710,6 +1758,50 @@ mod tests {
     }
 
     #[test]
+    fn test_format_messages_tool_response_omits_image_when_agent_multimodal_disabled(
+    ) -> anyhow::Result<()> {
+        use rmcp::model::{AnnotateAble, RawContent};
+
+        let mut messages = vec![Message::assistant().with_tool_request(
+            "tool1",
+            Ok(CallToolRequestParams {
+                name: "read_document".into(),
+                arguments: Some(object!({})),
+                meta: None,
+                task: None,
+            }),
+        )];
+        let tool_id = if let MessageContent::ToolRequest(request) = &messages[0].content[0] {
+            request.id.clone()
+        } else {
+            panic!("should be tool request");
+        };
+
+        messages.push(Message::user().with_tool_response(
+            tool_id,
+            Ok(CallToolResult {
+                content: vec![
+                    Content::text("Image document exported to /workspace/example.png"),
+                    RawContent::image("iVBORw0KGgo=", "image/png").no_annotation(),
+                ],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            }),
+        ));
+
+        let spec = format_messages_with_multimodal(&messages, &ImageFormat::OpenAi, None, false);
+        let serialized = serde_json::to_string(&spec)?;
+
+        assert_eq!(spec.len(), 2, "image should not create deferred user message");
+        assert!(!serialized.contains("image_url"));
+        assert!(serialized.contains("not configured for multimodal input"));
+        assert!(serialized.contains("/workspace/example.png"));
+
+        Ok(())
+    }
+
+    #[test]
     fn test_format_messages_tool_response_with_image_anthropic() -> anyhow::Result<()> {
         // Tool text stays in the tool message; images are deferred to a follow-up user message.
         use rmcp::model::{AnnotateAble, RawContent};
@@ -1806,6 +1898,7 @@ mod tests {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
+            supports_multimodal: false,
             prompt_caching_mode: crate::model::PromptCachingMode::Auto,
             cache_edit_mode: crate::model::CacheEditMode::Auto,
             toolshim: false,
@@ -1845,6 +1938,7 @@ mod tests {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
+            supports_multimodal: false,
             prompt_caching_mode: crate::model::PromptCachingMode::Auto,
             cache_edit_mode: crate::model::CacheEditMode::Auto,
             toolshim: false,
@@ -1887,6 +1981,7 @@ mod tests {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
+            supports_multimodal: false,
             prompt_caching_mode: crate::model::PromptCachingMode::Auto,
             cache_edit_mode: crate::model::CacheEditMode::Auto,
             toolshim: false,
@@ -1926,6 +2021,7 @@ mod tests {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
+            supports_multimodal: false,
             prompt_caching_mode: crate::model::PromptCachingMode::Auto,
             cache_edit_mode: crate::model::CacheEditMode::Auto,
             toolshim: false,
@@ -1970,6 +2066,7 @@ mod tests {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
+            supports_multimodal: false,
             prompt_caching_mode: crate::model::PromptCachingMode::Auto,
             cache_edit_mode: crate::model::CacheEditMode::Auto,
             toolshim: false,

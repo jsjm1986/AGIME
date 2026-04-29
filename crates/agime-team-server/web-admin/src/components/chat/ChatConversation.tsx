@@ -1644,7 +1644,7 @@ export function ChatConversation({
       if (warning.code === "agent_image_input_unsupported") {
         return t(
           "chat.warnings.agentImageInputUnsupported",
-          "当前 Agent 未开启多模态输入，图片不会直接发送给模型；如需直接看图，请切换到支持多模态的 Agent，或让当前 Agent 使用 OCR/本地工具兜底。",
+          "This agent is not configured for multimodal input, so images will not be sent directly to the model. Switch to a multimodal agent for direct image understanding, or let this agent use OCR/local tools as a fallback.",
         );
       }
       return warning.message;

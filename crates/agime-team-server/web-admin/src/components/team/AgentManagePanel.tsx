@@ -399,7 +399,7 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
           </div>
 
           <div className="space-y-4 px-5 py-4">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
               <div className="rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.88] px-4 py-3">
                 <div className="text-[11px] uppercase tracking-[0.14em] text-[hsl(var(--ui-text-tertiary))]">
                   {t('agent.model')}
@@ -430,6 +430,14 @@ export function AgentManagePanel({ teamId, onOpenChat, onOpenDigitalAvatar }: Ag
                 </div>
                 <div className="mt-1 text-[15px] font-medium text-foreground">
                   {agent.thinking_enabled ? t('common.enabled', 'On') : t('common.disabled', 'Off')}
+                </div>
+              </div>
+              <div className="rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.88] px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.14em] text-[hsl(var(--ui-text-tertiary))]">
+                  {t('agent.create.supportsMultimodal')}
+                </div>
+                <div className="mt-1 text-[15px] font-medium text-foreground">
+                  {agent.supports_multimodal ? t('common.enabled') : t('common.disabled')}
                 </div>
               </div>
             </div>

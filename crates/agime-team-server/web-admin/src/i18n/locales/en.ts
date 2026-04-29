@@ -1570,6 +1570,10 @@ export default {
       dismiss: "Dismiss",
       accept: "Remember",
     },
+    warnings: {
+      agentImageInputUnsupported:
+        "This agent is not configured for multimodal input, so images will not be sent directly to the model. Switch to a multimodal agent for direct image understanding, or let this agent use OCR/local tools as a fallback.",
+    },
     newChat: "New Chat",
     messagesShort: "msgs",
     selectAgent: "Select an agent",

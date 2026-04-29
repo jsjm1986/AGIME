@@ -169,6 +169,20 @@ export interface ChatSessionDetail {
 export interface SendMessageResponse {
   session_id: string;
   streaming: boolean;
+  warnings?: ChatResponseWarning[];
+}
+
+export interface ChatResponseWarning {
+  code: string;
+  severity: "info" | "warning" | "error" | string;
+  message: string;
+}
+
+export interface CreateChatSessionResponse {
+  session_id: string;
+  agent_id: string;
+  status: string;
+  warnings?: ChatResponseWarning[];
 }
 
 export interface ChatSessionEvent {
@@ -617,7 +631,7 @@ export const chatApi = {
     agentId: string,
     attachedDocumentIds?: string[],
     options?: CreateSessionOptions,
-  ): Promise<{ session_id: string; agent_id: string; status: string }> {
+  ): Promise<CreateChatSessionResponse> {
     return fetchApi(`${API_BASE}/sessions`, {
       method: "POST",
       body: JSON.stringify({

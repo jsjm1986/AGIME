@@ -1545,6 +1545,10 @@ export default {
       dismiss: "忽略",
       accept: "记住",
     },
+    warnings: {
+      agentImageInputUnsupported:
+        "当前 Agent 未开启多模态输入，图片不会直接发送给模型；如需直接看图，请切换到支持多模态的 Agent，或让当前 Agent 使用 OCR/本地工具兜底。",
+    },
     newChat: "新对话",
     messagesShort: "条消息",
     selectAgent: "选择 Agent",

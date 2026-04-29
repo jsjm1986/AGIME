@@ -392,4 +392,14 @@ pub struct CreateChatSessionRequest {
 pub struct SendMessageResponse {
     pub session_id: String,
     pub streaming: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ChatResponseWarning>,
+}
+
+/// Non-blocking user-facing warning returned by chat endpoints.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatResponseWarning {
+    pub code: String,
+    pub severity: String,
+    pub message: String,
 }

@@ -17,6 +17,7 @@ import i18n from "../../i18n";
 import { useAuth } from "../../contexts/AuthContext";
 import {
   chatApi,
+  type ChatResponseWarning,
   type ComposerCapabilitiesCatalog,
   type CreateSessionOptions,
   type ChatSessionEvent,
@@ -889,6 +890,7 @@ export function ChatConversation({
   const [messages, setMessages] = useState<Message[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [liveStatus, setLiveStatus] = useState("");
+  const [chatWarnings, setChatWarnings] = useState<ChatResponseWarning[]>([]);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [loading, setLoading] = useState(false);
   const [attachedDocs, setAttachedDocs] = useState<DocumentSummary[]>([]);
@@ -954,6 +956,10 @@ export function ChatConversation({
   const lastRuntimeEventAtRef = useRef<number>(0);
   const isProcessingRef = useRef(false);
   const sessionSyncInFlightRef = useRef(false);
+
+  useEffect(() => {
+    setChatWarnings([]);
+  }, [agentId, sessionId]);
 
   useEffect(() => {
     if (sessionId) {
@@ -1633,6 +1639,32 @@ export function ChatConversation({
     [onRuntimeEvent],
   );
 
+  const formatChatWarning = useCallback(
+    (warning: ChatResponseWarning) => {
+      if (warning.code === "agent_image_input_unsupported") {
+        return t(
+          "chat.warnings.agentImageInputUnsupported",
+          "当前 Agent 未开启多模态输入，图片不会直接发送给模型；如需直接看图，请切换到支持多模态的 Agent，或让当前 Agent 使用 OCR/本地工具兜底。",
+        );
+      }
+      return warning.message;
+    },
+    [t],
+  );
+
+  const applyChatWarnings = useCallback(
+    (warnings?: ChatResponseWarning[]) => {
+      if (!warnings?.length) return;
+      setChatWarnings(warnings);
+      const text = warnings.map(formatChatWarning).join(" ");
+      setLiveStatus(text);
+      emitRuntimeEvent("status", text, {
+        warning_codes: warnings.map((warning) => warning.code),
+      });
+    },
+    [emitRuntimeEvent, formatChatWarning],
+  );
+
   const handleFileUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
@@ -1729,6 +1761,7 @@ export function ChatConversation({
               createSessionOptions,
             );
             sid = res.session_id;
+            applyChatWarnings(res.warnings);
           }
           currentSessionRef.current = sid;
           lastEventIdRef.current = null;
@@ -1804,7 +1837,8 @@ export function ChatConversation({
       processingStartedAtRef.current = Date.now();
 
       try {
-        await chatApi.sendMessage(sid, finalContent);
+        const response = await chatApi.sendMessage(sid, finalContent);
+        applyChatWarnings(response.warnings);
         void loadRelationshipSuggestions(sid);
         connectStream(sid);
       } catch (e) {
@@ -1826,6 +1860,7 @@ export function ChatConversation({
     },
     [
       agentId,
+      applyChatWarnings,
       createSession,
       createSessionOptions,
       emitRuntimeEvent,
@@ -2728,6 +2763,16 @@ export function ChatConversation({
           <span className="shrink-0">
             {t("chat.elapsed", "{{n}}s", { n: elapsedSeconds })}
           </span>
+        </div>
+      )}
+
+      {chatWarnings.length > 0 && (
+        <div className="mx-3 mb-1 mt-2 rounded-[14px] border border-[hsl(var(--status-warning-text))/0.18] bg-status-warning-bg px-3 py-2 text-[12px] text-status-warning-text sm:mx-4">
+          {chatWarnings.map((warning) => (
+            <div key={`${warning.code}:${warning.message}`}>
+              {formatChatWarning(warning)}
+            </div>
+          ))}
         </div>
       )}
 

@@ -91,8 +91,8 @@ use super::prompt_profiles::{
 use super::resource_access::is_runtime_review_approved;
 use super::service_mongo::AgentService;
 use super::session_mongo::{
-    CreateChatSessionRequest, SendChatMessageRequest, SendMessageResponse, SessionListItem,
-    UserSessionListQuery,
+    ChatResponseWarning, CreateChatSessionRequest, SendChatMessageRequest, SendMessageResponse,
+    SessionListItem, UserSessionListQuery,
 };
 use super::workspace_service::WorkspaceService;
 use agime_team::services::mongo::{DocumentService, PortalService, TeamService};
@@ -1548,6 +1548,55 @@ async fn build_attached_document_turn_overlay(
         "</attached_document_turn_context>".to_string(),
     ]);
     Some(lines.join("\n"))
+}
+
+async fn build_multimodal_attachment_warnings(
+    service: &AgentService,
+    db: &MongoDb,
+    team_id: &str,
+    agent_id: &str,
+    document_ids: &[String],
+) -> Vec<ChatResponseWarning> {
+    if document_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let agent = match service.get_agent(agent_id).await {
+        Ok(Some(agent)) => agent,
+        _ => return Vec::new(),
+    };
+    if agent.supports_multimodal {
+        return Vec::new();
+    }
+
+    let document_service = DocumentService::new(db.clone());
+    let mut image_names = Vec::new();
+    for doc_id in document_ids.iter().take(12) {
+        if let Ok(doc) = document_service.get_metadata(team_id, doc_id).await {
+            if doc.mime_type.starts_with("image/") {
+                image_names.push(doc.name);
+            }
+        }
+    }
+
+    if image_names.is_empty() {
+        return Vec::new();
+    }
+
+    let image_summary = if image_names.len() == 1 {
+        image_names[0].clone()
+    } else {
+        format!("{} image documents", image_names.len())
+    };
+
+    vec![ChatResponseWarning {
+        code: "agent_image_input_unsupported".to_string(),
+        severity: "warning".to_string(),
+        message: format!(
+            "Current agent '{}' is not configured for multimodal image input, so '{}' will not be sent to the model as an image. Switch to a multimodal agent for direct image understanding, or let this agent use OCR/local tools as a fallback.",
+            agent.name, image_summary
+        ),
+    }]
 }
 
 fn message_mentions_file_delivery(text: &str) -> bool {
@@ -5951,6 +6000,15 @@ async fn create_session(
         .clone()
         .or_else(|| Some("full".to_string()));
 
+    let warnings = build_multimodal_attachment_warnings(
+        service.as_ref(),
+        db.as_ref(),
+        &team_id,
+        &req.agent_id,
+        &req.attached_document_ids,
+    )
+    .await;
+
     let session = service
         .create_chat_session(
             &team_id,
@@ -5981,6 +6039,7 @@ async fn create_session(
         "session_id": session.session_id,
         "agent_id": session.agent_id,
         "status": session.status,
+        "warnings": warnings,
     })))
 }
 
@@ -6803,6 +6862,15 @@ async fn send_message(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    let warnings = build_multimodal_attachment_warnings(
+        service.as_ref(),
+        db.as_ref(),
+        &session.team_id,
+        &session.agent_id,
+        &session.attached_document_ids,
+    )
+    .await;
+
     if session
         .session_source
         .eq_ignore_ascii_case("portal_manager")
@@ -6915,6 +6983,7 @@ async fn send_message(
     Ok(Json(SendMessageResponse {
         session_id,
         streaming: true,
+        warnings,
     }))
 }
 

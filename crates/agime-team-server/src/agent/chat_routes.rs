@@ -95,7 +95,7 @@ use super::session_mongo::{
     UserSessionListQuery,
 };
 use super::workspace_service::WorkspaceService;
-use agime_team::services::mongo::{PortalService, TeamService};
+use agime_team::services::mongo::{DocumentService, PortalService, TeamService};
 
 type ChatState = (
     Arc<AgentService>,
@@ -1508,6 +1508,48 @@ fn build_personal_document_scope_overlay(attached_document_count: usize) -> Stri
     lines.join("\n")
 }
 
+async fn build_attached_document_turn_overlay(
+    db: &MongoDb,
+    team_id: &str,
+    document_ids: &[String],
+) -> Option<String> {
+    if document_ids.is_empty() {
+        return None;
+    }
+    let svc = DocumentService::new(db.clone());
+    let mut lines = vec![
+        "<attached_document_turn_context>".to_string(),
+        "The user explicitly attached these team documents to the current conversation context. Treat them as the first place to inspect for document/image questions.".to_string(),
+    ];
+    for doc_id in document_ids.iter().take(12) {
+        match svc.get_metadata(team_id, doc_id).await {
+            Ok(doc) => lines.push(format!(
+                "- doc_id={} name={} mime_type={} file_size={}",
+                doc.id, doc.name, doc.mime_type, doc.file_size
+            )),
+            Err(_) => lines.push(format!(
+                "- doc_id={} metadata_unavailable=true",
+                doc_id
+            )),
+        }
+    }
+    if document_ids.len() > 12 {
+        lines.push(format!(
+            "- additional_attached_documents={}",
+            document_ids.len() - 12
+        ));
+    }
+    lines.extend([
+        "Rules:".to_string(),
+        "- To inspect an attached document, call document_tools__read_document with the exact doc_id above before using workspace paths.".to_string(),
+        "- If an attached document has an image/* MIME type and the user asks what the image is, call document_tools__read_document; the document tool will return the image as multimodal tool content when possible.".to_string(),
+        "- Do not search arbitrary workspace attachments/artifacts paths before a document tool has materialized the attached document.".to_string(),
+        "- If the current model cannot use image input, use the returned workspace path with developer/Python/OCR-style local inspection and state that fallback plainly.".to_string(),
+        "</attached_document_turn_context>".to_string(),
+    ]);
+    Some(lines.join("\n"))
+}
+
 fn message_mentions_file_delivery(text: &str) -> bool {
     let lowered = text.trim().to_lowercase();
     if lowered.is_empty() {
@@ -2063,7 +2105,7 @@ async fn build_channel_extra_instructions(
     default_agent_name: &str,
     thread_summary: Option<&str>,
     current_request: &str,
-    attached_document_count: usize,
+    attached_document_ids: &[String],
     surface: ChatChannelMessageSurface,
     thread_state: ChatChannelThreadState,
     interaction_mode: ChatChannelInteractionMode,
@@ -2090,6 +2132,8 @@ async fn build_channel_extra_instructions(
             intent,
         })
     });
+    let attached_document_overlay =
+        build_attached_document_turn_overlay(db.as_ref(), team_id, attached_document_ids).await;
     merge_chat_extra_instructions(
         std::iter::once(build_assistant_identity_overlay())
             .chain(std::iter::once(build_assistant_persona_overlay(user)))
@@ -2107,8 +2151,9 @@ async fn build_channel_extra_instructions(
             .chain(coding_overlay.into_iter())
             .chain(delegation_overlay.into_iter())
             .chain(std::iter::once(build_channel_document_scope_overlay(
-                attached_document_count,
+                attached_document_ids.len(),
             )))
+            .chain(attached_document_overlay.into_iter())
             .chain(
                 build_channel_surface_execution_overlay(surface, thread_state, interaction_mode)
                     .into_iter(),
@@ -5206,7 +5251,7 @@ async fn send_channel_message_internal(
         &agent.name,
         thread_root.as_ref().map(|item| item.content_text.as_str()),
         &content,
-        attached_document_ids.len(),
+        &attached_document_ids,
         effective_surface,
         effective_thread_state,
         interaction_mode,
@@ -5876,6 +5921,9 @@ async fn create_session(
             .await
             .ok()
             .flatten();
+        let attached_document_overlay =
+            build_attached_document_turn_overlay(db.as_ref(), &team_id, &req.attached_document_ids)
+                .await;
         merge_chat_extra_instructions(
             std::iter::once(build_assistant_identity_overlay())
                 .chain(std::iter::once(build_assistant_persona_overlay(&user)))
@@ -5892,6 +5940,7 @@ async fn create_session(
                 .chain(std::iter::once(build_personal_document_scope_overlay(
                     req.attached_document_ids.len(),
                 )))
+                .chain(attached_document_overlay.into_iter())
                 .collect(),
             req.extra_instructions,
         )
@@ -6829,6 +6878,15 @@ async fn send_message(
         turn_instruction_parts.push(overlay);
     }
     if let Some(overlay) = build_chat_tool_gate_overlay(&content) {
+        turn_instruction_parts.push(overlay);
+    }
+    if let Some(overlay) = build_attached_document_turn_overlay(
+        db.as_ref(),
+        &session.team_id,
+        &session.attached_document_ids,
+    )
+    .await
+    {
         turn_instruction_parts.push(overlay);
     }
     if let Some(intent) = classify_chat_delegation_intent(&content) {

@@ -26,6 +26,7 @@ use super::context_injector::sanitize_filename;
 use super::local_fs_workspace_store::LocalFsWorkspaceStore;
 use super::workspace_physical_store::WorkspacePhysicalStore;
 use super::workspace_types::{WorkspaceArtifactArea, WorkspaceArtifactRecord};
+use base64::Engine;
 
 /// Provider of document tools for agents
 pub struct DocumentToolsProvider {
@@ -49,6 +50,8 @@ pub struct DocumentToolsProvider {
     /// First materialized workspace path for each accessed document in this session.
     materialized_doc_paths: Mutex<HashMap<String, String>>,
 }
+
+const MAX_INLINE_DOCUMENT_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 
 impl DocumentToolsProvider {
     #[allow(clippy::too_many_arguments)]
@@ -482,12 +485,19 @@ impl DocumentToolsProvider {
         tool_name: &str,
         doc_id: &str,
         doc_name: &str,
+        mime_type: &str,
         file_path: &str,
     ) -> String {
+        let file_size = std::fs::metadata(file_path)
+            .ok()
+            .map(|metadata| metadata.len())
+            .unwrap_or_default();
         json!({
             "type": "document_access_redirect",
             "doc_id": doc_id,
             "doc_name": doc_name,
+            "mime_type": mime_type,
+            "file_size": file_size,
             "file_path": file_path,
             "access_established": true,
             "content_accessed": false,
@@ -1425,8 +1435,17 @@ fn build_document_tool_call_result(raw: String, is_error: bool) -> CallToolResul
         .as_ref()
         .map(render_document_tool_result_for_model)
         .unwrap_or_else(|| raw.clone());
+    let mut content = vec![Content::text(rendered)];
+    if !is_error {
+        if let Some(image) = structured_content
+            .as_ref()
+            .and_then(document_tool_inline_image_content)
+        {
+            content.push(image);
+        }
+    }
     CallToolResult {
-        content: vec![Content::text(rendered)],
+        content,
         structured_content,
         is_error: Some(is_error),
         meta: None,
@@ -1450,6 +1469,12 @@ fn render_document_tool_result_for_model(value: &serde_json::Value) -> String {
                 .get("mime_type")
                 .and_then(|item| item.as_str())
                 .unwrap_or("unknown");
+            if is_supported_inline_image_mime(mime) {
+                return format!(
+                    "Document access established for {} (MIME: {}). Workspace path: {}. This image is attached to the tool result for multimodal inspection when the current model supports image input. Analyze the attached image directly; if image input is unavailable, use the workspace path with developer shell, Python, OCR, or another local tool.",
+                    name, mime, path
+                );
+            }
             format!(
                 "Document access established for {} (MIME: {}). Workspace path: {}. Use developer shell, MCP, or another local tool to read the file content from this path.",
                 name, mime, path
@@ -1464,6 +1489,16 @@ fn render_document_tool_result_for_model(value: &serde_json::Value) -> String {
                 .get("file_path")
                 .and_then(|item| item.as_str())
                 .unwrap_or("workspace export");
+            let mime = value
+                .get("mime_type")
+                .and_then(|item| item.as_str())
+                .unwrap_or("unknown");
+            if is_supported_inline_image_mime(mime) {
+                return format!(
+                    "Document access is already established for {} at {}. The image is attached again for multimodal inspection when the current model supports image input. Do not call another document access tool; analyze the attached image directly or use the workspace path with local tools if image input is unavailable.",
+                    name, path
+                );
+            }
             format!(
                 "Document access is already established for {} at {}. Do not call another document access tool. Use developer shell, MCP, or another local tool to inspect the workspace file content from that path.",
                 name, path
@@ -1497,6 +1532,43 @@ fn render_document_tool_result_for_model(value: &serde_json::Value) -> String {
         }
         _ => value.to_string(),
     }
+}
+
+fn is_supported_inline_image_mime(mime_type: &str) -> bool {
+    matches!(
+        mime_type.trim().to_ascii_lowercase().as_str(),
+        "image/png" | "image/jpeg" | "image/jpg" | "image/gif" | "image/webp"
+    )
+}
+
+fn document_tool_inline_image_content(value: &serde_json::Value) -> Option<Content> {
+    match value.get("type").and_then(|item| item.as_str()) {
+        Some("document_access") | Some("workspace_export") | Some("binary_export")
+        | Some("document_access_redirect") => {}
+        _ => return None,
+    }
+    let mime_type = value.get("mime_type")?.as_str()?.trim();
+    if !is_supported_inline_image_mime(mime_type) {
+        return None;
+    }
+    if value
+        .get("file_size")
+        .and_then(|item| item.as_u64())
+        .is_some_and(|size| size > MAX_INLINE_DOCUMENT_IMAGE_BYTES)
+    {
+        return None;
+    }
+    let file_path = value.get("file_path")?.as_str()?.trim();
+    if file_path.is_empty() {
+        return None;
+    }
+    let metadata = std::fs::metadata(file_path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_INLINE_DOCUMENT_IMAGE_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(file_path).ok()?;
+    let data = base64::prelude::BASE64_STANDARD.encode(bytes);
+    Some(Content::image(data, mime_type.to_string()))
 }
 
 #[derive(Debug, Clone)]
@@ -1864,6 +1936,7 @@ impl DocumentToolsProvider {
                 "read_document",
                 doc_id,
                 &doc_meta.name,
+                &doc_meta.mime_type,
                 &existing_path,
             ));
         }
@@ -1902,6 +1975,7 @@ impl DocumentToolsProvider {
                 "export_document",
                 doc_id,
                 &doc_meta.name,
+                &doc_meta.mime_type,
                 &existing_path,
             ));
         }
@@ -1960,6 +2034,7 @@ impl DocumentToolsProvider {
                         "import_document_to_workspace",
                         doc_id,
                         &doc_meta.name,
+                        &doc_meta.mime_type,
                         &existing_path,
                     ));
                 }
@@ -2927,5 +3002,57 @@ mod tests {
             .find_map(|content| content.as_text().map(|text| text.text.clone()))
             .unwrap_or_default();
         assert!(rendered.contains("Do not call another document access tool"));
+    }
+
+    #[test]
+    fn build_document_tool_call_result_attaches_image_content_for_image_document() {
+        let path = std::env::temp_dir().join(format!(
+            "agime-doc-tool-inline-image-{}-{}.png",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let bytes = b"\x89PNG\r\n\x1a\ninline-image-test";
+        std::fs::write(&path, bytes).unwrap();
+
+        let result = build_document_tool_call_result(
+            json!({
+                "type": "document_access",
+                "doc_name": "fig_1.png",
+                "mime_type": "image/png",
+                "file_size": bytes.len(),
+                "file_path": path.to_string_lossy()
+            })
+            .to_string(),
+            false,
+        );
+
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(result.content.len(), 2);
+        let rendered = result.content[0].as_text().unwrap().text.clone();
+        assert!(rendered.contains("multimodal inspection"));
+        let image = result.content[1].as_image().expect("expected image content");
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(image.data, base64::prelude::BASE64_STANDARD.encode(bytes));
+    }
+
+    #[test]
+    fn build_document_tool_call_result_keeps_non_image_document_text_only() {
+        let result = build_document_tool_call_result(
+            json!({
+                "type": "document_access",
+                "doc_name": "report.pdf",
+                "mime_type": "application/pdf",
+                "file_size": 12,
+                "file_path": "/tmp/report.pdf"
+            })
+            .to_string(),
+            false,
+        );
+
+        assert_eq!(result.content.len(), 1);
+        assert!(result.content[0].as_text().is_some());
     }
 }

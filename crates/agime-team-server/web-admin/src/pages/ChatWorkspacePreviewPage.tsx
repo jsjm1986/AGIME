@@ -5,6 +5,7 @@ import { ArrowLeft, ExternalLink } from "lucide-react";
 import { SharedPreviewContent } from "../components/documents/DocumentPreview";
 import { Button } from "../components/ui/button";
 import { chatApi } from "../api/chat";
+import { normalizePreviewMimeType } from "../utils/filePreview";
 
 function normalizeName(path: string, label: string | null): string {
   const trimmedLabel = label?.trim();
@@ -99,9 +100,13 @@ export function ChatWorkspacePreviewPage() {
     return chatApi.getSessionWorkspacePreviewUrl(sessionId, filePath);
   }, [filePath, sessionId]);
   const downloadUrl = contentUrl;
+  const effectiveContentType = normalizePreviewMimeType(
+    contentType,
+    `${fileName || ""} ${filePath}`.trim(),
+  );
   const renderTrustedVisualisation = isWorkspaceVisualisationHtml(
     filePath,
-    contentType,
+    effectiveContentType,
   );
 
   if (!sessionId || !filePath) {
@@ -140,7 +145,7 @@ export function ChatWorkspacePreviewPage() {
             </div>
             <div className="mt-1 truncate text-xs text-muted-foreground">
               {filePath}
-              {contentType ? ` · ${contentType}` : ""}
+              {effectiveContentType ? ` · ${effectiveContentType}` : ""}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -172,7 +177,7 @@ export function ChatWorkspacePreviewPage() {
             <SharedPreviewContent
               document={{
                 name: fileName,
-                mime_type: contentType || "",
+                mime_type: effectiveContentType,
                 file_size: 0,
               }}
               contentUrl={contentUrl}

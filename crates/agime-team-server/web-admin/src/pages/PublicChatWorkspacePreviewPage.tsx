@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { ExternalLink } from "lucide-react";
 import { SharedPreviewContent } from "../components/documents/DocumentPreview";
 import { Button } from "../components/ui/button";
+import { normalizePreviewMimeType } from "../utils/filePreview";
 
 function resolvePublicUrls(shareId: string) {
   const base = `/api/team/agent/chat/public/workspace-shares/${encodeURIComponent(shareId)}`;
@@ -21,7 +22,20 @@ function guessNameFromShare(shareId: string, contentType: string) {
     "text/plain": ".txt",
     "text/html": ".html",
     "text/csv": ".csv",
+    "image/avif": ".avif",
+    "image/bmp": ".bmp",
+    "image/gif": ".gif",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
     "image/svg+xml": ".svg",
+    "image/webp": ".webp",
+    "audio/mpeg": ".mp3",
+    "audio/mp4": ".m4a",
+    "audio/ogg": ".ogg",
+    "audio/wav": ".wav",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/webm": ".webm",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
       ".docx",
     "application/msword": ".doc",
@@ -89,6 +103,8 @@ export function PublicChatWorkspacePreviewPage() {
   const [searchParams] = useSearchParams();
   const shareId = searchParams.get("share")?.trim() || "";
   const contentType = searchParams.get("contentType")?.trim() || "";
+  const fileName = guessNameFromShare(shareId, contentType);
+  const effectiveContentType = normalizePreviewMimeType(contentType, fileName);
 
   const urls = useMemo(() => resolvePublicUrls(shareId), [shareId]);
 
@@ -120,7 +136,7 @@ export function PublicChatWorkspacePreviewPage() {
             </div>
             <div className="mt-1 truncate text-xs text-muted-foreground">
               {shareId}
-              {contentType ? ` · ${contentType}` : ""}
+              {effectiveContentType ? ` · ${effectiveContentType}` : ""}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -139,16 +155,16 @@ export function PublicChatWorkspacePreviewPage() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-hidden rounded-[28px] border border-border/60 bg-card shadow-sm">
-          {contentType.toLowerCase().startsWith("text/html") ? (
+          {effectiveContentType.toLowerCase().startsWith("text/html") ? (
             <PublicVisualisationFrame
               src={urls.contentUrl}
-              title={guessNameFromShare(shareId, contentType)}
+              title={fileName}
             />
           ) : (
             <SharedPreviewContent
               document={{
-                name: guessNameFromShare(shareId, contentType),
-                mime_type: contentType,
+                name: fileName,
+                mime_type: effectiveContentType,
                 file_size: 0,
               }}
               contentUrl={urls.contentUrl}

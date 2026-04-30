@@ -78,6 +78,7 @@ import { apiClient } from '../../api/client';
 import type { TeamMember } from '../../api/types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
+import { isBrowserPreviewableFile } from '../../utils/filePreview';
 
 function bilingual(zh: string, en: string): string {
   const lang = i18n.resolvedLanguage || i18n.language || 'zh';
@@ -132,8 +133,7 @@ interface PendingCollaborationActionConfirm {
 }
 
 function workspaceFileSupportsBrowserPreview(filePath: string): boolean {
-  const lower = filePath.toLowerCase();
-  return lower.endsWith('.html') || lower.endsWith('.htm');
+  return isBrowserPreviewableFile(filePath);
 }
 
 type ComposerMentionComposer = 'root' | 'thread';

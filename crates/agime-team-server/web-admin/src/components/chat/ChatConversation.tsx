@@ -49,6 +49,10 @@ import { DocumentPicker } from "../documents/DocumentPicker";
 import { BottomSheetPanel } from "../mobile/BottomSheetPanel";
 import type { TeamAgent } from "../../api/agent";
 import type { Message, ToolCallInfo } from "./ChatMessageBubble";
+import {
+  isBrowserPreviewableFile,
+  normalizePreviewMimeType,
+} from "../../utils/filePreview";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 const CHAT_DEBUG_VIEW_STORAGE_KEY = "chat:show_tool_debug_messages:v1";
@@ -1563,15 +1567,30 @@ export function ChatConversation({
               typeof c?.path === "string" &&
               typeof c?.label === "string"
             ) {
+              const rawContentType =
+                typeof c?.content_type === "string"
+                  ? c.content_type
+                  : typeof c?.contentType === "string"
+                    ? c.contentType
+                    : typeof c?.mime_type === "string"
+                      ? c.mime_type
+                      : typeof c?.mimeType === "string"
+                        ? c.mimeType
+                        : null;
+              const contentType = normalizePreviewMimeType(
+                rawContentType,
+                c.path,
+              );
               workspaceFiles.push({
                 type: "workspace_file",
                 path: c.path,
                 label: c.label,
-                content_type:
-                  typeof c?.content_type === "string" ? c.content_type : null,
+                content_type: contentType || null,
                 size_bytes:
                   typeof c?.size_bytes === "number" ? c.size_bytes : null,
-                preview_supported: c?.preview_supported !== false,
+                preview_supported:
+                  c?.preview_supported !== false &&
+                  isBrowserPreviewableFile(c.path, contentType),
               });
             }
           }

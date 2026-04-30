@@ -21,6 +21,10 @@ import { formatRelativeTime } from "../../utils/format";
 import { copyText } from "../../utils/clipboard";
 import { chatApi, type ChatWorkspaceFileBlock } from "../../api/chat";
 import { useToast } from "../../contexts/ToastContext";
+import {
+  isBrowserPreviewableFile,
+  normalizePreviewMimeType,
+} from "../../utils/filePreview";
 
 export interface ToolCallInfo {
   name: string;
@@ -313,19 +317,31 @@ function normalizeWorkspaceFileBlock(
         : typeof record.doc_name === "string" && record.doc_name.trim().length > 0
           ? record.doc_name.trim()
           : path.split("/").filter(Boolean).pop() || path;
+  const rawContentType =
+    typeof record.content_type === "string"
+      ? record.content_type
+      : typeof record.contentType === "string"
+        ? record.contentType
+        : typeof record.mime_type === "string"
+          ? record.mime_type
+          : typeof record.mimeType === "string"
+            ? record.mimeType
+            : null;
+  const contentType = normalizePreviewMimeType(rawContentType, path);
   return {
     type: "workspace_file",
     path,
     label: labelCandidate,
-    content_type:
-      typeof record.content_type === "string" ? record.content_type : null,
+    content_type: contentType || null,
     size_bytes:
       typeof record.size_bytes === "number"
         ? record.size_bytes
         : typeof record.file_size === "number"
           ? record.file_size
           : null,
-    preview_supported: record.preview_supported !== false,
+    preview_supported:
+      record.preview_supported !== false &&
+      isBrowserPreviewableFile(path, contentType),
   };
 }
 

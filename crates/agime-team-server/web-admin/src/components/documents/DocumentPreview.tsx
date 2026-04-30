@@ -5,6 +5,7 @@ import { documentApi } from '../../api/documents';
 import type { DocumentSummary } from '../../api/documents';
 import { FallbackPreview } from './previews/FallbackPreview';
 import { cn } from '../../utils';
+import { normalizePreviewMimeType } from '../../utils/filePreview';
 
 const TextPreview = lazy(() =>
   import('./previews/TextPreview').then((module) => ({ default: module.TextPreview })),
@@ -176,8 +177,8 @@ function PreviewLoadingFallback() {
 }
 
 export function SharedPreviewContent({ document: doc, contentUrl, onDownload }: PreviewContentProps) {
-  const mime = doc.mime_type || '';
   const name = doc.name || '';
+  const mime = normalizePreviewMimeType(doc.mime_type, name);
 
   // Markdown
   if (mime === 'text/markdown') {

@@ -1521,11 +1521,9 @@ impl McpConnector {
             }
         }
         if let Some(structured) = result.structured_content.as_ref() {
-            let structured_text =
-                serde_json::to_string_pretty(structured).unwrap_or_else(|_| structured.to_string());
-            if !structured_text.trim().is_empty() {
-                blocks.push(ToolContentBlock::Text(structured_text));
-            }
+            // Keep structured payloads machine-readable. The tool's explicit text
+            // content is the only model-visible narration; dumping structured JSON
+            // here leaks internal diagnostic fields into assistant answers.
             blocks.push(ToolContentBlock::StructuredJson(structured.clone()));
         }
         blocks
@@ -1929,6 +1927,40 @@ mod tests {
             }
             other => panic!("expected resource block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn extract_tool_result_blocks_keeps_structured_json_out_of_visible_text() {
+        let structured = serde_json::json!({
+            "type": "document_access_redirect",
+            "message": "internal redirect details must not be visible",
+            "file_path": "/workspace/fig_1.png"
+        });
+        let result = CallToolResult {
+            content: vec![rmcp::model::Content::text(
+                "Document access is already established for fig_1.png.",
+            )],
+            structured_content: Some(structured.clone()),
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let blocks = McpConnector::extract_tool_result_blocks(&result);
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(
+            &blocks[0],
+            ToolContentBlock::Text(text)
+                if text == "Document access is already established for fig_1.png."
+        ));
+        assert!(matches!(
+            &blocks[1],
+            ToolContentBlock::StructuredJson(value) if value == &structured
+        ));
+        assert!(!blocks.iter().any(|block| matches!(
+            block,
+            ToolContentBlock::Text(text)
+                if text.contains("internal redirect details must not be visible")
+        )));
     }
 
     #[test]

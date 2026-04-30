@@ -32,6 +32,11 @@ Do not manually patch random files under the server source directory unless it
 is an emergency. Local code should be committed and pushed first, then deployed
 to the server.
 
+The current production server cannot reliably access GitHub. Treat bundle
+deployment from the local workstation as the normal deployment path. Direct
+server-side `git fetch origin main` is only an optional shortcut when GitHub
+network access has been verified for that deployment.
+
 Runtime data and secrets must stay outside Git:
 
 - Keep secrets in `/etc/agime-team-server.env`.
@@ -39,30 +44,11 @@ Runtime data and secrets must stay outside Git:
 - Keep uploads/workspace/artifacts in runtime storage, not in Git.
 - Do not commit local test files, comparison repos, logs, or provider keys.
 
-## Standard Deployment
+## Current Standard Deployment: Bundle
 
-Use this when the server can reach GitHub normally.
-
-```bash
-cd /opt/agime-src
-git fetch origin main
-git reset --hard origin/main
-git status -sb
-
-cd crates/agime-team-server/web-admin
-CI=1 npm run build
-
-cd /opt/agime-src
-cargo build --release -p agime-team-server
-
-systemctl restart agime-team-server
-systemctl is-active agime-team-server
-curl -fsS http://127.0.0.1:9999/
-```
-
-## Bundle Deployment Fallback
-
-Use this when the server cannot reliably access GitHub.
+Use this for normal production deployment. GitHub `main` must still be pushed
+first, but the server receives a local Git bundle instead of fetching from
+GitHub.
 
 On the local machine:
 
@@ -78,7 +64,8 @@ cd "$tmp_dir/shallow"
 git bundle create "$tmp_dir/agime-head.bundle" HEAD
 ```
 
-Upload `agime-head.bundle` to the server, then on the server:
+Upload `agime-head.bundle` to the server as `/tmp/agime-head.bundle`, then on
+the server:
 
 ```bash
 rm -rf /opt/agime-src.next
@@ -99,7 +86,36 @@ printf 'target\ncrates/agime-team-server/web-admin/node_modules\ncrates/agime-te
 sort -u /opt/agime-src/.git/info/exclude -o /opt/agime-src/.git/info/exclude
 ```
 
-Then build and restart using the standard deployment commands.
+Then build and restart:
+
+```bash
+cd /opt/agime-src
+
+cd crates/agime-team-server/web-admin
+CI=1 npm run build
+
+cd /opt/agime-src
+cargo build --release -p agime-team-server
+
+systemctl restart agime-team-server
+systemctl is-active agime-team-server
+curl -fsS http://127.0.0.1:9999/
+```
+
+## Optional Direct Git Deployment
+
+Use this only after confirming the server can reach GitHub during that
+deployment window.
+
+```bash
+cd /opt/agime-src
+git fetch origin main
+git reset --hard origin/main
+git status -sb
+```
+
+Then build and restart using the same commands from the current standard
+deployment section.
 
 ## Verification Checklist
 
@@ -141,4 +157,3 @@ If the new deployment fails:
 
 Keep `/opt/agime` until the new `/opt/agime-src` layout has been stable for a
 few days.
-

@@ -85,6 +85,28 @@ impl Agent {
             .unwrap_or_default()
     }
 
+    fn document_tool_evidence_summary(
+        structured: &serde_json::Map<String, serde_json::Value>,
+    ) -> Option<String> {
+        let kind = structured
+            .get("type")
+            .and_then(serde_json::Value::as_str)?;
+        let subject = structured
+            .get("doc_name")
+            .or_else(|| structured.get("source_name"))
+            .or_else(|| structured.get("doc_id"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("document");
+        let label = match kind {
+            "document_access" => "Document access established",
+            "document_access_redirect" => "Document access already established",
+            "workspace_export" | "binary_export" => "Document exported to workspace",
+            "text_read" => "Document text read",
+            other => return Some(format!("Document tool {} completed for {}", other, subject)),
+        };
+        Some(format!("{} for {}", label, subject))
+    }
+
     fn summarize_target_list(targets: &[String]) -> String {
         let normalized = targets
             .iter()
@@ -360,16 +382,7 @@ impl Agent {
             } else {
                 None
             };
-            let evidence_summary = structured
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .map(ToString::to_string)
-                .or_else(|| {
-                    structured
-                        .get("type")
-                        .and_then(serde_json::Value::as_str)
-                        .map(|kind| format!("document tool {} completed", kind))
-                });
+            let evidence_summary = Self::document_tool_evidence_summary(structured);
             coordinator_signals
                 .record(CoordinatorSignal::ValidationReported {
                     report: super::ValidationReport {
@@ -1651,6 +1664,21 @@ mod tests {
             }
             other => panic!("expected ToolFailed, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn document_tool_evidence_summary_does_not_reuse_internal_message_field() {
+        let structured = json!({
+            "type": "document_access_redirect",
+            "doc_name": "fig_1.png",
+            "message": "read_document was already completed for document 'fig_1.png'"
+        });
+        let summary =
+            Agent::document_tool_evidence_summary(structured.as_object().expect("object"))
+                .expect("summary");
+
+        assert_eq!(summary, "Document access already established for fig_1.png");
+        assert!(!summary.contains("read_document was already completed"));
     }
 
     #[test]

@@ -82,6 +82,7 @@ use super::chat_memory::{
 use super::delegation_runtime::{
     build_delegation_runtime, delegation_event_from_worker_stream, DelegationRuntimeResponse,
 };
+use super::file_preview::workspace_preview_supported;
 use super::normalize_workspace_path;
 use super::prompt_profiles::{
     build_channel_coding_overlay, build_chat_delegation_overlay, build_portal_coding_overlay,
@@ -167,8 +168,25 @@ fn chat_workspace_shares_collection(db: &MongoDb) -> mongodb::Collection<ChatWor
     db.collection(collections::CHAT_WORKSPACE_SHARES)
 }
 
+fn encode_query_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    encoded
+}
+
 fn chat_workspace_share_preview_path(share_id: &str, content_type: &str) -> String {
-    format!("/admin/chat/public-workspace-preview?share={share_id}&contentType={content_type}")
+    format!(
+        "/admin/chat/public-workspace-preview?share={}&contentType={}",
+        encode_query_component(share_id),
+        encode_query_component(content_type)
+    )
 }
 
 fn chat_workspace_share_download_path(share_id: &str) -> String {
@@ -209,36 +227,7 @@ fn derive_workspace_share_label(path: &str, requested_label: Option<&str>) -> St
 }
 
 fn workspace_share_preview_supported(path: &str, content_type: &str) -> bool {
-    let lowered_path = path.to_ascii_lowercase();
-    content_type.starts_with("text/")
-        || matches!(
-            content_type,
-            "application/json"
-                | "application/pdf"
-                | "image/svg+xml"
-                | "application/msword"
-                | "application/vnd.ms-excel"
-                | "application/vnd.ms-powerpoint"
-                | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        )
-        || content_type.starts_with("image/")
-        || content_type.starts_with("audio/")
-        || content_type.starts_with("video/")
-        || lowered_path.ends_with(".csv")
-        || lowered_path.ends_with(".json")
-        || lowered_path.ends_with(".md")
-        || lowered_path.ends_with(".txt")
-        || lowered_path.ends_with(".html")
-        || lowered_path.ends_with(".htm")
-        || lowered_path.ends_with(".svg")
-        || lowered_path.ends_with(".doc")
-        || lowered_path.ends_with(".docx")
-        || lowered_path.ends_with(".xls")
-        || lowered_path.ends_with(".xlsx")
-        || lowered_path.ends_with(".ppt")
-        || lowered_path.ends_with(".pptx")
+    workspace_preview_supported(path, content_type)
 }
 
 fn share_preview_embed_kind(content_type: &str) -> SharePreviewEmbedKind {

@@ -1588,9 +1588,10 @@ export function ChatConversation({
                 content_type: contentType || null,
                 size_bytes:
                   typeof c?.size_bytes === "number" ? c.size_bytes : null,
-                preview_supported:
-                  c?.preview_supported !== false &&
-                  isBrowserPreviewableFile(c.path, contentType),
+                preview_supported: isBrowserPreviewableFile(
+                  c.path,
+                  contentType,
+                ),
               });
             }
           }

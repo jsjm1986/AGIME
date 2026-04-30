@@ -339,9 +339,7 @@ function normalizeWorkspaceFileBlock(
         : typeof record.file_size === "number"
           ? record.file_size
           : null,
-    preview_supported:
-      record.preview_supported !== false &&
-      isBrowserPreviewableFile(path, contentType),
+    preview_supported: isBrowserPreviewableFile(path, contentType),
   };
 }
 

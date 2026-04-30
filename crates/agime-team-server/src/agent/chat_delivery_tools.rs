@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::chat_channels::ChatWorkspaceFileBlock;
+use super::file_preview::{normalize_preview_content_type, workspace_preview_supported};
 use super::service_mongo::AgentService;
 
 pub struct ChatDeliveryToolsProvider {
@@ -140,36 +141,7 @@ impl ChatDeliveryToolsProvider {
     }
 
     fn preview_supported(path: &str, content_type: &str) -> bool {
-        let lowered_path = path.to_ascii_lowercase();
-        content_type.starts_with("text/")
-            || matches!(
-                content_type,
-                "application/json"
-                    | "application/pdf"
-                    | "application/msword"
-                    | "application/vnd.ms-excel"
-                    | "application/vnd.ms-powerpoint"
-                    | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                    | "image/svg+xml"
-            )
-            || content_type.starts_with("image/")
-            || content_type.starts_with("audio/")
-            || content_type.starts_with("video/")
-            || lowered_path.ends_with(".csv")
-            || lowered_path.ends_with(".json")
-            || lowered_path.ends_with(".md")
-            || lowered_path.ends_with(".txt")
-            || lowered_path.ends_with(".html")
-            || lowered_path.ends_with(".htm")
-            || lowered_path.ends_with(".svg")
-            || lowered_path.ends_with(".doc")
-            || lowered_path.ends_with(".docx")
-            || lowered_path.ends_with(".xls")
-            || lowered_path.ends_with(".xlsx")
-            || lowered_path.ends_with(".ppt")
-            || lowered_path.ends_with(".pptx")
+        workspace_preview_supported(path, content_type)
     }
 
     fn sanitize_output_name(name: &str) -> String {
@@ -308,14 +280,7 @@ impl ChatDeliveryToolsProvider {
         }
         fs::write(&absolute_path, content)?;
         let stored_metadata = fs::metadata(&absolute_path)?;
-        let final_content_type = if content_type.trim().is_empty() {
-            MimeGuess::from_path(&absolute_path)
-                .first_raw()
-                .unwrap_or("application/octet-stream")
-                .to_string()
-        } else {
-            content_type
-        };
+        let final_content_type = normalize_preview_content_type(&relative_path, &content_type);
 
         let block = ChatWorkspaceFileBlock {
             block_type: "workspace_file".to_string(),

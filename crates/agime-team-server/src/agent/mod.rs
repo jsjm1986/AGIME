@@ -22,6 +22,7 @@ pub mod document_tools;
 pub mod execution_admission;
 pub mod extension_installer;
 pub mod extension_manager_client;
+pub mod file_preview;
 pub mod harness_core;
 pub mod hook_runtime;
 pub mod local_fs_workspace_store;

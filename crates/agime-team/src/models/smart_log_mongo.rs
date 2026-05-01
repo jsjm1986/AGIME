@@ -225,3 +225,31 @@ pub struct DocumentAnalysisContext {
 pub trait DocumentAnalysisTrigger: Send + Sync {
     fn trigger(&self, ctx: DocumentAnalysisContext);
 }
+
+/// Images are previewable assets, not text documents for automatic AI document analysis.
+pub fn is_image_document_type(mime_type: &str, file_name: &str) -> bool {
+    let mime = mime_type.trim().to_ascii_lowercase();
+    if mime.starts_with("image/") {
+        return true;
+    }
+
+    let ext = file_name
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.trim().to_ascii_lowercase());
+    matches!(
+        ext.as_deref(),
+        Some("png")
+            | Some("jpg")
+            | Some("jpeg")
+            | Some("gif")
+            | Some("webp")
+            | Some("svg")
+            | Some("bmp")
+            | Some("tif")
+            | Some("tiff")
+            | Some("ico")
+            | Some("heic")
+            | Some("heif")
+            | Some("avif")
+    )
+}

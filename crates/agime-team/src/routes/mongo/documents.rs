@@ -13,8 +13,8 @@ use std::sync::Arc;
 use super::teams::{can_manage_team, is_team_member, AppState};
 use crate::models::mongo::common_mongo::PaginatedResponse;
 use crate::models::mongo::{
-    DocumentAnalysisContext, DocumentBindingUsageSummary, DocumentStatus, DocumentSummary,
-    DocumentVersionSummary, LockInfo, SmartLogContext,
+    is_image_document_type, DocumentAnalysisContext, DocumentBindingUsageSummary, DocumentStatus,
+    DocumentSummary, DocumentVersionSummary, LockInfo, SmartLogContext,
 };
 use crate::services::mongo::{
     DocumentService, DocumentVersionService, PortalService, SmartLogService, TagCount, TeamService,
@@ -382,6 +382,8 @@ async fn upload_doc(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let doc_id_str = doc.id.map(|id| id.to_hex()).unwrap_or_default();
+    let should_run_document_analysis =
+        state.doc_analysis_trigger.is_some() && !is_image_document_type(&mime_type, &file_name);
 
     // Create initial version (v1) so version history starts from upload
     let version_service = DocumentVersionService::new((*state.db).clone());
@@ -423,12 +425,15 @@ async fn upload_doc(
                 file_name.clone(),
                 content_for_ai,
             )
-            .with_pending_analysis(state.doc_analysis_trigger.is_some()),
+            .with_pending_analysis(should_run_document_analysis),
         );
     }
 
     // Trigger automatic document analysis
-    if let Some(trigger) = &state.doc_analysis_trigger {
+    if should_run_document_analysis {
+        let Some(trigger) = &state.doc_analysis_trigger else {
+            return Ok(Json(DocumentSummary::from(doc)));
+        };
         trigger.trigger(DocumentAnalysisContext {
             team_id: team_id.clone(),
             doc_id: doc_id_str,
@@ -712,6 +717,8 @@ async fn update_content(
         .update_content(&team_id, &doc_id, &user.0, data, &message)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let should_run_document_analysis =
+        state.doc_analysis_trigger.is_some() && !is_image_document_type(&doc.mime_type, &doc.name);
 
     // Smart Log trigger
     if let Some(trigger) = &state.smart_log_trigger {
@@ -728,12 +735,15 @@ async fn update_content(
                     doc.name, message, content_preview
                 )),
             )
-            .with_pending_analysis(state.doc_analysis_trigger.is_some()),
+            .with_pending_analysis(should_run_document_analysis),
         );
     }
 
     // Re-analyze document after content update
-    if let Some(trigger) = &state.doc_analysis_trigger {
+    if should_run_document_analysis {
+        let Some(trigger) = &state.doc_analysis_trigger else {
+            return Ok(Json(DocumentSummary::from(doc)));
+        };
         trigger.trigger(DocumentAnalysisContext {
             team_id: team_id.clone(),
             doc_id: doc_id.clone(),
@@ -1115,6 +1125,11 @@ async fn retry_analysis(
         .get_metadata(&team_id, &doc_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    if is_image_document_type(&meta.mime_type, &meta.name) {
+        let smart_log_svc = SmartLogService::new((*state.db).clone());
+        let _ = smart_log_svc.clear_analysis(&team_id, &doc_id).await;
+        return Ok(StatusCode::ACCEPTED);
+    }
 
     // Reset SmartLog analysis status to pending
     let smart_log_svc = SmartLogService::new((*state.db).clone());
@@ -1156,7 +1171,46 @@ fn guess_mime_from_extension(filename: &str) -> Option<&'static str> {
         "rs" => Some("text/x-rust"),
         "go" => Some("text/x-go"),
         "java" => Some("text/x-java"),
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "tif" | "tiff" => Some("image/tiff"),
+        "ico" => Some("image/x-icon"),
+        "heic" => Some("image/heic"),
+        "heif" => Some("image/heif"),
+        "avif" => Some("image/avif"),
         "svg" => Some("image/svg+xml"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_uploads_are_not_document_analysis_candidates() {
+        assert!(is_image_document_type("image/png", "fig_1.png"));
+        assert!(is_image_document_type(
+            "application/octet-stream",
+            "screenshot.JPG"
+        ));
+        assert!(!is_image_document_type("application/pdf", "report.pdf"));
+        assert!(!is_image_document_type("text/plain", "notes.txt"));
+    }
+
+    #[test]
+    fn guess_mime_from_extension_covers_common_image_uploads() {
+        assert_eq!(guess_mime_from_extension("fig_1.png"), Some("image/png"));
+        assert_eq!(
+            guess_mime_from_extension("photo.jpeg"),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            guess_mime_from_extension("diagram.svg"),
+            Some("image/svg+xml")
+        );
     }
 }

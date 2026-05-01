@@ -208,6 +208,29 @@ impl SmartLogService {
         Ok(result.modified_count)
     }
 
+    /// Remove document-analysis state from logs that should not expose AI analysis.
+    pub async fn clear_analysis(&self, team_id: &str, resource_id: &str) -> Result<u64> {
+        let team_oid = ObjectId::parse_str(team_id)?;
+        let coll = self.db.collection::<SmartLogEntry>("smart_logs");
+        let result = coll
+            .update_many(
+                doc! {
+                    "team_id": team_oid,
+                    "resource_id": resource_id,
+                    "action": { "$ne": "delete" },
+                },
+                doc! {
+                    "$unset": {
+                        "ai_analysis": "",
+                        "ai_analysis_status": "",
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(result.modified_count)
+    }
+
     /// Reset analysis status to "pending" for retry.
     pub async fn reset_analysis_to_pending(&self, team_id: &str, resource_id: &str) -> Result<u64> {
         let team_oid = ObjectId::parse_str(team_id)?;

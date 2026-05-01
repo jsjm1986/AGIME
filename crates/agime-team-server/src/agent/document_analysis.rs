@@ -7,8 +7,8 @@
 //! 4. Extracts the agent's response and stores it as a smart log entry
 
 use agime_team::models::mongo::{
-    DocumentAnalysisContext, DocumentAnalysisSettings, DocumentAnalysisTrigger, SmartLogContext,
-    SmartLogEntry,
+    is_image_document_type, DocumentAnalysisContext, DocumentAnalysisSettings,
+    DocumentAnalysisTrigger, SmartLogContext, SmartLogEntry,
 };
 use agime_team::services::mongo::{DocumentService, SmartLogService, TeamService};
 use agime_team::MongoDb;
@@ -408,6 +408,11 @@ async fn process_document_analysis(
             "Document analysis disabled for team {}",
             ctx.team_id
         ))
+    } else if is_image_document_type(&ctx.mime_type, &ctx.doc_name) {
+        Some(format!(
+            "Skipping automatic analysis for image document: {} ({})",
+            ctx.doc_name, ctx.mime_type
+        ))
     } else if should_skip_mime(&ctx.mime_type, &config.skip_mime_prefixes) {
         Some(format!(
             "Skipping analysis for MIME type: {}",
@@ -428,9 +433,13 @@ async fn process_document_analysis(
     };
     if let Some(reason) = skip_reason {
         tracing::debug!("{}", reason);
-        let _ = smart_log_svc
-            .cancel_pending_analysis(&ctx.team_id, &ctx.doc_id)
-            .await;
+        let _ = if is_image_document_type(&ctx.mime_type, &ctx.doc_name) {
+            smart_log_svc.clear_analysis(&ctx.team_id, &ctx.doc_id).await
+        } else {
+            smart_log_svc
+                .cancel_pending_analysis(&ctx.team_id, &ctx.doc_id)
+                .await
+        };
         return Ok(());
     }
 
@@ -929,7 +938,9 @@ mod tests {
 /// Check if a MIME type should be skipped based on configured prefixes.
 fn should_skip_mime(mime: &str, skip_prefixes: &[String]) -> bool {
     let lower = mime.to_lowercase();
-    skip_prefixes.iter().any(|p| lower.starts_with(p))
+    skip_prefixes
+        .iter()
+        .any(|p| lower.starts_with(&p.to_ascii_lowercase()))
 }
 
 async fn materialize_document_for_analysis(

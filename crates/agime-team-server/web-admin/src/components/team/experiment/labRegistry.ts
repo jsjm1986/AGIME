@@ -6,15 +6,15 @@ export type ExperimentLabStatus = "ready" | "alpha" | "planned";
 export interface ExperimentLabDefinition {
   id: ExperimentLabId;
   name: string;
-  nameEn?: string;
+  nameKey?: string;
   tagline: string;
-  taglineEn?: string;
+  taglineKey?: string;
   summary: string;
-  summaryEn?: string;
+  summaryKey?: string;
   status: ExperimentLabStatus;
   icon: LucideIcon;
   featuredMetric: string;
-  featuredMetricEn?: string;
+  featuredMetricKey?: string;
   accentClassName: string;
   enabled: boolean;
 }
@@ -22,18 +22,17 @@ export interface ExperimentLabDefinition {
 export const EXPERIMENT_LABS: readonly ExperimentLabDefinition[] = [
   {
     id: "automation",
-    name: "Agentify｜万物智能",
-    nameEn: "Agentify | Omni Intelligence",
-    tagline: "把多个软件系统接成一个可持续对话的 Agent 应用",
-    taglineEn: "Turn multiple software systems into one durable conversational agent app",
+    name: "Agentify | Omni Intelligence",
+    nameKey: "experimentLab.labs.automation.name",
+    tagline: "Turn multiple software systems into one durable conversational agent app",
+    taglineKey: "experimentLab.labs.automation.tagline",
     summary:
-      "导入 API 资料，用对话生成可持续对话、可执行、可长期运行的 Agent App，让多个软件系统像一个智能体一样协同工作。",
-    summaryEn:
       "Import API materials and use conversation to build a durable, executable, long-running agent app so multiple software systems can collaborate like one intelligent entity.",
+    summaryKey: "experimentLab.labs.automation.summary",
     status: "ready",
     icon: Cable,
-    featuredMetric: "首个可用智能应用",
-    featuredMetricEn: "First production-ready intelligent app",
+    featuredMetric: "First production-ready intelligent app",
+    featuredMetricKey: "experimentLab.labs.automation.featuredMetric",
     accentClassName:
       "border-[hsl(var(--primary))/0.26] bg-[linear-gradient(180deg,hsl(var(--primary))/0.08_0%,transparent_100%)]",
     enabled: true,
@@ -47,16 +46,17 @@ export function getExperimentLab(labId: string | null | undefined) {
 export function localizeExperimentLab(
   lab: ExperimentLabDefinition,
   language: string | null | undefined,
+  translate?: (key: string, fallback: string) => string,
 ): ExperimentLabDefinition {
-  const isZh = (language || "").toLowerCase().startsWith("zh");
-  if (isZh) {
-    return lab;
-  }
+  void language;
+  if (!translate) return lab;
   return {
     ...lab,
-    name: lab.nameEn || lab.name,
-    tagline: lab.taglineEn || lab.tagline,
-    summary: lab.summaryEn || lab.summary,
-    featuredMetric: lab.featuredMetricEn || lab.featuredMetric,
+    name: lab.nameKey ? translate(lab.nameKey, lab.name) : lab.name,
+    tagline: lab.taglineKey ? translate(lab.taglineKey, lab.tagline) : lab.tagline,
+    summary: lab.summaryKey ? translate(lab.summaryKey, lab.summary) : lab.summary,
+    featuredMetric: lab.featuredMetricKey
+      ? translate(lab.featuredMetricKey, lab.featuredMetric)
+      : lab.featuredMetric,
   };
 }

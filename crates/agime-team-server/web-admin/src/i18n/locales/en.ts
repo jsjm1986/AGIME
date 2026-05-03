@@ -34,6 +34,7 @@ export default {
     enabled: "Enabled",
     disabled: "Disabled",
     saved: "Saved",
+    loadFailed: "Load failed",
   },
   errorBoundary: {
     title: "Something went wrong",
@@ -2987,9 +2988,27 @@ export default {
     },
   },
   experimentLab: {
+    experimentLabel: "Experiment",
+    status: {
+      ready: "Ready",
+      alpha: "Alpha",
+      planned: "Planned",
+    },
+    labs: {
+      automation: {
+        name: "Agentify | Omni Intelligence",
+        tagline: "Turn multiple software systems into one durable conversational agent app",
+        summary:
+          "Import API materials and use conversation to build a durable, executable, long-running agent app so multiple software systems can collaborate like one intelligent entity.",
+        featuredMetric: "First production-ready intelligent app",
+      },
+    },
+    openExperiment: "Open app",
+    comingSoon: "Coming soon",
     backToHome: "Back to experiments",
     description: "Each experiment keeps one clear entry point before you enter the real workspace.",
     notAvailable: "This experiment is not open yet.",
+    heroBadge: "Agentify | Universal Intelligence",
     heroTitle: "Turn software capabilities into durable intelligent apps",
     heroDescription:
       "Provide API materials and business goals, then let the system understand the API, validate feasibility, shape the plan, and publish a reusable workflow.",
@@ -2998,6 +3017,8 @@ export default {
     sourcesAndConnections: "Sources & Connections",
     newApiSource: "New API source",
     newBuilder: "New Builder",
+    notSet: "Not set",
+    listSeparator: "; ",
     readyToPublish: "Ready to publish",
     probing: "Probing",
     needsFix: "Needs fixes",
@@ -3015,9 +3036,62 @@ export default {
       monitor: "Long-running monitor",
       schedule: "Recurring schedule",
     },
+    workflow: {
+      build: "Build",
+      publish: "Publish",
+      app: "App",
+      observe: "Observe",
+    },
+    surface: {
+      buildAgent: "Build agent",
+      useAgent: "Use agent",
+      observeRuns: "Observe runs",
+    },
+    opsTabs: {
+      modules: "Apps",
+      runs: "Runs",
+      plans: "Plans",
+      artifacts: "Artifacts",
+    },
+    runStatus: {
+      draft: "Draft",
+      queued: "Queued",
+      pending: "Pending",
+      running: "Running",
+      completed: "Completed",
+      failed: "Failed",
+      cancelled: "Cancelled",
+      active: "Active",
+      paused: "Paused",
+    },
+    connectionStatus: {
+      unknown: "Unknown",
+      unset: "Unset",
+      pending: "Pending",
+      connected: "Connected",
+      verified: "Verified",
+      failed: "Failed",
+    },
+    readiness: {
+      realApiVerificationMissing: "Real API verification has not been completed yet.",
+      realHttpEvidenceMissing: "No usable real HTTP verification evidence is available.",
+    },
+    structuredVerificationCount: "{{count}} structured verification(s)",
+    shellFallbackVerificationCount: "{{count}} shell fallback verification(s)",
+    verifiedCallCount: "{{count}} verified call(s)",
     waitingToStart: "Waiting to start",
+    waitingToPublish: "Waiting to publish",
+    notEntered: "Not entered",
     scheduleCount: "{{count}} schedules",
     noRecentAction: "No recent activity",
+    latestActivity: "Latest activity",
+    activityPublishing: "Publishing a new intelligent app version.",
+    activityRunning: "Triggering a new run.",
+    activityCreatingPlan: "Creating a plan.",
+    currentWorkflow: "Current workflow",
+    currentWorkflowDescription:
+      "This view connects build, publish, use, and observe into one line. After finishing one step, move directly to the next or inspect the result.",
+    continueBuilding: "Continue building",
     builderSyncedReady: "Builder results were synced. This Agent App draft can now be published.",
     builderSynced: "Builder results were synced back into the current Agent App draft.",
     deleteAppFailed: "Failed to delete app",
@@ -3026,6 +3100,18 @@ export default {
     emptyProjectDescription:
       "A project is the container for this intelligent app. After creating it, you can import API materials, describe the goal, and let the system start building.",
     createProject: "Create project",
+    createProjectFirst: "Create a project first",
+    selectDriverAgentFirst: "Select the driver agent first",
+    defaultBuilderGoal:
+      "Build a long-lived, publishable, conversational intelligent app from the imported API sources.",
+    newSourceImportedPrompt:
+      "I just imported a new API source named \"{{name}}\". Read it directly from the current workspace, summarize confirmed capabilities, missing information, and recommended next steps. Return a high-level summary and do not repeat large source blocks verbatim.",
+    archivedSourceModeNotice:
+      "Archived \"{{name}}\" in source mode. The agent will treat this message as API source material first.",
+    archivedAutoSourceNotice:
+      "This message looked like API source material and was archived as \"{{name}}\".",
+    chatSourceImportedPrompt:
+      "I just imported a new API source named \"{{name}}\" through chat. Treat this input as source material rather than the final task goal. Read it directly from the current workspace, summarize confirmed capabilities, missing information, verification paths, and risk boundaries. If the real task goal is still missing, ask follow-up questions proactively.",
     workspaceHint: "Switch projects, change the default agent, or start a new builder draft.",
     enterPublish: "Enter publish",
     checkPublish: "Check publish",
@@ -3050,6 +3136,9 @@ export default {
     running: "Running…",
     viewResult: "View result",
     noPublishedApps: "No published agents yet.",
+    publishedAgents: "Published agents",
+    publishedAgentsDescription:
+      "Each published app keeps its own persistent chat entry, and run results are written back here.",
     publishAppFirst: "Publish an Agent app first, then keep the conversation going here.",
     nativeApiReady: "Native API ready",
     appRuntimeDescription:
@@ -3057,6 +3146,11 @@ export default {
     plansAndMonitoring: "Plans & Monitoring",
     recentArtifacts: "Recent artifacts",
     deleteApp: "Delete app",
+    publishFailed: "Publish failed",
+    runFailed: "Run failed",
+    createPlanFailed: "Failed to create the plan",
+    updatePlanFailed: "Failed to update the plan",
+    deletePlanFailed: "Failed to delete the plan",
     runtimeSummary:
       "{{runs}} recent run(s), {{schedules}} active schedule(s), {{artifacts}} recent artifact(s).",
     preparingRuntimeContext: "Preparing runtime context for the app.",
@@ -3096,6 +3190,23 @@ export default {
     processing: "Processing…",
     pause: "Pause",
     enable: "Enable",
+    exitSourceMode: "Exit source mode",
+    switchToSourceMode: "Switch to source mode",
+    letAgentGuideFirst: "Let the agent guide first",
+    guideFirstPrompt:
+      "Before I continue, tell me which information you need first: API sources, connection details, the task goal, validation criteria, or run-mode preferences.",
+    giveApiMaterialFirst: "Give the API material to the agent first",
+    giveApiMaterialDescription:
+      "You can describe the goal directly, or add OpenAPI, Postman, curl, endpoint links, or documentation first. The system only needs minimal source material, not a full form.",
+    manageSources: "Manage sources",
+    letAgentGuideMe: "Let the agent guide me",
+    agentGuideMePrompt:
+      "I’m ready to start building a new intelligent app. Tell me the minimal API source material, connection details, and goal description you need, then help me explore, verify, and shape a reusable app from them.",
+    builderReadyTitle: "This builder run is ready to publish",
+    builderReadyDescription:
+      "The agent has already organized a runnable plan. You can go straight to publish and freeze it as a reusable app for the team.",
+    builderAgentFallback: "Builder Agent",
+    sources: "Sources",
     sourceModeHint:
       "You can send OpenAPI, Postman, curl, an endpoint link, or a short description directly. The system will store it as source material before continuing the analysis.",
     autoDetectGoalOrSource: "The system will auto-detect whether you sent a goal or source material",
@@ -3169,6 +3280,26 @@ export default {
     sourcesConnected: "{{count}} sources connected",
     firstMessageBootstrapsBuilder:
       "After the first message, the system starts a new intelligent build and carries in the current project, default agent, and selected sources.",
+    quickActions: {
+      discovery: "Discovery",
+      reviewSources: "Review current sources",
+      reviewSourcesDescription: "Ask the agent to summarize imported API capabilities, missing information, and recommended next steps.",
+      reviewSourcesPrompt:
+        "Please review the currently imported API sources first, summarize the most relevant software and API capabilities, identify missing information, and recommend the next steps. Return a high-level summary by default.",
+      smallestPlan: "Generate the smallest viable plan",
+      smallestPlanDescription: "Generate the smallest verifiable and runnable path around the current goal.",
+      smallestPlanPrompt:
+        "Please propose the smallest viable execution plan for the current goal, including the software involved, key actions, verification method, risks, and the recommended run mode.",
+      verification: "Verification & execution",
+      safeProbe: "Run safe probe verification only",
+      safeProbeDescription: "Prefer discover / probe / verify and avoid risky real write operations.",
+      safeProbePrompt:
+        "Please run safe probe verification first. Check the API path, parameters, and auth method without performing risky real write operations.",
+      executeOneCall: "Execute one real call",
+      executeOneCallDescription: "Real execution is allowed, but risky write operations must be confirmed first.",
+      executeOneCallPrompt:
+        "Please execute one real call to verify the current plan. If risky write operations are involved, ask for explicit confirmation before continuing.",
+    },
   },
 };
 

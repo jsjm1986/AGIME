@@ -8,7 +8,7 @@ import { Card, CardContent } from "../ui/card";
 
 import { AutomationLabWorkspace } from "./experiment/AutomationLabWorkspace";
 import { ExperimentHome } from "./experiment/ExperimentHome";
-import { getExperimentLab, type ExperimentLabId } from "./experiment/labRegistry";
+import { getExperimentLab, localizeExperimentLab, type ExperimentLabId, type ExperimentLabStatus } from "./experiment/labRegistry";
 
 interface ExperimentSectionProps {
   teamId: string;
@@ -16,10 +16,19 @@ interface ExperimentSectionProps {
 }
 
 export function ExperimentSection({ teamId, canManage }: ExperimentSectionProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedLab = searchParams.get("lab");
-  const activeLab = useMemo(() => getExperimentLab(requestedLab), [requestedLab]);
+  const activeLab = useMemo(() => {
+    const lab = getExperimentLab(requestedLab);
+    return lab ? localizeExperimentLab(lab, i18n.language, (key, fallback) => t(key, fallback)) : null;
+  }, [i18n.language, requestedLab, t]);
+
+  const statusLabel = (status: ExperimentLabStatus) => {
+    if (status === "ready") return t("experimentLab.status.ready", "Ready");
+    if (status === "alpha") return t("experimentLab.status.alpha", "Alpha");
+    return t("experimentLab.status.planned", "Planned");
+  };
 
   const handleOpenLab = (labId: ExperimentLabId) => {
     const next = new URLSearchParams(searchParams);
@@ -39,7 +48,7 @@ export function ExperimentSection({ teamId, canManage }: ExperimentSectionProps)
         <div className="min-w-0">
           <div className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.92] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             <Beaker className="h-3.5 w-3.5" />
-            Experiment
+            {t("experimentLab.experimentLabel", "Experiment")}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             {activeLab ? (
@@ -63,7 +72,7 @@ export function ExperimentSection({ teamId, canManage }: ExperimentSectionProps)
         </div>
         {activeLab ? (
           <div className="rounded-full border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.92] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            {activeLab.status}
+            {statusLabel(activeLab.status)}
           </div>
         ) : null}
       </div>

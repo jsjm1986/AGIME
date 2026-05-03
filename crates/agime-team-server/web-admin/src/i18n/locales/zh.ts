@@ -34,6 +34,7 @@ export default {
     enabled: "已启用",
     disabled: "未启用",
     saved: "已保存",
+    loadFailed: "加载失败",
   },
   errorBoundary: {
     title: "出错了",
@@ -2844,9 +2845,27 @@ export default {
     },
   },
   experimentLab: {
+    experimentLabel: "实验室",
+    status: {
+      ready: "就绪",
+      alpha: "Alpha",
+      planned: "规划中",
+    },
+    labs: {
+      automation: {
+        name: "万物智能",
+        tagline: "把多个软件系统接成一个可持续对话的智能体应用",
+        summary:
+          "导入 API 资料，用对话生成可持续对话、可执行、可长期运行的智能体应用，让多个软件系统像一个智能体一样协同工作。",
+        featuredMetric: "首个可用智能应用",
+      },
+    },
+    openExperiment: "打开应用",
+    comingSoon: "即将开放",
     backToHome: "返回实验室首页",
     description: "每个实验应用只保留一个清晰入口，进入之后再进入真实工作区。",
     notAvailable: "当前实验尚未开放。",
+    heroBadge: "万物智能｜通用智能",
     heroTitle: "把常用软件能力变成可持续运行的智能应用",
     heroDescription:
       "你只需要提供接口资料和业务目标，智能体会自己理解 API、验证可行性、整理方案，并把它发布成可以反复使用的智能流程。",
@@ -2855,6 +2874,8 @@ export default {
     sourcesAndConnections: "资料与连接",
     newApiSource: "新的 API 资料",
     newBuilder: "新的 Builder",
+    notSet: "未设置",
+    listSeparator: "；",
     readyToPublish: "可发布",
     probing: "探测中",
     needsFix: "需修正",
@@ -2872,9 +2893,62 @@ export default {
       monitor: "长期监控",
       schedule: "周期运行",
     },
+    workflow: {
+      build: "构建",
+      publish: "发布",
+      app: "应用",
+      observe: "观察",
+    },
+    surface: {
+      buildAgent: "构建智能体",
+      useAgent: "使用智能体",
+      observeRuns: "观察运行",
+    },
+    opsTabs: {
+      modules: "应用",
+      runs: "运行",
+      plans: "计划",
+      artifacts: "产物",
+    },
+    runStatus: {
+      draft: "草稿",
+      queued: "排队中",
+      pending: "等待中",
+      running: "运行中",
+      completed: "已完成",
+      failed: "失败",
+      cancelled: "已取消",
+      active: "已启用",
+      paused: "已暂停",
+    },
+    connectionStatus: {
+      unknown: "未知",
+      unset: "未设置",
+      pending: "待配置",
+      connected: "已连接",
+      verified: "已验证",
+      failed: "失败",
+    },
+    readiness: {
+      realApiVerificationMissing: "还没有完成真实 API 验证。",
+      realHttpEvidenceMissing: "缺少可用的真实 HTTP 验证证据。",
+    },
+    structuredVerificationCount: "{{count}} 次结构化验证",
+    shellFallbackVerificationCount: "{{count}} 次 shell 兜底验证",
+    verifiedCallCount: "{{count}} 次验证调用",
     waitingToStart: "等待开始",
+    waitingToPublish: "等待发布",
+    notEntered: "未进入",
     scheduleCount: "{{count}} 条计划",
     noRecentAction: "暂无动作",
+    latestActivity: "最新动态",
+    activityPublishing: "正在发布新的智能应用版本。",
+    activityRunning: "正在触发新的运行。",
+    activityCreatingPlan: "正在创建计划。",
+    currentWorkflow: "当前工作流",
+    currentWorkflowDescription:
+      "这个视图把构建、发布、使用、观察串成一条线。完成一步后可以直接进入下一步，或查看结果。",
+    continueBuilding: "继续构建",
     builderSyncedReady: "Builder 结果已同步，当前 Agent App 草稿现在可以直接发布。",
     builderSynced: "Builder 结果已同步到当前 Agent App 草稿。",
     deleteAppFailed: "删除应用失败",
@@ -2883,6 +2957,18 @@ export default {
     emptyProjectDescription:
       "项目只是这次智能应用的容器。创建之后，你就可以直接通过对话导入接口资料、描述目标，并让智能体开始构建。",
     createProject: "创建项目",
+    createProjectFirst: "请先创建项目",
+    selectDriverAgentFirst: "请先选择驱动 Agent",
+    defaultBuilderGoal:
+      "基于已导入的 API 资料，构建一个可长期运行、可发布、可持续对话的智能应用。",
+    newSourceImportedPrompt:
+      "我刚导入了一个名为“{{name}}”的新 API 资料。请直接从当前工作区读取它，总结已确认能力、缺失信息和推荐下一步。默认返回高层摘要，不要大段复述原始资料。",
+    archivedSourceModeNotice:
+      "已在资料模式中归档“{{name}}”。智能体会先把这条消息当作 API 资料处理。",
+    archivedAutoSourceNotice:
+      "这条消息看起来像 API 资料，已归档为“{{name}}”。",
+    chatSourceImportedPrompt:
+      "我刚通过对话导入了一个名为“{{name}}”的新 API 资料。请把这次输入当作资料而不是最终任务目标。直接从当前工作区读取它，总结已确认能力、缺失信息、验证路径和风险边界。如果真实任务目标仍不明确，请主动追问。",
     workspaceHint: "切项目、换默认 Agent，或者开始新的 builder 草稿。",
     enterPublish: "进入发布",
     checkPublish: "检查发布",
@@ -2907,6 +2993,9 @@ export default {
     running: "运行中…",
     viewResult: "查看结果",
     noPublishedApps: "还没有已发布 Agent。",
+    publishedAgents: "已发布智能体",
+    publishedAgentsDescription:
+      "每个已发布应用都有自己的持久对话入口，运行结果会回写到这里。",
     publishAppFirst: "先发布一个 Agent 应用，再在这里持续对话。",
     nativeApiReady: "原生 API 就绪",
     appRuntimeDescription:
@@ -2914,6 +3003,11 @@ export default {
     plansAndMonitoring: "计划与监控",
     recentArtifacts: "最近产物",
     deleteApp: "删除应用",
+    publishFailed: "发布失败",
+    runFailed: "运行失败",
+    createPlanFailed: "创建计划失败",
+    updatePlanFailed: "更新计划失败",
+    deletePlanFailed: "删除计划失败",
     runtimeSummary:
       "最近运行 {{runs}} 次，活跃计划 {{schedules}} 条，最近产物 {{artifacts}} 个。",
     preparingRuntimeContext: "正在准备应用运行时上下文。",
@@ -2952,6 +3046,23 @@ export default {
     processing: "处理中…",
     pause: "暂停",
     enable: "启用",
+    exitSourceMode: "退出资料模式",
+    switchToSourceMode: "切换到资料模式",
+    letAgentGuideFirst: "先让智能体引导",
+    guideFirstPrompt:
+      "继续之前，请告诉我你需要哪些信息：API 资料、连接详情、任务目标、验证标准，还是运行模式偏好。",
+    giveApiMaterialFirst: "先把 API 资料交给智能体",
+    giveApiMaterialDescription:
+      "你可以直接描述目标，也可以先添加 OpenAPI、Postman、curl、接口链接或文档说明。系统只需要最小资料，不需要完整表单。",
+    manageSources: "管理资料",
+    letAgentGuideMe: "让智能体引导我",
+    agentGuideMePrompt:
+      "我准备开始构建一个新的智能应用。请告诉我需要哪些最小 API 资料、连接详情和目标描述，然后帮我探索、验证并整理成可复用应用。",
+    builderReadyTitle: "这轮构建已可发布",
+    builderReadyDescription:
+      "智能体已经整理出可运行方案。你可以直接发布，并固化为团队可复用应用。",
+    builderAgentFallback: "构建智能体",
+    sources: "资料",
     sourceModeHint:
       "你可以直接发送 OpenAPI、Postman、curl、接口链接或一段说明。系统会先把它收进资料，再让智能体继续分析。",
     autoDetectGoalOrSource: "系统会自动识别你发送的是目标还是资料",
@@ -3025,6 +3136,26 @@ export default {
     sourcesConnected: "{{count}} 个资料已接入",
     firstMessageBootstrapsBuilder:
       "发送第一条消息后，系统会自动创建一轮智能构建，并把当前项目、默认智能体和已选资料一起带入。",
+    quickActions: {
+      discovery: "资料梳理",
+      reviewSources: "梳理当前资料",
+      reviewSourcesDescription: "让智能体总结已导入的 API 能力、缺失信息和推荐下一步。",
+      reviewSourcesPrompt:
+        "请先梳理当前已导入的 API 资料，总结最相关的软件和 API 能力、识别缺失信息，并推荐下一步。默认返回高层摘要。",
+      smallestPlan: "生成最小可行方案",
+      smallestPlanDescription: "围绕当前目标生成最小、可验证、可运行路径。",
+      smallestPlanPrompt:
+        "请为当前目标提出最小可行执行方案，包含涉及的软件、关键动作、验证方式、风险和推荐运行模式。",
+      verification: "验证与执行",
+      safeProbe: "只做安全探测验证",
+      safeProbeDescription: "优先 discover / probe / verify，避免有风险的真实写操作。",
+      safeProbePrompt:
+        "请先运行安全探测验证。检查 API 路径、参数和认证方式，不执行有风险的真实写操作。",
+      executeOneCall: "执行一次真实调用",
+      executeOneCallDescription: "允许真实执行，但有风险的写操作必须先确认。",
+      executeOneCallPrompt:
+        "请执行一次真实调用来验证当前方案。如果涉及有风险的写操作，请先明确请求确认再继续。",
+    },
   },
 };
 

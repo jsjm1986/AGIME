@@ -24,25 +24,27 @@ interface AutomationLabWorkspaceProps {
 type SurfaceKey = "builder" | "apps" | "ops";
 type OpsTabKey = "modules" | "runs" | "plans" | "artifacts";
 type PublishAction = "none" | "chat" | "run_once" | "schedule" | "monitor";
-const OPS_TABS: Array<{ key: OpsTabKey; label: string }> = [
-  { key: "modules", label: "Apps" },
-  { key: "runs", label: "Runs" },
-  { key: "plans", label: "Plans" },
-  { key: "artifacts", label: "Artifacts" },
+type TranslateFn = (key: string, fallback: string, options?: Record<string, unknown>) => string;
+const OPS_TABS: Array<{ key: OpsTabKey; labelKey: string; fallback: string }> = [
+  { key: "modules", labelKey: "experimentLab.opsTabs.modules", fallback: "Apps" },
+  { key: "runs", labelKey: "experimentLab.opsTabs.runs", fallback: "Runs" },
+  { key: "plans", labelKey: "experimentLab.opsTabs.plans", fallback: "Plans" },
+  { key: "artifacts", labelKey: "experimentLab.opsTabs.artifacts", fallback: "Artifacts" },
 ];
 
-function pretty(value?: string | null) {
-  if (!value) return "Not set";
+function pretty(value: string | null | undefined, language: string | null | undefined, notSetLabel: string) {
+  if (!value) return notSetLabel;
   try {
-    return new Date(value).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const locale = (language || "").toLowerCase().startsWith("zh") ? "zh-CN" : "en-US";
+    return new Date(value).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   } catch {
     return value;
   }
 }
 
-function draftNameFromGoal(goal: string) {
+function draftNameFromGoal(goal: string, fallback: string) {
   const line = goal.replace(/\r\n/g, "\n").split("\n").find((item) => item.trim())?.trim();
-  if (!line) return "New Builder";
+  if (!line) return fallback;
   return line.length > 28 ? `${line.slice(0, 28)}…` : line;
 }
 
@@ -132,19 +134,77 @@ function verificationLabels(
     structured_verified_http_actions?: number;
     shell_fallback_verified_http_actions?: number;
   } | null,
+  translate?: TranslateFn,
 ) {
   if (!summary) return [] as string[];
   const labels: string[] = [];
   if (summary.structured_verified_http_actions) {
-    labels.push(`${summary.structured_verified_http_actions} structured verification(s)`);
+    labels.push(translate
+      ? translate("experimentLab.structuredVerificationCount", "{{count}} structured verification(s)", {
+          count: summary.structured_verified_http_actions,
+        })
+      : `${summary.structured_verified_http_actions} structured verification(s)`);
   }
   if (summary.shell_fallback_verified_http_actions) {
-    labels.push(`${summary.shell_fallback_verified_http_actions} shell fallback verification(s)`);
+    labels.push(translate
+      ? translate("experimentLab.shellFallbackVerificationCount", "{{count}} shell fallback verification(s)", {
+          count: summary.shell_fallback_verified_http_actions,
+        })
+      : `${summary.shell_fallback_verified_http_actions} shell fallback verification(s)`);
   }
   if (!labels.length && summary.verified_http_actions) {
-    labels.push(`${summary.verified_http_actions} verified call(s)`);
+    labels.push(translate
+      ? translate("experimentLab.verifiedCallCount", "{{count}} verified call(s)", {
+          count: summary.verified_http_actions,
+        })
+      : `${summary.verified_http_actions} verified call(s)`);
   }
   return labels;
+}
+
+function runStatusLabel(status: string | null | undefined, translate: TranslateFn) {
+  if (!status) return "";
+  const normalized = status.toLowerCase();
+  const key = `experimentLab.runStatus.${normalized}`;
+  const fallback = status.replace(/_/g, " ");
+  return translate(key, fallback);
+}
+
+function connectionStatusLabel(status: string | null | undefined, translate: TranslateFn) {
+  if (!status) return translate("experimentLab.connectionStatus.unknown", "Unknown");
+  const normalized = status.toLowerCase();
+  const key = `experimentLab.connectionStatus.${normalized}`;
+  const fallback = status.replace(/_/g, " ");
+  return translate(key, fallback);
+}
+
+function readinessMessageLabel(message: string, translate: TranslateFn) {
+  const normalized = message.trim().replace(/\s+/g, "").replace(/[。.]$/, "");
+  if (normalized === "还没有完成真实API验证") {
+    return translate(
+      "experimentLab.readiness.realApiVerificationMissing",
+      "Real API verification has not been completed yet.",
+    );
+  }
+  if (normalized === "缺少可用的真实HTTP验证证据") {
+    return translate(
+      "experimentLab.readiness.realHttpEvidenceMissing",
+      "No usable real HTTP verification evidence is available.",
+    );
+  }
+  return message;
+}
+
+function readinessMessagesLabel(messages: string[] | undefined, translate: TranslateFn) {
+  return (messages || [])
+    .map((message) => readinessMessageLabel(message, translate))
+    .join(translate("experimentLab.listSeparator", "; "));
+}
+
+function surfaceLabel(surface: SurfaceKey, translate: TranslateFn) {
+  if (surface === "builder") return translate("experimentLab.surface.buildAgent", "Build agent");
+  if (surface === "apps") return translate("experimentLab.surface.useAgent", "Use agent");
+  return translate("experimentLab.surface.observeRuns", "Observe runs");
 }
 
 function summarizePlan(
@@ -216,7 +276,7 @@ function scheduleModeLabel(
 }
 
 export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorkspaceProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [surface, setSurface] = useState<SurfaceKey>("builder");
   const [builderStage, setBuilderStage] = useState<"chat" | "publish" | "app">("chat");
   const [opsTab, setOpsTab] = useState<OpsTabKey>("modules");
@@ -285,6 +345,14 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const builderTurnActiveRef = useRef(false);
   const latestDraftIdRef = useRef<string | null>(null);
+  const translate = useCallback<TranslateFn>(
+    (key, fallback, options) => t(key, fallback, options),
+    [t],
+  );
+  const formatTime = useCallback(
+    (value?: string | null) => pretty(value, i18n.language, t("experimentLab.notSet", "Not set")),
+    [i18n.language, t],
+  );
 
   const selectedProject = useMemo(() => projects.find((item) => item.project_id === selectedProjectId) || null, [projects, selectedProjectId]);
   const selectedDraft = useMemo(() => drafts.find((item) => item.draft_id === selectedDraftId) || null, [drafts, selectedDraftId]);
@@ -348,8 +416,8 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
         key: "builder",
         label: t("experimentLab.workflow.build", "Build"),
         hint: selectedDraft
-          ? draftLabel(selectedDraft, (key, fallback) => t(key, fallback))
-          : t("experimentLab.waitingToStart", "等待开始"),
+          ? draftLabel(selectedDraft, translate)
+          : t("experimentLab.waitingToStart", "Waiting to start"),
         state: builderState,
       },
       {
@@ -368,14 +436,14 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
         key: "ops",
         label: t("experimentLab.workflow.observe", "Observe"),
         hint: latestRun
-          ? `${runModeLabel(latestRun.mode, (key, fallback) => t(key, fallback))} · ${latestRun.status}`
+          ? `${runModeLabel(latestRun.mode, translate)} · ${runStatusLabel(latestRun.status, translate)}`
           : schedules.length > 0
-            ? t("experimentLab.scheduleCount", "{{count}} 条计划", { count: schedules.length })
-            : t("experimentLab.noRecentAction", "暂无动作"),
+            ? t("experimentLab.scheduleCount", "{{count}} schedules", { count: schedules.length })
+            : t("experimentLab.noRecentAction", "No recent activity"),
         state: opsState,
       },
     ] as const;
-  }, [artifacts.length, builderReady, builderStage, latestRun, schedules.length, selectedDraft, selectedModule, surface]);
+  }, [artifacts.length, builderReady, builderStage, latestRun, schedules.length, selectedDraft, selectedModule, surface, t, translate]);
 
   const loadProjects = useCallback(async () => {
     const res = await automationApi.listProjects(teamId);
@@ -526,7 +594,11 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
     await loadWorkspace(selectedProjectId);
     setBuilderComposeRequest({
       id: `integration:${Date.now()}`,
-      text: `I just imported a new API source named "${res.integration.name}". Read it directly from the current workspace, summarize confirmed capabilities, missing information, and recommended next steps. Return a high-level summary and do not repeat large source blocks verbatim.`,
+      text: t(
+        "experimentLab.newSourceImportedPrompt",
+        "I just imported a new API source named \"{{name}}\". Read it directly from the current workspace, summarize confirmed capabilities, missing information, and recommended next steps. Return a high-level summary and do not repeat large source blocks verbatim.",
+        { name: res.integration.name },
+      ),
     });
     setSourcesOpen(false);
   };
@@ -559,10 +631,13 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
     const targetDraftId = selectedDraft?.draft_id || latestDraftIdRef.current;
     if (targetDraftId) {
       const updated = await automationApi.updateAppDraft(teamId, targetDraftId, {
-        name: selectedDraft?.name || "New Builder",
+        name: selectedDraft?.name || t("experimentLab.newBuilder", "New Builder"),
         goal:
           selectedDraft?.goal ||
-          "Build a long-lived, publishable, conversational Agent App from the imported API sources.",
+          t(
+            "experimentLab.defaultBuilderGoal",
+            "Build a long-lived, publishable, conversational intelligent app from the imported API sources.",
+          ),
         integration_ids: Array.from(
           new Set([...(selectedDraft?.integration_ids || nextIntegrationIds), res.integration.integration_id]),
         ),
@@ -576,10 +651,13 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
       const created = await automationApi.createAppDraft(selectedProjectId, {
         team_id: teamId,
         project_id: selectedProjectId,
-        name: "New Agent App Builder",
+        name: t("experimentLab.newBuilder", "New Builder"),
         driver_agent_id: builderAgentId,
         integration_ids: [res.integration.integration_id],
-        goal: "Build a long-lived, publishable, conversational Agent App from the imported API sources.",
+        goal: t(
+          "experimentLab.defaultBuilderGoal",
+          "Build a long-lived, publishable, conversational intelligent app from the imported API sources.",
+        ),
         constraints: [],
         success_criteria: [],
         risk_preference: "balanced",
@@ -593,16 +671,28 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
     setBuilderNotice({
       tone: "info",
       text: nextSendAsSource
-        ? `Archived "${res.integration.name}" in source mode. The agent will treat this message as API source material first.`
-        : `This message looked like API source material and was archived as "${res.integration.name}".`,
+        ? t(
+            "experimentLab.archivedSourceModeNotice",
+            "Archived \"{{name}}\" in source mode. The agent will treat this message as API source material first.",
+            { name: res.integration.name },
+          )
+        : t(
+            "experimentLab.archivedAutoSourceNotice",
+            "This message looked like API source material and was archived as \"{{name}}\".",
+            { name: res.integration.name },
+          ),
     });
 
-    return `I just imported a new API source named "${res.integration.name}" through chat. Treat this input as source material rather than the final task goal. Read it directly from the current workspace, summarize confirmed capabilities, missing information, verification paths, and risk boundaries. If the real task goal is still missing, ask follow-up questions proactively.`;
-  }, [builderAgentId, loadWorkspace, nextSendAsSource, selectedDraft, selectedIntegrationIds, selectedProjectId, teamId]);
+    return t(
+      "experimentLab.chatSourceImportedPrompt",
+      "I just imported a new API source named \"{{name}}\" through chat. Treat this input as source material rather than the final task goal. Read it directly from the current workspace, summarize confirmed capabilities, missing information, verification paths, and risk boundaries. If the real task goal is still missing, ask follow-up questions proactively.",
+      { name: res.integration.name },
+    );
+  }, [builderAgentId, loadWorkspace, nextSendAsSource, selectedDraft, selectedIntegrationIds, selectedProjectId, t, teamId]);
 
   const handleCreateBuilderSession = useCallback(async (initialMessage: string) => {
-    if (!selectedProjectId) throw new Error("Create a project first");
-    if (!builderAgentId) throw new Error("Select the driver agent first");
+    if (!selectedProjectId) throw new Error(t("experimentLab.createProjectFirst", "Create a project first"));
+    if (!builderAgentId) throw new Error(t("experimentLab.selectDriverAgentFirst", "Select the driver agent first"));
     const currentDraftId = selectedDraft?.draft_id || latestDraftIdRef.current;
     const currentDraft =
       (currentDraftId && drafts.find((item) => item.draft_id === currentDraftId)) || selectedDraft;
@@ -617,11 +707,14 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
     const created = await automationApi.createAppDraft(selectedProjectId, {
       team_id: teamId,
       project_id: selectedProjectId,
-      name: nextSendAsSource ? "New Agent App Builder" : draftNameFromGoal(initialMessage),
+      name: nextSendAsSource ? t("experimentLab.newBuilder", "New Builder") : draftNameFromGoal(initialMessage, t("experimentLab.newBuilder", "New Builder")),
       driver_agent_id: builderAgentId,
       integration_ids: selectedIntegrationIds,
       goal: nextSendAsSource
-        ? "Build a long-lived, publishable, conversational Agent App from the imported API sources."
+        ? t(
+            "experimentLab.defaultBuilderGoal",
+            "Build a long-lived, publishable, conversational intelligent app from the imported API sources.",
+          )
         : initialMessage,
       constraints: [],
       success_criteria: [],
@@ -632,7 +725,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
       setSelectedDraftId(created.app_draft.draft_id);
       latestDraftIdRef.current = created.app_draft.draft_id;
       return created.builder_session_id || created.app_draft.builder_session_id || (await automationApi.ensureAppDraftBuilderSession(teamId, created.app_draft.draft_id)).builder_session_id;
-  }, [builderAgentId, drafts, nextSendAsSource, selectedDraft, selectedIntegrationIds, selectedProjectId, teamId]);
+  }, [builderAgentId, drafts, nextSendAsSource, selectedDraft, selectedIntegrationIds, selectedProjectId, t, teamId]);
 
   const handleProbeDraft = async () => {
     if (!selectedDraft) return;
@@ -697,7 +790,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
       }
       setPublishConfirmOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Publish failed");
+      setError(err instanceof Error ? err.message : t("experimentLab.publishFailed", "Publish failed"));
     } finally {
       setPublishing(false);
     }
@@ -724,7 +817,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
         await loadWorkspace(selectedProjectId);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Run failed");
+      setError(err instanceof Error ? err.message : t("experimentLab.runFailed", "Run failed"));
     } finally {
       setRunningModuleAction(null);
     }
@@ -743,7 +836,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
       });
       setSchedules((current) => [res.schedule, ...current]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create the plan");
+      setError(err instanceof Error ? err.message : t("experimentLab.createPlanFailed", "Failed to create the plan"));
     } finally {
       setCreatingPlanMode(null);
     }
@@ -759,7 +852,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
       });
       setSchedules((current) => current.map((item) => item.schedule_id === schedule.schedule_id ? res.schedule : item));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update the plan");
+      setError(err instanceof Error ? err.message : t("experimentLab.updatePlanFailed", "Failed to update the plan"));
     } finally {
       setTogglingScheduleId(null);
     }
@@ -773,7 +866,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
       await automationApi.deleteSchedule(teamId, scheduleId);
       setSchedules((current) => current.filter((item) => item.schedule_id !== scheduleId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete the plan");
+      setError(err instanceof Error ? err.message : t("experimentLab.deletePlanFailed", "Failed to delete the plan"));
     } finally {
       setDeletingScheduleId(null);
     }
@@ -864,21 +957,21 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
   const builderQuickActions = useMemo<ChatInputQuickActionGroup[]>(() => [
     {
       key: "discovery",
-      label: "Discovery",
+      label: t("experimentLab.quickActions.discovery", "Discovery"),
       actions: [
-        { key: "discover", label: "Review current sources", description: "Ask the agent to summarize imported API capabilities, missing information, and recommended next steps.", onSelect: () => setBuilderComposeRequest({ id: `compose:${Date.now()}:discover`, text: "Please review the currently imported API sources first, summarize the most relevant software and API capabilities, identify missing information, and recommend the next steps. Return a high-level summary by default." }) },
-        { key: "plan", label: "Generate the smallest viable plan", description: "Generate the smallest verifiable and runnable path around the current goal.", onSelect: () => setBuilderComposeRequest({ id: `compose:${Date.now()}:plan`, text: "Please propose the smallest viable execution plan for the current goal, including the software involved, key actions, verification method, risks, and the recommended run mode." }) },
+        { key: "discover", label: t("experimentLab.quickActions.reviewSources", "Review current sources"), description: t("experimentLab.quickActions.reviewSourcesDescription", "Ask the agent to summarize imported API capabilities, missing information, and recommended next steps."), onSelect: () => setBuilderComposeRequest({ id: `compose:${Date.now()}:discover`, text: t("experimentLab.quickActions.reviewSourcesPrompt", "Please review the currently imported API sources first, summarize the most relevant software and API capabilities, identify missing information, and recommend the next steps. Return a high-level summary by default.") }) },
+        { key: "plan", label: t("experimentLab.quickActions.smallestPlan", "Generate the smallest viable plan"), description: t("experimentLab.quickActions.smallestPlanDescription", "Generate the smallest verifiable and runnable path around the current goal."), onSelect: () => setBuilderComposeRequest({ id: `compose:${Date.now()}:plan`, text: t("experimentLab.quickActions.smallestPlanPrompt", "Please propose the smallest viable execution plan for the current goal, including the software involved, key actions, verification method, risks, and the recommended run mode.") }) },
       ],
     },
     {
       key: "verify",
-      label: "Verification & execution",
+      label: t("experimentLab.quickActions.verification", "Verification & execution"),
       actions: [
-        { key: "probe", label: "Run safe probe verification only", description: "Prefer discover / probe / verify and avoid risky real write operations.", onSelect: () => setBuilderComposeRequest({ id: `compose:${Date.now()}:probe`, text: "Please run safe probe verification first. Check the API path, parameters, and auth method without performing risky real write operations." }) },
-        { key: "execute", label: "Execute one real call", description: "Real execution is allowed, but risky write operations must be confirmed first.", onSelect: () => setBuilderComposeRequest({ id: `compose:${Date.now()}:execute`, text: "Please execute one real call to verify the current plan. If risky write operations are involved, ask for explicit confirmation before continuing." }) },
+        { key: "probe", label: t("experimentLab.quickActions.safeProbe", "Run safe probe verification only"), description: t("experimentLab.quickActions.safeProbeDescription", "Prefer discover / probe / verify and avoid risky real write operations."), onSelect: () => setBuilderComposeRequest({ id: `compose:${Date.now()}:probe`, text: t("experimentLab.quickActions.safeProbePrompt", "Please run safe probe verification first. Check the API path, parameters, and auth method without performing risky real write operations.") }) },
+        { key: "execute", label: t("experimentLab.quickActions.executeOneCall", "Execute one real call"), description: t("experimentLab.quickActions.executeOneCallDescription", "Real execution is allowed, but risky write operations must be confirmed first."), onSelect: () => setBuilderComposeRequest({ id: `compose:${Date.now()}:execute`, text: t("experimentLab.quickActions.executeOneCallPrompt", "Please execute one real call to verify the current plan. If risky write operations are involved, ask for explicit confirmation before continuing.") }) },
       ],
     },
-  ], []);
+  ], [t]);
 
   const handleBuilderProcessingChange = useCallback((processing: boolean) => {
     if (processing) {
@@ -935,7 +1028,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
       <div className="rounded-[24px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel))/0.88] px-4 py-4 sm:px-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.92] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"><Beaker className="h-3.5 w-3.5" />Agentify | Universal intelligence</div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.92] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"><Beaker className="h-3.5 w-3.5" />{t("experimentLab.heroBadge", "Agentify | Universal Intelligence")}</div>
             <h2 className="mt-2 text-xl font-semibold tracking-tight text-foreground sm:text-2xl">{t("experimentLab.heroTitle", "把常用软件能力变成可持续运行的智能应用")}</h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">{t("experimentLab.heroDescription", "你只需要提供接口资料和业务目标，智能体会自己理解 API、验证可行性、整理方案，并把它发布成可以反复使用的智能流程。")}</p>
           </div>
@@ -950,7 +1043,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
             const active = item === "ops" ? surface === "ops" : surface === "builder" && (item === "builder" ? builderStage !== "app" : builderStage === "app");
             return (
             <button key={item} type="button" onClick={() => { if (item === "ops") { setSurface("ops"); } else { setSurface("builder"); setBuilderStage(item === "apps" ? "app" : "chat"); } }} className={cn("inline-flex items-center gap-2 rounded-full border px-3.5 py-2 text-sm font-medium transition-colors", active ? "border-[hsl(var(--primary))/0.2] bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]" : "border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel))/0.88] text-foreground hover:bg-muted/35")}>
-              {item === "builder" ? "Build agent" : item === "apps" ? "Use agent" : "Observe runs"}
+              {surfaceLabel(item, translate)}
             </button>
           );})}
         </div>
@@ -960,35 +1053,35 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
         <Card className="ui-section-panel">
           <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
             <div className="min-w-0">
-                <div className="text-sm font-semibold text-foreground">Latest activity</div>
+                <div className="text-sm font-semibold text-foreground">{t("experimentLab.latestActivity", "Latest activity")}</div>
               <div className="mt-1 text-xs leading-5 text-muted-foreground">
                 {publishing
-                  ? "Publishing a new Agent app version."
+                  ? t("experimentLab.activityPublishing", "Publishing a new Agent app version.")
                   : runningModuleAction
-                    ? "Triggering a new run."
+                    ? t("experimentLab.activityRunning", "Triggering a new run.")
                     : creatingPlanMode
-                      ? "Creating a plan."
+                      ? t("experimentLab.activityCreatingPlan", "Creating a plan.")
                       : builderNotice
                         ? builderNotice.text
                         : latestRun
-                          ? `${t("experimentLab.latestRunPrefix", "最近运行：")}${runModeLabel(latestRun.mode, (key, fallback) => t(key, fallback))} · ${latestRun.status} · ${pretty(latestRun.created_at)}`
-                          : "No recent activity."}
+                          ? `${t("experimentLab.latestRunPrefix", "Latest run: ")}${runModeLabel(latestRun.mode, translate)} · ${runStatusLabel(latestRun.status, translate)} · ${formatTime(latestRun.created_at)}`
+                          : t("experimentLab.noRecentAction", "No recent activity")}
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
               {publishing ? (
                 <Button variant="outline" size="sm" disabled>
-                  Publishing…
+                  {t("experimentLab.publishing", "Publishing…")}
                 </Button>
               ) : null}
               {runningModuleAction ? (
                 <Button variant="outline" size="sm" disabled>
-                  Running…
+                  {t("experimentLab.running", "Running…")}
                 </Button>
               ) : null}
               {!publishing && !runningModuleAction && latestRun ? (
                 <Button variant="outline" size="sm" onClick={() => openRunDetail(latestRun.run_id)}>
-                  View latest run
+                  {t("experimentLab.viewLatestRun", "View latest run")}
                 </Button>
               ) : null}
             </div>
@@ -1001,30 +1094,30 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
           <CardContent className="flex flex-col gap-4 p-4">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <div className="text-sm font-semibold text-foreground">Current workflow</div>
+                <div className="text-sm font-semibold text-foreground">{t("experimentLab.currentWorkflow", "Current workflow")}</div>
                 <div className="mt-1 text-xs text-muted-foreground">
-                  This view connects build, publish, use, and observe into one line. After finishing one step, move directly to the next or inspect the result.
+                  {t("experimentLab.currentWorkflowDescription", "This view connects build, publish, use, and observe into one line. After finishing one step, move directly to the next or inspect the result.")}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 {selectedDraft && !builderReady ? (
                   <Button variant="outline" size="sm" onClick={() => { setSurface("builder"); setBuilderStage("chat"); }}>
-                    Continue building
+                    {t("experimentLab.continueBuilding", "Continue building")}
                   </Button>
                 ) : null}
                 {builderReady ? (
                   <Button variant="outline" size="sm" onClick={() => { setSurface("builder"); setBuilderStage("publish"); }}>
-                    Go publish
+                    {t("experimentLab.goPublish", "Go publish")}
                   </Button>
                 ) : null}
                 {selectedModule ? (
                   <Button variant="outline" size="sm" onClick={() => { setSurface("builder"); setBuilderStage("app"); }}>
-                    Open app
+                    {t("experimentLab.openApp", "Open app")}
                   </Button>
                 ) : null}
                 {latestRun ? (
                   <Button variant="outline" size="sm" onClick={() => openRunDetail(latestRun.run_id)}>
-                    View result
+                    {t("experimentLab.viewResult", "View result")}
                   </Button>
                 ) : null}
               </div>
@@ -1079,7 +1172,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
               <div className="border-b border-[hsl(var(--ui-line-soft))/0.72] px-4 py-3 sm:px-5">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-semibold text-foreground">{selectedDraft?.name || t("experimentLab.newBuilder", "新的智能构建")}</span>
-                  <span className={cn("inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold", draftTone(selectedDraft))}>{draftLabel(selectedDraft, (key, fallback) => t(key, fallback))}</span>
+                  <span className={cn("inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold", draftTone(selectedDraft))}>{draftLabel(selectedDraft, translate)}</span>
                   <span className="inline-flex items-center rounded-full border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.9] px-2.5 py-1 text-[11px] text-muted-foreground">
                     {needsSources
                       ? t("experimentLab.waitingForSources", "等待导入资料")
@@ -1096,19 +1189,19 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                     <Button size="sm" className="rounded-full" onClick={selectedDraft?.publish_readiness?.ready ? () => { setBuilderStage("publish"); setSurface("builder"); } : () => void handleProbeDraft()} disabled={!selectedDraft}>{selectedDraft?.publish_readiness?.ready ? t("experimentLab.enterPublish", "进入发布") : t("experimentLab.checkPublish", "检查发布")}</Button>
                   </div>
                 </div>
-                <div className="mt-2 text-sm text-muted-foreground">{selectedDraft ? summarizePlan(selectedDraft, (key, fallback) => t(key, fallback)) : t("experimentLab.firstMessageBootstrapsBuilder", "发送第一条消息后，系统会自动创建一轮智能构建，并把当前项目、默认智能体和已选资料一起带入。")}</div>
+                <div className="mt-2 text-sm text-muted-foreground">{selectedDraft ? summarizePlan(selectedDraft, translate) : t("experimentLab.firstMessageBootstrapsBuilder", "After the first message, the system starts a new intelligent build and carries in the current project, default agent, and selected sources.")}</div>
                 {selectedDraft?.publish_readiness?.issues?.length ? (
                   <div className="mt-3 rounded-[16px] border border-[hsl(var(--status-error-border))] bg-[hsl(var(--status-error-bg))] px-3 py-2 text-xs leading-5 text-[hsl(var(--status-error-text))]">
                     {t("experimentLab.publishMissing", "发布前还缺：")}
                     {" "}
-                    {selectedDraft.publish_readiness.issues.join("；")}
+                    {readinessMessagesLabel(selectedDraft.publish_readiness.issues, translate)}
                   </div>
                 ) : null}
                 {selectedDraft?.publish_readiness?.warnings?.length ? (
                   <div className="mt-2 rounded-[16px] border border-[hsl(var(--status-info-border))] bg-[hsl(var(--status-info-bg))] px-3 py-2 text-xs leading-5 text-[hsl(var(--status-info-text))]">
                     {t("common.note", "注意：")}
                     {" "}
-                    {selectedDraft.publish_readiness.warnings.join("；")}
+                    {readinessMessagesLabel(selectedDraft.publish_readiness.warnings, translate)}
                   </div>
                 ) : null}
               </div>
@@ -1144,7 +1237,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                         onClick={() => setNextSendAsSource((value) => !value)}
                       >
                         <FileCog className="mr-1 h-4 w-4" />
-                        {nextSendAsSource ? "Exit source mode" : "Switch to source mode"}
+                        {nextSendAsSource ? t("experimentLab.exitSourceMode", "Exit source mode") : t("experimentLab.switchToSourceMode", "Switch to source mode")}
                       </Button>
                       <Button
                         variant="outline"
@@ -1152,11 +1245,14 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                         onClick={() =>
                           setBuilderComposeRequest({
                             id: `quick-help:${Date.now()}`,
-                            text: "Before I continue, tell me which information you need first: API sources, connection details, the task goal, validation criteria, or run-mode preferences.",
+                            text: t(
+                              "experimentLab.guideFirstPrompt",
+                              "Before I continue, tell me which information you need first: API sources, connection details, the task goal, validation criteria, or run-mode preferences.",
+                            ),
                           })
                         }
                       >
-                        Let the agent guide first
+                        {t("experimentLab.letAgentGuideFirst", "Let the agent guide first")}
                       </Button>
                     </div>
                   </div>
@@ -1165,15 +1261,15 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                   <div className="border-b border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.55] px-4 py-3 sm:px-5">
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                       <div className="min-w-0">
-                        <div className="text-sm font-medium text-foreground">Give the API material to the agent first</div>
+                        <div className="text-sm font-medium text-foreground">{t("experimentLab.giveApiMaterialFirst", "Give the API material to the agent first")}</div>
                         <div className="mt-1 text-xs leading-5 text-muted-foreground">
-                          You can describe the goal directly, or add OpenAPI, Postman, curl, endpoint links, or documentation first. The system only needs minimal source material, not a full form.
+                          {t("experimentLab.giveApiMaterialDescription", "You can describe the goal directly, or add OpenAPI, Postman, curl, endpoint links, or documentation first. The system only needs minimal source material, not a full form.")}
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button variant="outline" size="sm" className="rounded-full" onClick={() => setSourcesOpen(true)}>
                           <FileCog className="mr-1 h-4 w-4" />
-                          Manage sources
+                          {t("experimentLab.manageSources", "Manage sources")}
                         </Button>
                         <Button
                           size="sm"
@@ -1181,12 +1277,15 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                           onClick={() =>
                     setBuilderComposeRequest({
                               id: `compose:${Date.now()}:ingest`,
-                              text: "I’m ready to start building a new Agent App. Tell me the minimal API source material, connection details, and goal description you need, then help me explore, verify, and shape a reusable app from them.",
+                              text: t(
+                                "experimentLab.agentGuideMePrompt",
+                                "I’m ready to start building a new intelligent app. Tell me the minimal API source material, connection details, and goal description you need, then help me explore, verify, and shape a reusable app from them.",
+                              ),
                             })
                           }
                         >
                           <Sparkles className="mr-1 h-4 w-4" />
-                          Let the agent guide me
+                          {t("experimentLab.letAgentGuideMe", "Let the agent guide me")}
                         </Button>
                       </div>
                     </div>
@@ -1196,19 +1295,19 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                   <div className="border-b border-[hsl(var(--status-success-border))] bg-[hsl(var(--status-success-bg))] px-4 py-3 sm:px-5">
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                       <div className="min-w-0">
-                        <div className="text-sm font-medium text-[hsl(var(--status-success-text))]">This builder run is ready to publish</div>
+                        <div className="text-sm font-medium text-[hsl(var(--status-success-text))]">{t("experimentLab.builderReadyTitle", "This builder run is ready to publish")}</div>
                         <div className="mt-1 text-xs leading-5 text-[hsl(var(--status-success-text))/0.82]">
-                          The agent has already organized a runnable plan. You can go straight to publish and freeze it as a reusable app for the team.
+                          {t("experimentLab.builderReadyDescription", "The agent has already organized a runnable plan. You can go straight to publish and freeze it as a reusable app for the team.")}
                         </div>
                       </div>
                       <Button size="sm" className="rounded-full" onClick={() => { setBuilderStage("publish"); setSurface("builder"); }}>
                         <Rocket className="mr-1 h-4 w-4" />
-                        Go publish
+                        {t("experimentLab.goPublish", "Go publish")}
                       </Button>
                     </div>
                   </div>
                 ) : null}
-                <ChatConversation sessionId={selectedDraft?.builder_session_id ?? null} agentId={builderAgentId} agentName={builderAgent?.name || "Builder Agent"} agent={builderAgent} headerVariant="compact" teamId={teamId} createSession={handleCreateBuilderSession} beforeSend={handleBeforeBuilderSend} composeRequest={builderComposeRequest} inputQuickActionGroups={builderQuickActions} composerActions={<button type="button" onClick={() => setSourcesOpen(true)} className="inline-flex h-9 items-center gap-1 rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45 sm:h-10 sm:text-[12px]">Sources</button>} composerCollapsedActions={<button type="button" onClick={() => setWorkspaceOpen(true)} className="flex w-full items-center gap-3 rounded-[18px] border border-border/70 bg-card/92 px-4 py-3 text-left transition-colors hover:bg-accent/30"><div className="min-w-0"><div className="text-[13px] font-medium text-foreground">Workspace</div><div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">Switch projects, change the default agent, or start a new builder draft.</div></div></button>} headerActions={<><button type="button" onClick={() => setSourcesOpen(true)} className="inline-flex h-8 items-center gap-1 rounded-full border border-border/70 px-3 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/25 hover:bg-muted/45 hover:text-foreground"><FileCog className="h-3.5 w-3.5" />Sources</button><button type="button" onClick={() => setContextOpen(true)} className="inline-flex h-8 items-center gap-1 rounded-full border border-border/70 px-3 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/25 hover:bg-muted/45 hover:text-foreground"><Sparkles className="h-3.5 w-3.5" />Draft</button></>} onProcessingChange={handleBuilderProcessingChange} onError={setError} />
+                <ChatConversation sessionId={selectedDraft?.builder_session_id ?? null} agentId={builderAgentId} agentName={builderAgent?.name || t("experimentLab.builderAgentFallback", "Builder Agent")} agent={builderAgent} headerVariant="compact" teamId={teamId} createSession={handleCreateBuilderSession} beforeSend={handleBeforeBuilderSend} composeRequest={builderComposeRequest} inputQuickActionGroups={builderQuickActions} composerActions={<button type="button" onClick={() => setSourcesOpen(true)} className="inline-flex h-9 items-center gap-1 rounded-[12px] border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/45 sm:h-10 sm:text-[12px]">{t("experimentLab.sources", "Sources")}</button>} composerCollapsedActions={<button type="button" onClick={() => setWorkspaceOpen(true)} className="flex w-full items-center gap-3 rounded-[18px] border border-border/70 bg-card/92 px-4 py-3 text-left transition-colors hover:bg-accent/30"><div className="min-w-0"><div className="text-[13px] font-medium text-foreground">{t("teamNav.workspace", "Workspace")}</div><div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{t("experimentLab.workspaceHint", "Switch projects, change the default agent, or start a new builder draft.")}</div></div></button>} headerActions={<><button type="button" onClick={() => setSourcesOpen(true)} className="inline-flex h-8 items-center gap-1 rounded-full border border-border/70 px-3 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/25 hover:bg-muted/45 hover:text-foreground"><FileCog className="h-3.5 w-3.5" />{t("experimentLab.sources", "Sources")}</button><button type="button" onClick={() => setContextOpen(true)} className="inline-flex h-8 items-center gap-1 rounded-full border border-border/70 px-3 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/25 hover:bg-muted/45 hover:text-foreground"><Sparkles className="h-3.5 w-3.5" />{t("common.draft", "Draft")}</button></>} onProcessingChange={handleBuilderProcessingChange} onError={setError} />
               </div>
             </CardContent>
           </Card>
@@ -1221,8 +1320,8 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
           <Card className="ui-section-panel">
             <CardContent className="space-y-3 p-4">
               <div>
-                <div className="text-sm font-semibold text-foreground">Published agents</div>
-                <div className="mt-1 text-xs leading-5 text-muted-foreground">Each published app keeps its own persistent chat entry, and run results are written back here.</div>
+                <div className="text-sm font-semibold text-foreground">{t("experimentLab.publishedAgents", "Published agents")}</div>
+                <div className="mt-1 text-xs leading-5 text-muted-foreground">{t("experimentLab.publishedAgentsDescription", "Each published app keeps its own persistent chat entry, and run results are written back here.")}</div>
               </div>
               {modules.length > 0 ? modules.map((module) => (
                 <div key={module.module_id} className={cn("rounded-[18px] border px-4 py-4 transition-colors", selectedModuleId === module.module_id ? "border-[hsl(var(--primary))/0.22] bg-[hsl(var(--primary))/0.08]" : "border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel))/0.88]")}>
@@ -1230,8 +1329,8 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                     <div className="text-sm font-semibold text-foreground">{module.name}</div>
                     <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
                       <span>v{module.version}</span>
-                      <span>{module.summary?.integration_count || module.integration_ids.length} systems</span>
-                      {module.summary?.native_execution_ready ? <span>Native execution</span> : null}
+                      <span>{t("experimentLab.systemCount", "{{count}} systems", { count: module.summary?.integration_count || module.integration_ids.length })}</span>
+                      {module.summary?.native_execution_ready ? <span>{t("experimentLab.nativeExecution", "Native execution")}</span> : null}
                     </div>
                   </button>
                   {canManage ? (
@@ -1368,8 +1467,8 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                       {[
                         selectedProject?.name || t("experimentLab.noProjectSelected", "未选择项目"),
                         t("experimentLab.sourcesConnected", "{{count}} 个资料已接入", { count: selectedDraft.summary?.integration_count || selectedDraft.integration_ids.length }),
-                        ...(verificationLabels(selectedDraft.summary).length
-                          ? verificationLabels(selectedDraft.summary)
+                        ...(verificationLabels(selectedDraft.summary, translate).length
+                          ? verificationLabels(selectedDraft.summary, translate)
                           : [t("experimentLab.waitingForValidationCalls", "等待验证调用")]),
                       ].map((label) => (
                         <span
@@ -1398,14 +1497,14 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                 {selectedDraft.publish_readiness?.issues?.length ? (
                   <div className="rounded-[18px] border border-[hsl(var(--status-error-border))] bg-[hsl(var(--status-error-bg))] px-4 py-3 text-sm leading-6 text-[hsl(var(--status-error-text))]">
                     {t("experimentLab.publishValidationFailed", "发布前校验未通过：")}
-                    {selectedDraft.publish_readiness.issues.join("；")}
+                    {readinessMessagesLabel(selectedDraft.publish_readiness.issues, translate)}
                   </div>
                 ) : null}
 
                 {selectedDraft.publish_readiness?.warnings?.length ? (
                   <div className="rounded-[18px] border border-[hsl(var(--status-info-border))] bg-[hsl(var(--status-info-bg))] px-4 py-3 text-sm leading-6 text-[hsl(var(--status-info-text))]">
                     {t("experimentLab.validationWarnings", "当前验证提示：")}
-                    {selectedDraft.publish_readiness.warnings.join("；")}
+                    {readinessMessagesLabel(selectedDraft.publish_readiness.warnings, translate)}
                   </div>
                 ) : null}
 
@@ -1463,7 +1562,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                           : "border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel))/0.88] text-muted-foreground",
                       )}
                     >
-                      {tab.label}
+                      {t(tab.labelKey, tab.fallback)}
                     </button>
                   ))}
                 </div>
@@ -1488,11 +1587,11 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                                   <span>v{module.version}</span>
                                   <span>{t("experimentLab.systemCount", "{{count}} 个系统", { count: module.summary?.integration_count || module.integration_ids.length })}</span>
                                   {module.summary?.native_execution_ready ? <span>{t("experimentLab.nativeExecution", "原生执行")}</span> : null}
-                                  {verificationLabels(module.summary).map((label) => <span key={label}>{label}</span>)}
+                                  {verificationLabels(module.summary, translate).map((label) => <span key={label}>{label}</span>)}
                                 </div>
                                 {moduleLatestRun ? (
                                   <div className="mt-2 text-xs text-muted-foreground">
-                                    {t("experimentLab.latestRunPrefix", "最近运行：")}{runModeLabel(moduleLatestRun.mode, (key, fallback) => t(key, fallback))} · {moduleLatestRun.status} · {pretty(moduleLatestRun.created_at)}
+                                    {t("experimentLab.latestRunPrefix", "Latest run: ")}{runModeLabel(moduleLatestRun.mode, translate)} · {runStatusLabel(moduleLatestRun.status, translate)} · {formatTime(moduleLatestRun.created_at)}
                                   </div>
                                 ) : null}
                               </div>
@@ -1538,7 +1637,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                               <div className="min-w-0 flex-1">
                                 <div className="text-sm font-semibold text-foreground">{runModeLabel(run.mode, (key, fallback) => t(key, fallback))}</div>
                                 <div className="mt-1 text-xs text-muted-foreground">
-                                  {pretty(run.created_at)} · {run.status}
+                                  {formatTime(run.created_at)} · {runStatusLabel(run.status, translate)}
                                   {run.session_id ? t("experimentLab.chatSessionRun", " · 对话会话") : t("experimentLab.nativeExecutionRun", " · 原生执行")}
                                 </div>
                                 {summary ? (
@@ -1616,7 +1715,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                           <div className="mt-1 text-xs text-muted-foreground">
                             {schedule.mode === "monitor" ? t("experimentLab.pollEverySeconds", "{{count}}s 轮询", { count: schedule.poll_interval_seconds || 300 }) : schedule.cron_expression}
                           </div>
-                          <div className="mt-1 text-xs text-muted-foreground">{t("experimentLab.nextRun", "下次运行：{{time}}", { time: pretty(schedule.next_run_at) })}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{t("experimentLab.nextRun", "Next run: {{time}}", { time: formatTime(schedule.next_run_at) })}</div>
                         </div>
                         <div className="flex gap-2">
                           {schedule.last_run_id ? (
@@ -1656,7 +1755,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                           <Card key={artifact.artifact_id} className="ui-section-panel">
                             <CardContent className="p-4">
                               <div className="text-sm font-semibold text-foreground">{artifact.name}</div>
-                              <div className="mt-1 text-xs text-muted-foreground">{artifact.kind} · {pretty(artifact.created_at)}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">{artifact.kind} · {formatTime(artifact.created_at)}</div>
                               {body ? <div className="mt-3 rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.72] px-4 py-3 text-[12px] leading-6 text-muted-foreground">{preview}</div> : null}
                               {body && body.length > 260 ? (
                                 <button type="button" className="mt-2 text-xs font-medium text-foreground" onClick={() => toggleExpandedArtifact(artifact.artifact_id)}>
@@ -1816,7 +1915,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
             {integrations.map((integration) => (
               <label key={integration.integration_id} className="flex items-start gap-3 rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.72] px-4 py-3">
                 <input type="checkbox" className="mt-1" checked={selectedIntegrationIds.includes(integration.integration_id)} onChange={(event) => setSelectedIntegrationIds((current) => event.target.checked ? Array.from(new Set([...current, integration.integration_id])) : current.filter((item) => item !== integration.integration_id))} />
-                <div className="min-w-0"><div className="text-sm font-semibold text-foreground">{integration.name}</div><div className="mt-1 text-xs text-muted-foreground">{integration.base_url || t("experimentLab.baseUrlUnset", "未设置 base_url")} · {integration.connection_status}</div></div>
+                <div className="min-w-0"><div className="text-sm font-semibold text-foreground">{integration.name}</div><div className="mt-1 text-xs text-muted-foreground">{integration.base_url || t("experimentLab.baseUrlUnset", "base_url not set")} · {connectionStatusLabel(integration.connection_status, translate)}</div></div>
               </label>
             ))}
           </div>
@@ -1850,7 +1949,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
         {selectedDraft ? (
           <div className="space-y-5">
             <div className="rounded-[20px] border border-[hsl(var(--ui-line-soft))/0.72] px-4 py-4">
-              <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-semibold text-foreground">{selectedDraft.name}</div><div className="mt-1 text-xs text-muted-foreground">{pretty(selectedDraft.updated_at)}</div></div><span className={cn("inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold", draftTone(selectedDraft))}>{draftLabel(selectedDraft, (key, fallback) => t(key, fallback))}</span></div>
+              <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-semibold text-foreground">{selectedDraft.name}</div><div className="mt-1 text-xs text-muted-foreground">{formatTime(selectedDraft.updated_at)}</div></div><span className={cn("inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold", draftTone(selectedDraft))}>{draftLabel(selectedDraft, translate)}</span></div>
               <div className="mt-3 text-sm leading-6 text-muted-foreground">{selectedDraft.goal}</div>
               <div className="mt-4 flex gap-2">
                 <Button variant="outline" onClick={() => void handleProbeDraft()}><Zap className="mr-1 h-4 w-4" />{t("experimentLab.revalidate", "重新验证")}</Button>
@@ -1892,8 +1991,8 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
             <div className="rounded-[20px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel-strong))/0.7] px-4 py-4">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="text-sm font-semibold text-foreground">{runModeLabel(selectedRun.mode, (key, fallback) => t(key, fallback))}</div>
-                <span className="inline-flex items-center rounded-full border border-[hsl(var(--ui-line-soft))/0.72] px-2.5 py-1 text-[11px] text-muted-foreground">{selectedRun.status}</span>
-                <span className="inline-flex items-center rounded-full border border-[hsl(var(--ui-line-soft))/0.72] px-2.5 py-1 text-[11px] text-muted-foreground">{pretty(selectedRun.created_at)}</span>
+                <span className="inline-flex items-center rounded-full border border-[hsl(var(--ui-line-soft))/0.72] px-2.5 py-1 text-[11px] text-muted-foreground">{runStatusLabel(selectedRun.status, translate)}</span>
+                <span className="inline-flex items-center rounded-full border border-[hsl(var(--ui-line-soft))/0.72] px-2.5 py-1 text-[11px] text-muted-foreground">{formatTime(selectedRun.created_at)}</span>
               </div>
               <div className="mt-3 text-sm leading-7 text-foreground">
                 {selectedRun.summary || t("experimentLab.noGeneratedRunSummary", "当前还没有生成运行摘要。你可以先查看对话轨迹或下方产物。")}
@@ -1916,7 +2015,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                 <Card key={artifact.artifact_id} className="ui-section-panel">
                   <CardContent className="p-4">
                     <div className="text-sm font-semibold text-foreground">{artifact.name}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">{artifact.kind} · {pretty(artifact.created_at)}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">{artifact.kind} · {formatTime(artifact.created_at)}</div>
                     {artifact.text_content ? (
                       <div className="mt-3 rounded-[18px] border border-[hsl(var(--ui-line-soft))/0.72] bg-[hsl(var(--ui-surface-panel))/0.88] px-4 py-3 text-[12px] leading-6 text-muted-foreground">
                         {excerptText(artifact.text_content, 420)}

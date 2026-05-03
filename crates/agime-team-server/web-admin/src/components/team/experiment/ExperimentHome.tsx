@@ -18,8 +18,13 @@ interface ExperimentHomeProps {
 }
 
 function StatusBadge({ lab }: { lab: ExperimentLabDefinition }) {
+  const { t } = useTranslation();
   const label =
-    lab.status === "ready" ? "Ready" : lab.status === "alpha" ? "Alpha" : "Planned";
+    lab.status === "ready"
+      ? t("experimentLab.status.ready", "Ready")
+      : lab.status === "alpha"
+        ? t("experimentLab.status.alpha", "Alpha")
+        : t("experimentLab.status.planned", "Planned");
   const tone =
     lab.status === "ready"
       ? "bg-[hsl(var(--status-success-bg))] text-[hsl(var(--status-success-text))]"
@@ -39,10 +44,10 @@ function StatusBadge({ lab }: { lab: ExperimentLabDefinition }) {
 }
 
 export function ExperimentHome({ activeLabId, onOpenLab }: ExperimentHomeProps) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const labs = EXPERIMENT_LABS
     .filter((lab) => lab.enabled)
-    .map((lab) => localizeExperimentLab(lab, i18n.language));
+    .map((lab) => localizeExperimentLab(lab, i18n.language, (key, fallback) => t(key, fallback)));
   const singleLab = labs.length === 1;
 
   return (
@@ -103,7 +108,9 @@ export function ExperimentHome({ activeLabId, onOpenLab }: ExperimentHomeProps) 
                       className="rounded-full px-4"
                       disabled={!lab.enabled}
                     >
-                      {lab.enabled ? "Open app" : "Coming soon"}
+                      {lab.enabled
+                        ? t("experimentLab.openExperiment", "Open app")
+                        : t("experimentLab.comingSoon", "Coming soon")}
                       {lab.enabled ? <ArrowRight className="h-3.5 w-3.5" /> : null}
                     </Button>
                   </div>

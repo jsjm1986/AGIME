@@ -35,6 +35,7 @@ export default {
     disabled: "未启用",
     saved: "已保存",
     loadFailed: "加载失败",
+    draft: "草稿",
   },
   errorBoundary: {
     title: "出错了",

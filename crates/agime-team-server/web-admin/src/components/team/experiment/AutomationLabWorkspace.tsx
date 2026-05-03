@@ -1185,7 +1185,7 @@ export function AutomationLabWorkspace({ teamId, canManage }: AutomationLabWorks
                   </span>
                   <div className="ml-auto flex flex-wrap gap-2">
                     <Button variant="outline" size="sm" className="rounded-full" onClick={() => setSelectedDraftId(null)}>{t("experimentLab.newBuilder", "新 Builder")}</Button>
-                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => setContextOpen(true)}>{t("common.draft", "草稿")}</Button>
+                    <Button variant="outline" size="sm" className="rounded-full" onClick={() => setContextOpen(true)}>{t("common.draft", "Draft")}</Button>
                     <Button size="sm" className="rounded-full" onClick={selectedDraft?.publish_readiness?.ready ? () => { setBuilderStage("publish"); setSurface("builder"); } : () => void handleProbeDraft()} disabled={!selectedDraft}>{selectedDraft?.publish_readiness?.ready ? t("experimentLab.enterPublish", "进入发布") : t("experimentLab.checkPublish", "检查发布")}</Button>
                   </div>
                 </div>

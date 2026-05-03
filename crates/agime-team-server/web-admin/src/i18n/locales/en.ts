@@ -35,6 +35,7 @@ export default {
     disabled: "Disabled",
     saved: "Saved",
     loadFailed: "Load failed",
+    draft: "Draft",
   },
   errorBoundary: {
     title: "Something went wrong",

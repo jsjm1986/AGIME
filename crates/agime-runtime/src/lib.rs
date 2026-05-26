@@ -16,6 +16,7 @@
 //! roadmap.
 
 pub mod admission;
+pub mod agent_task_payload;
 pub mod capability_policy;
 pub mod capability_types;
 pub mod execution_admission;
@@ -26,6 +27,9 @@ pub mod tool_dispatch;
 pub mod traits;
 
 pub use admission::{wait_for_execution_slot, ExecutionSlotAcquireOutcome, ExecutionSlotProvider};
+pub use agent_task_payload::{
+    direct_host_timeout_secs, is_success_status, parse_task_payload, ParsedTaskPayload,
+};
 pub use execution_admission::{
     admit_or_queue_task, resume_queued_tasks, start_next_queued_tasks_for_agent,
     QueuedTaskBroadcaster, QueuedTaskRef, TaskAdmissionOutcome, TaskQueueRepository,

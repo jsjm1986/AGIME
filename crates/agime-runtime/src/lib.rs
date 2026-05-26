@@ -18,6 +18,7 @@
 pub mod admission;
 pub mod capability_policy;
 pub mod capability_types;
+pub mod execution_admission;
 pub mod prompt_composer;
 pub mod provider_factory;
 pub mod tool_content;
@@ -25,6 +26,11 @@ pub mod tool_dispatch;
 pub mod traits;
 
 pub use admission::{wait_for_execution_slot, ExecutionSlotAcquireOutcome, ExecutionSlotProvider};
+pub use execution_admission::{
+    admit_or_queue_task, resume_queued_tasks, start_next_queued_tasks_for_agent,
+    QueuedTaskBroadcaster, QueuedTaskRef, TaskAdmissionOutcome, TaskQueueRepository,
+    TaskRuntimeSpawner, TaskSurfacePropagator,
+};
 pub use capability_policy::{
     builtin_registry_entry, is_non_delegating_session_source, resolve_document_policy,
     session_injected_capabilities, source_delegation_override_for_session_source,

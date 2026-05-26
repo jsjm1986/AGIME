@@ -16,6 +16,7 @@
 //! roadmap.
 
 pub mod admission;
+pub mod capability_policy;
 pub mod capability_types;
 pub mod prompt_composer;
 pub mod provider_factory;
@@ -24,6 +25,11 @@ pub mod tool_dispatch;
 pub mod traits;
 
 pub use admission::{wait_for_execution_slot, ExecutionSlotAcquireOutcome, ExecutionSlotProvider};
+pub use capability_policy::{
+    builtin_registry_entry, is_non_delegating_session_source, resolve_document_policy,
+    session_injected_capabilities, source_delegation_override_for_session_source,
+    AgentRuntimePolicyResolver, HostSessionPolicyContext,
+};
 pub use capability_types::{
     normalize_runtime_name, CapabilityDisplayGroup, CapabilityKind, CapabilityRegistryEntry,
     ConfiguredBuiltinCapability, DocumentScopeMode, DocumentWriteMode, ResolvedDocumentPolicy,

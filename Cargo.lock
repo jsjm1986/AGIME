@@ -269,6 +269,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "agime-runtime"
+version = "2.8.0"
+dependencies = [
+ "agime",
+ "anyhow",
+ "async-trait",
+ "futures",
+ "reqwest 0.12.12",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "agime-server"
 version = "2.8.0"
 dependencies = [
@@ -362,6 +378,7 @@ version = "2.8.0"
 dependencies = [
  "agime",
  "agime-mcp",
+ "agime-runtime",
  "agime-team",
  "anyhow",
  "argon2",

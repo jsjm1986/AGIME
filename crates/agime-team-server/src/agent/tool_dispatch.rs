@@ -1,13 +1,141 @@
-use agime::agents::tool_execution_cancelled_error_text;
-use anyhow::anyhow;
+//! Standard tool-call dispatcher (team-server side).
+//!
+//! The actual dispatcher lives in [`agime_runtime::tool_dispatch`]; this file
+//! adapts the team-server-specific runtime types (`DynamicExtensionState`,
+//! `TaskManager`, the team-side `ToolContentBlock`) to the runtime crate's
+//! traits. The server harness keeps calling the same
+//! `execute_standard_tool_call` symbol with the same argument shape — only the
+//! internals were moved.
+
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
+use agime_runtime::tool_content::{
+    ToolContentBlock as RtToolContentBlock, ToolTaskProgress as RtToolTaskProgress,
+    ToolTaskProgressCallback as RtToolTaskProgressCallback,
+};
+use agime_runtime::traits::{ToolDispatchExtensionState, ToolDispatchProgressSink};
+
 use super::extension_manager_client::DynamicExtensionState;
-use super::mcp_connector::{ToolContentBlock, ToolTaskProgressCallback};
+use super::mcp_connector::{
+    ToolContentBlock, ToolTaskProgress as LocalToolTaskProgress,
+    ToolTaskProgressCallback as LocalToolTaskProgressCallback,
+};
 use super::task_manager::{StreamEvent, TaskManager};
+
+fn rt_block_to_local(block: RtToolContentBlock) -> ToolContentBlock {
+    match block {
+        RtToolContentBlock::Text(text) => ToolContentBlock::Text(text),
+        RtToolContentBlock::Image { mime_type, data } => {
+            ToolContentBlock::Image { mime_type, data }
+        }
+        RtToolContentBlock::Resource {
+            uri,
+            mime_type,
+            text,
+            blob,
+        } => ToolContentBlock::Resource {
+            uri,
+            mime_type,
+            text,
+            blob,
+        },
+        RtToolContentBlock::StructuredJson(value) => ToolContentBlock::StructuredJson(value),
+    }
+}
+
+fn local_block_to_rt(block: ToolContentBlock) -> RtToolContentBlock {
+    match block {
+        ToolContentBlock::Text(text) => RtToolContentBlock::Text(text),
+        ToolContentBlock::Image { mime_type, data } => {
+            RtToolContentBlock::Image { mime_type, data }
+        }
+        ToolContentBlock::Resource {
+            uri,
+            mime_type,
+            text,
+            blob,
+        } => RtToolContentBlock::Resource {
+            uri,
+            mime_type,
+            text,
+            blob,
+        },
+        ToolContentBlock::StructuredJson(value) => RtToolContentBlock::StructuredJson(value),
+    }
+}
+
+struct DynamicExtensionStateAdapter(Arc<RwLock<DynamicExtensionState>>);
+
+#[async_trait::async_trait]
+impl ToolDispatchExtensionState for DynamicExtensionStateAdapter {
+    async fn platform_can_handle(&self, name: &str) -> bool {
+        let state = self.0.read().await;
+        state.platform.can_handle(name)
+    }
+
+    async fn platform_call_tool(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> anyhow::Result<Vec<RtToolContentBlock>> {
+        let state = self.0.read().await;
+        let blocks = state.platform.call_tool_rich(name, args).await?;
+        Ok(blocks.into_iter().map(local_block_to_rt).collect())
+    }
+
+    async fn mcp_call_tool(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        progress_cb: Option<RtToolTaskProgressCallback>,
+        cancel_token: CancellationToken,
+    ) -> Option<anyhow::Result<Vec<RtToolContentBlock>>> {
+        let state = self.0.read().await;
+        let mcp = state.mcp.as_ref()?;
+
+        let local_cb: Option<LocalToolTaskProgressCallback> = progress_cb.map(|cb| {
+            let forward: LocalToolTaskProgressCallback =
+                Arc::new(move |progress: LocalToolTaskProgress| {
+                    cb(RtToolTaskProgress {
+                        tool_name: progress.tool_name,
+                        server_name: progress.server_name,
+                        task_id: progress.task_id,
+                        status: progress.status,
+                        status_message: progress.status_message,
+                        poll_count: progress.poll_count,
+                    });
+                });
+            forward
+        });
+
+        let result = mcp
+            .call_tool_rich_with_progress(name, args, local_cb, cancel_token)
+            .await
+            .map(|blocks| blocks.into_iter().map(local_block_to_rt).collect());
+        Some(result)
+    }
+}
+
+struct TaskBroadcastSink {
+    task_manager: Arc<TaskManager>,
+    task_id: String,
+}
+
+#[async_trait::async_trait]
+impl ToolDispatchProgressSink for TaskBroadcastSink {
+    async fn on_progress(&self, payload_json: String) {
+        self.task_manager
+            .broadcast(
+                &self.task_id,
+                StreamEvent::Status {
+                    status: payload_json,
+                },
+            )
+            .await;
+    }
+}
 
 pub(crate) async fn execute_standard_tool_call(
     dynamic_state: Arc<RwLock<DynamicExtensionState>>,
@@ -18,114 +146,23 @@ pub(crate) async fn execute_standard_tool_call(
     name: String,
     args: serde_json::Value,
 ) -> (u64, Result<Vec<ToolContentBlock>, String>) {
-    fn tag_tool_error(error: String) -> String {
-        let lower = error.to_ascii_lowercase();
-        if lower.contains("failed to deserialize parameters")
-            || lower.contains("unknown variant")
-            || lower.contains("missing field")
-            || lower.contains("invalid type")
-        {
-            format!("[step:tool_parameter_schema] {}", error)
-        } else {
-            format!("[step:tool_execution] {}", error)
-        }
-    }
+    let ext_state: Arc<dyn ToolDispatchExtensionState> =
+        Arc::new(DynamicExtensionStateAdapter(dynamic_state));
+    let sink: Arc<dyn ToolDispatchProgressSink> = Arc::new(TaskBroadcastSink {
+        task_manager,
+        task_id,
+    });
 
-    let started_at = Instant::now();
-    if cancel_token.is_cancelled() {
-        return (
-            started_at.elapsed().as_millis() as u64,
-            Err(tool_execution_cancelled_error_text(&name)),
-        );
-    }
+    let (duration_ms, result) = agime_runtime::execute_standard_tool_call(
+        ext_state,
+        sink,
+        cancel_token,
+        tool_timeout_secs,
+        name,
+        args,
+    )
+    .await;
 
-    let call_tool = |dynamic_state: Arc<RwLock<DynamicExtensionState>>,
-                     task_manager: Arc<TaskManager>,
-                     task_id: String,
-                     cancel_token: CancellationToken,
-                     name: String,
-                     args: serde_json::Value| async move {
-        let state = dynamic_state.read().await;
-        if state.platform.can_handle(&name) {
-            return state.platform.call_tool_rich(&name, args).await;
-        }
-        if let Some(ref mcp) = state.mcp {
-            let progress_task_id = task_id.clone();
-            let progress_mgr = task_manager.clone();
-            let progress_cb: ToolTaskProgressCallback = Arc::new(move |p| {
-                let payload = serde_json::json!({
-                    "type": "tool_task_progress",
-                    "tool_name": p.tool_name,
-                    "server_name": p.server_name,
-                    "task_id": p.task_id,
-                    "status": p.status,
-                    "status_message": p.status_message,
-                    "poll_count": p.poll_count,
-                })
-                .to_string();
-                let tm = progress_mgr.clone();
-                let tid = progress_task_id.clone();
-                tokio::spawn(async move {
-                    tm.broadcast(&tid, StreamEvent::Status { status: payload })
-                        .await;
-                });
-            });
-            return mcp
-                .call_tool_rich_with_progress(&name, args, Some(progress_cb), cancel_token)
-                .await;
-        }
-        Err(anyhow!("No handler for tool: {}", name))
-    };
-
-    let result = if let Some(timeout_secs) = tool_timeout_secs {
-        tokio::select! {
-            _ = cancel_token.cancelled() => Err(tool_execution_cancelled_error_text(&name)),
-            outcome = tokio::time::timeout(
-                Duration::from_secs(timeout_secs),
-                call_tool(
-                    dynamic_state,
-                    task_manager,
-                    task_id,
-                    cancel_token.clone(),
-                    name.clone(),
-                    args,
-                ),
-            ) => {
-                match outcome {
-                    Ok(Ok(blocks)) => Ok(blocks),
-                    Ok(Err(error)) => Err(tag_tool_error(format!("Error: {}", error))),
-                    Err(_) => Err(format!(
-                        "[step:tool_execution] Error: tool '{}' timed out after {}s",
-                        name, timeout_secs
-                    )),
-                }
-            }
-        }
-    } else {
-        tokio::select! {
-            _ = cancel_token.cancelled() => Err(tool_execution_cancelled_error_text(&name)),
-            outcome = call_tool(
-                dynamic_state,
-                task_manager,
-                task_id,
-                cancel_token.clone(),
-                name.clone(),
-                args,
-            ) => outcome.map_err(|error| tag_tool_error(format!("Error: {}", error)))
-        }
-    };
-
-    let duration_ms = started_at.elapsed().as_millis() as u64;
-    let result = if cancel_token.is_cancelled() && result.is_ok() {
-        Err(tool_execution_cancelled_error_text(&name))
-    } else {
-        result
-    };
-    match result {
-        Ok(blocks) => (duration_ms, Ok(blocks)),
-        Err(err) => {
-            tracing::warn!("{}", err);
-            (duration_ms, Err(err))
-        }
-    }
+    let result = result.map(|blocks| blocks.into_iter().map(rt_block_to_local).collect());
+    (duration_ms, result)
 }

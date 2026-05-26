@@ -45,10 +45,8 @@ use agime_team::models::{ApiFormat, ApprovalMode, TeamAgent};
 use agime_team::MongoDb;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use regex::Regex;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Content, ErrorCode, ErrorData};
 use serde_json::Value;
-use std::sync::OnceLock;
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -77,6 +75,11 @@ use super::session_mongo::AgentSessionDoc;
 use super::task_manager::{StreamEvent, TaskManager};
 use super::tool_dispatch::execute_standard_tool_call;
 use super::workspace_service::{WorkspaceExecutionContext, WorkspaceService};
+
+use agime_runtime::{
+    derive_chat_title_from_user_message, has_explicit_delegation_request,
+    infer_targets_from_user_message, is_compaction_inline_notification, is_contextual_host_target,
+};
 
 fn parse_turn_tool_gate_allow_only(
     turn_system_instruction: Option<&str>,
@@ -482,19 +485,6 @@ struct SessionHostPersistenceAdapter {
     initial_context_runtime_state: Option<ContextRuntimeState>,
 }
 
-fn derive_chat_title_from_user_message(user_message: &str) -> Option<String> {
-    if user_message.trim().is_empty() {
-        return None;
-    }
-    let preview: String = if user_message.chars().count() > 50 {
-        let truncated: String = user_message.chars().take(47).collect();
-        format!("{}...", truncated)
-    } else {
-        user_message.to_string()
-    };
-    Some(preview)
-}
-
 fn host_target_artifacts(session: &AgentSessionDoc) -> Vec<String> {
     let mut targets = Vec::new();
     if let Some(channel_id) = session
@@ -517,60 +507,6 @@ fn host_target_artifacts(session: &AgentSessionDoc) -> Vec<String> {
     targets.sort();
     targets.dedup();
     targets
-}
-
-fn normalize_deliverable_token(token: &str) -> Option<String> {
-    let trimmed = token
-        .trim_matches(|c: char| {
-            matches!(
-                c,
-                '"' | '\'' | '`' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
-            )
-        })
-        .trim();
-    if trimmed.is_empty() || trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        return None;
-    }
-    let normalized = trimmed.replace('\\', "/");
-    let stable = normalized.contains('/')
-        || normalized.contains(':')
-        || [
-            ".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".html", ".rs", ".py", ".ts", ".tsx",
-            ".js",
-        ]
-        .iter()
-        .any(|suffix| normalized.to_ascii_lowercase().ends_with(suffix));
-    if !stable {
-        return None;
-    }
-    Some(normalized)
-}
-
-fn infer_targets_from_user_message(user_message: &str) -> Vec<String> {
-    let mut targets = Vec::new();
-    let regex = deliverable_target_regex();
-    for capture in regex.find_iter(user_message) {
-        let raw = capture.as_str();
-        if let Some(target) = normalize_deliverable_token(raw) {
-            if !targets.iter().any(|existing| existing == &target) {
-                targets.push(target);
-            }
-        }
-    }
-    targets
-}
-
-fn deliverable_target_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+")
-            .expect("deliverable target regex must compile")
-    })
-}
-
-fn is_contextual_host_target(target: &str) -> bool {
-    let normalized = target.trim().to_ascii_lowercase();
-    normalized.starts_with("channel:") || normalized.starts_with("document:")
 }
 
 fn host_result_contract(session: &AgentSessionDoc) -> Vec<String> {
@@ -637,21 +573,6 @@ fn harness_mode_for_session_source(session_source: &str) -> HarnessMode {
     } else {
         HarnessMode::Conversation
     }
-}
-
-fn has_explicit_delegation_request(user_message: &str) -> bool {
-    let lowered = user_message.to_ascii_lowercase();
-    lowered.contains("subagent")
-        || lowered.contains("swarm")
-        || lowered.contains("single worker")
-        || lowered.contains("one worker")
-        || lowered.contains("multiple workers")
-        || lowered.contains("multiple worker")
-        || user_message.contains("子代理")
-        || user_message.contains("多 worker")
-        || user_message.contains("多个 worker")
-        || user_message.contains("多代理")
-        || user_message.contains("并行")
 }
 
 fn should_force_execute_for_explicit_delegation(
@@ -1623,12 +1544,6 @@ fn compaction_mirror(event: &StreamEvent) -> Option<HarnessControlMessage> {
         phase: phase.clone(),
     });
     Some(control_message)
-}
-
-fn is_compaction_inline_notification(message: &str) -> bool {
-    let normalized = message.trim().to_ascii_lowercase();
-    normalized.starts_with("exceeded auto-compact threshold of ")
-        || normalized.starts_with("context limit reached. compacting to continue conversation...")
 }
 
 fn stream_event_for_control_projection(message: &HarnessControlMessage) -> Option<StreamEvent> {
@@ -2991,7 +2906,14 @@ impl ServerHarnessHost {
         )
         .await;
         clear_permission_bridge_resolver();
-        let host_result = host_result?;
+        let host_result = match host_result {
+            Ok(host_result) => host_result,
+            Err(error) => {
+                worker_forwarder.abort();
+                self.shutdown_runtime(prepared.dynamic_state).await;
+                return Err(error);
+            }
+        };
         tracing::info!(
             logical_session_id = %session.session_id,
             runtime_session_id = %host_result.runtime_session_id,
@@ -3001,7 +2923,13 @@ impl ServerHarnessHost {
         );
         worker_forwarder.abort();
 
-        let messages_json = serde_json::to_string(host_result.final_conversation.messages())?;
+        let messages_json = match serde_json::to_string(host_result.final_conversation.messages()) {
+            Ok(messages_json) => messages_json,
+            Err(error) => {
+                self.shutdown_runtime(prepared.dynamic_state).await;
+                return Err(error.into());
+            }
+        };
         let notification_summary = host_result.notification_summary.as_ref();
         let signal_summary = host_result.signal_summary.as_ref().or(notification_summary);
         let completion_report = Some(normalize_adapter_execution_host_completion_report(

@@ -21,6 +21,7 @@ pub mod capability_policy;
 pub mod capability_types;
 pub mod chat_executor;
 pub mod execution_admission;
+pub mod harness_host_helpers;
 pub mod prompt_composer;
 pub mod provider_factory;
 pub mod tool_content;
@@ -33,6 +34,11 @@ pub use agent_task_payload::{
 };
 pub use chat_executor::{
     extract_last_assistant_preview, is_delivery_tool_handoff_text, CHAT_DELIVERY_FALLBACK_TEXT,
+};
+pub use harness_host_helpers::{
+    deliverable_target_regex, derive_chat_title_from_user_message, has_explicit_delegation_request,
+    infer_targets_from_user_message, is_compaction_inline_notification, is_contextual_host_target,
+    normalize_deliverable_token,
 };
 pub use execution_admission::{
     admit_or_queue_task, resume_queued_tasks, start_next_queued_tasks_for_agent,

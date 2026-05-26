@@ -16,12 +16,27 @@
 //! roadmap.
 
 pub mod admission;
+pub mod capability_types;
+pub mod prompt_composer;
 pub mod provider_factory;
 pub mod tool_content;
 pub mod tool_dispatch;
 pub mod traits;
 
 pub use admission::{wait_for_execution_slot, ExecutionSlotAcquireOutcome, ExecutionSlotProvider};
+pub use capability_types::{
+    normalize_runtime_name, CapabilityDisplayGroup, CapabilityKind, CapabilityRegistryEntry,
+    ConfiguredBuiltinCapability, DocumentScopeMode, DocumentWriteMode, ResolvedDocumentPolicy,
+    RuntimeCapabilitySnapshot, RuntimeDelivery, RuntimeExtensionResolution,
+    RuntimeSkillResolution,
+};
+pub use prompt_composer::{
+    build_base_business_prompt, build_prompt_introspection_snapshot, compose_top_level_prompt,
+    compose_top_level_prompt_with_version, prompt_backup_manifest, render_prompt_snapshot,
+    resolve_harness_capabilities, AgentPromptComposerInput, AgentPromptComposition,
+    HarnessDelegationOverlay, PromptBackupManifest, PromptBackupSource, PromptCompositionReport,
+    PromptIntrospectionSnapshot, PromptPackVersion, RenderedPromptSnapshot, SurfacePromptContract,
+};
 pub use provider_factory::{
     create_provider_for_config, HostApiFormat, HostProviderConfig, HostRuntimeOptimizationMode,
 };

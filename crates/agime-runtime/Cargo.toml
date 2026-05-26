@@ -11,9 +11,11 @@ workspace = true
 
 [dependencies]
 agime = { path = "../agime", default-features = false }
+agime-team = { path = "../agime-team" }
 
 anyhow = "1"
 async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false }
 serde = { version = "1", features = ["derive"] }

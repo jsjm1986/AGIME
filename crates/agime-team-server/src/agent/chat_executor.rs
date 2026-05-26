@@ -3,6 +3,10 @@
 //! ChatExecutor runs chat messages through the DirectHarness V4 surface.
 
 use agime::agents::tool_execution_was_cancelled;
+use agime_runtime::chat_executor::{
+    extract_last_assistant_preview, is_delivery_tool_handoff_text, CHAT_DELIVERY_FALLBACK_TEXT,
+};
+use agime_runtime::direct_host_timeout_secs;
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
 
@@ -21,21 +25,11 @@ use super::service_mongo::{AgentService, ExecutionSlotAcquireOutcome};
 use super::task_manager::{create_task_manager, StreamEvent, TaskManager};
 use super::workspace_service::WorkspaceService;
 
-const CHAT_DELIVERY_FALLBACK_TEXT: &str = "已准备文件，可直接预览或下载。";
-
 #[derive(Debug)]
 struct WorkspaceFileMessagePatch {
     messages_json: String,
     message_count: i32,
     preview: String,
-}
-
-fn direct_host_timeout_secs() -> u64 {
-    std::env::var("TEAM_DIRECT_HOST_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(600)
 }
 
 /// DirectHarness V4 executor for ordinary agent chat sessions.
@@ -229,20 +223,6 @@ impl ChatExecutor {
         exec_result.map(|_| ())
     }
 
-    fn is_delivery_tool_handoff_text(text: &str) -> bool {
-        let normalized = text.trim().to_ascii_lowercase();
-        if normalized.is_empty() {
-            return true;
-        }
-
-        normalized.contains("document exported to workspace successfully")
-            || normalized.contains("file exported to workspace successfully")
-            || normalized.contains("workspace successfully")
-                && normalized.contains("developer shell")
-                && normalized.contains("inspect the file content")
-            || normalized.contains("use developer shell, mcp, or another local tool")
-    }
-
     fn normalize_workspace_delivery_content(
         content: Option<&serde_json::Value>,
         files: &[ChatWorkspaceFileBlock],
@@ -267,7 +247,7 @@ impl ChatExecutor {
                     .get("text")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default();
-                if Self::is_delivery_tool_handoff_text(text) {
+                if is_delivery_tool_handoff_text(text) {
                     continue;
                 }
                 if !text.trim().is_empty() {
@@ -340,7 +320,7 @@ impl ChatExecutor {
 
         let message_count = messages.len() as i32;
         let messages_json = serde_json::to_string(&messages).ok()?;
-        let preview = Self::extract_last_assistant_preview(&messages_json);
+        let preview = extract_last_assistant_preview(&messages_json);
         Some(WorkspaceFileMessagePatch {
             messages_json,
             message_count,
@@ -599,7 +579,7 @@ impl ChatExecutor {
         };
 
         // Build last message preview from assistant response
-        let preview = Self::extract_last_assistant_preview(&session.messages_json);
+        let preview = extract_last_assistant_preview(&session.messages_json);
 
         let _ = self
             .agent_service
@@ -613,38 +593,6 @@ impl ChatExecutor {
                 session.context_runtime_state.as_ref(),
             )
             .await;
-    }
-
-    fn extract_last_assistant_preview(messages_json: &str) -> String {
-        let msgs: Vec<serde_json::Value> = match serde_json::from_str(messages_json) {
-            Ok(m) => m,
-            Err(_) => return String::new(),
-        };
-
-        let msg = msgs
-            .iter()
-            .rev()
-            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("assistant"));
-
-        let Some(content) = msg.and_then(|m| m.get("content")) else {
-            return String::new();
-        };
-
-        // String content
-        if let Some(text) = content.as_str() {
-            return text.chars().take(200).collect();
-        }
-
-        // Array content format: find first non-empty text block
-        content
-            .as_array()
-            .and_then(|arr| {
-                arr.iter()
-                    .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
-                    .find(|text| !text.is_empty())
-            })
-            .map(|text| text.chars().take(200).collect())
-            .unwrap_or_default()
     }
 
     async fn sync_automation_builder_draft(

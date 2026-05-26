@@ -19,6 +19,7 @@ pub mod admission;
 pub mod agent_task_payload;
 pub mod capability_policy;
 pub mod capability_types;
+pub mod chat_executor;
 pub mod execution_admission;
 pub mod prompt_composer;
 pub mod provider_factory;
@@ -29,6 +30,9 @@ pub mod traits;
 pub use admission::{wait_for_execution_slot, ExecutionSlotAcquireOutcome, ExecutionSlotProvider};
 pub use agent_task_payload::{
     direct_host_timeout_secs, is_success_status, parse_task_payload, ParsedTaskPayload,
+};
+pub use chat_executor::{
+    extract_last_assistant_preview, is_delivery_tool_handoff_text, CHAT_DELIVERY_FALLBACK_TEXT,
 };
 pub use execution_admission::{
     admit_or_queue_task, resume_queued_tasks, start_next_queued_tasks_for_agent,

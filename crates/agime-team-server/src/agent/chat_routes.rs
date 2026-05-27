@@ -274,9 +274,7 @@ fn ascii_download_filename_part(value: &str) -> String {
         let mapped = match ch {
             'A'..='Z' | 'a'..='z' | '0'..='9' => ch,
             ' ' | '.' | '_' | '-' | '(' | ')' | '[' | ']' => ch,
-            ch if ch.is_ascii() && !ch.is_ascii_control() && !matches!(ch, '"' | '\\' | ';') => {
-                ch
-            }
+            ch if ch.is_ascii() && !ch.is_ascii_control() && !matches!(ch, '"' | '\\' | ';') => ch,
             _ => {
                 replaced_non_ascii = true;
                 '_'
@@ -323,10 +321,7 @@ fn ascii_download_filename_fallback(name: &str) -> String {
         .map(|(stem, extension)| (stem, Some(extension)))
         .unwrap_or((sanitized.as_str(), None));
     let fallback_stem = ascii_download_filename_part(stem);
-    let mut fallback = if fallback_stem
-        .chars()
-        .any(|ch| ch.is_ascii_alphanumeric())
-    {
+    let mut fallback = if fallback_stem.chars().any(|ch| ch.is_ascii_alphanumeric()) {
         fallback_stem
     } else {
         "download".to_string()
@@ -1516,10 +1511,7 @@ async fn build_attached_document_turn_overlay(
                 "- doc_id={} name={} mime_type={} file_size={}",
                 doc.id, doc.name, doc.mime_type, doc.file_size
             )),
-            Err(_) => lines.push(format!(
-                "- doc_id={} metadata_unavailable=true",
-                doc_id
-            )),
+            Err(_) => lines.push(format!("- doc_id={} metadata_unavailable=true", doc_id)),
         }
     }
     if document_ids.len() > 12 {

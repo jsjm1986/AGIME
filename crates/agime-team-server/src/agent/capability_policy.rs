@@ -545,7 +545,9 @@ impl AgentRuntimePolicyResolver {
             .collect::<Vec<_>>();
         let attached_team_extensions = merge_attached_team_extensions(agent)
             .into_iter()
-            .filter(|reference| capability_allowed_for_groups(&reference.allowed_groups, user_group_ids))
+            .filter(|reference| {
+                capability_allowed_for_groups(&reference.allowed_groups, user_group_ids)
+            })
             .collect::<Vec<_>>();
 
         let mut base_extension_names = HashSet::new();
@@ -609,7 +611,8 @@ impl AgentRuntimePolicyResolver {
             .assigned_skills
             .iter()
             .filter(|skill| {
-                skill.enabled && capability_allowed_for_groups(&skill.allowed_groups, user_group_ids)
+                skill.enabled
+                    && capability_allowed_for_groups(&skill.allowed_groups, user_group_ids)
             })
             .cloned()
             .collect::<Vec<_>>();

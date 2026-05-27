@@ -20,11 +20,11 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use super::workspace_runtime;
 use super::server_harness_host::ServerHarnessHost;
 use super::service_mongo::AgentService;
 use super::session_mongo::CreateSessionRequest;
 use super::task_manager::create_task_manager;
+use super::workspace_runtime;
 use super::workspace_service::WorkspaceService;
 use agime::agents::format_execution_host_completion_text;
 
@@ -185,11 +185,11 @@ fn persist_document_analysis_json(result: DocumentAnalysisJsonResult) -> (String
 fn normalize_document_analysis_result(
     mut result: DocumentAnalysisJsonResult,
 ) -> DocumentAnalysisJsonResult {
-    if result.status.eq_ignore_ascii_case("blocked")
-        && blocked_result_focuses_on_container(&result)
+    if result.status.eq_ignore_ascii_case("blocked") && blocked_result_focuses_on_container(&result)
     {
         let original_summary = result.summary.trim().to_string();
-        result.summary = "无法解压或读取压缩包内部的文档内容，因此无法生成文件内容解读。".to_string();
+        result.summary =
+            "无法解压或读取压缩包内部的文档内容，因此无法生成文件内容解读。".to_string();
         result.content_structure.clear();
         result.key_points.clear();
         result.file_observations.clear();
@@ -242,7 +242,9 @@ fn repair_document_analysis_jsonish(text: &str) -> Option<DocumentAnalysisJsonRe
     }
 
     let status = extract_jsonish_string_field(text, "status")
-        .filter(|value| value.eq_ignore_ascii_case("completed") || value.eq_ignore_ascii_case("blocked"))
+        .filter(|value| {
+            value.eq_ignore_ascii_case("completed") || value.eq_ignore_ascii_case("blocked")
+        })
         .unwrap_or_else(|| "blocked".to_string());
     let summary = extract_jsonish_string_field_before(
         text,
@@ -434,7 +436,9 @@ async fn process_document_analysis(
     if let Some(reason) = skip_reason {
         tracing::debug!("{}", reason);
         let _ = if is_image_document_type(&ctx.mime_type, &ctx.doc_name) {
-            smart_log_svc.clear_analysis(&ctx.team_id, &ctx.doc_id).await
+            smart_log_svc
+                .clear_analysis(&ctx.team_id, &ctx.doc_id)
+                .await
         } else {
             smart_log_svc
                 .cancel_pending_analysis(&ctx.team_id, &ctx.doc_id)
@@ -628,7 +632,7 @@ async fn process_document_analysis(
             false,
             llm_overrides,
             cancel_token.clone(),
-        )
+        ),
     )
     .await
     .map_err(anyhow::Error::from)
@@ -834,7 +838,8 @@ mod tests {
         );
 
         assert_eq!(status, "completed");
-        assert!(text.contains("\"summary\": \"该文档主题为\\\"项目目标、风险、结论\\\"，但内容较短。\""));
+        assert!(text
+            .contains("\"summary\": \"该文档主题为\\\"项目目标、风险、结论\\\"，但内容较短。\""));
         assert!(!text.contains("\"summary\": \"{\\\"status\\\""));
     }
 

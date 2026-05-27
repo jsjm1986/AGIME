@@ -44,8 +44,8 @@ pub fn create_provider_for_agent(agent: &TeamAgent) -> Result<Arc<dyn Provider>>
 
     match agent.api_format {
         ApiFormat::Anthropic => {
-            let api_key =
-                api_key.ok_or_else(|| anyhow!("API key not configured for agent '{}'", agent.name))?;
+            let api_key = api_key
+                .ok_or_else(|| anyhow!("API key not configured for agent '{}'", agent.name))?;
             let provider = create_anthropic_provider(agent, api_key, model)?;
             Ok(Arc::new(provider))
         }

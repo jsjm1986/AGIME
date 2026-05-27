@@ -328,10 +328,8 @@ impl ChatExecutor {
         });
 
         if let Some(index) = assistant_index {
-            let content = Self::normalize_workspace_delivery_content(
-                messages[index].get("content"),
-                files,
-            );
+            let content =
+                Self::normalize_workspace_delivery_content(messages[index].get("content"), files);
             messages[index]["content"] = serde_json::Value::Array(content);
         } else {
             messages.push(serde_json::json!({
@@ -359,19 +357,17 @@ impl ChatExecutor {
                     .blocking_reason
                     .as_deref()
                     .or(Some(report.summary.as_str()))
-                    .is_some_and(|text| {
+                    .is_some_and(|text| text.contains("without a user-visible assistant response"))
+        });
+        let outcome_matches = outcome
+            .completion_outcome
+            .as_ref()
+            .is_some_and(|completion| {
+                completion.status.eq_ignore_ascii_case("blocked")
+                    && completion.blocking_reason.as_deref().is_some_and(|text| {
                         text.contains("without a user-visible assistant response")
                     })
-        });
-        let outcome_matches = outcome.completion_outcome.as_ref().is_some_and(|completion| {
-            completion.status.eq_ignore_ascii_case("blocked")
-                && completion
-                    .blocking_reason
-                    .as_deref()
-                    .is_some_and(|text| {
-                        text.contains("without a user-visible assistant response")
-                    })
-        });
+            });
         report_matches || outcome_matches
     }
 

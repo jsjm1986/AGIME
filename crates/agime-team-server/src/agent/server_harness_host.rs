@@ -2648,14 +2648,15 @@ impl ServerHarnessHost {
         };
         let effective_agent = apply_llm_overrides(&base_agent, llm_overrides.as_ref());
 
-        let user_group_ids = agime_team::services::mongo::user_group_service_mongo::UserGroupService::new(
-            (*self.db).clone(),
-        )
-        .get_user_group_ids(&session.team_id, &session.user_id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<HashSet<_>>();
+        let user_group_ids =
+            agime_team::services::mongo::user_group_service_mongo::UserGroupService::new(
+                (*self.db).clone(),
+            )
+            .get_user_group_ids(&session.team_id, &session.user_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<HashSet<_>>();
         let runtime_snapshot = AgentRuntimePolicyResolver::resolve_for_user_groups(
             &effective_agent,
             Some(session),
@@ -3124,14 +3125,15 @@ impl ServerHarnessHost {
     ) -> Result<DirectHostPreparedRuntime> {
         let runtime_settings = TeamRuntimeSettings::from_env();
         let api_caller = build_api_caller(agent);
-        let user_group_ids = agime_team::services::mongo::user_group_service_mongo::UserGroupService::new(
-            (*self.db).clone(),
-        )
-        .get_user_group_ids(&session.team_id, &session.user_id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<HashSet<_>>();
+        let user_group_ids =
+            agime_team::services::mongo::user_group_service_mongo::UserGroupService::new(
+                (*self.db).clone(),
+            )
+            .get_user_group_ids(&session.team_id, &session.user_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<HashSet<_>>();
         let runtime_snapshot = AgentRuntimePolicyResolver::resolve_for_user_groups(
             agent,
             Some(session),
@@ -3246,7 +3248,9 @@ impl ServerHarnessHost {
                             status: "mcp_elicitation_requested".to_string(),
                         })
                         .await;
-                    broadcaster.emit(StreamEvent::Text { content: detail }).await;
+                    broadcaster
+                        .emit(StreamEvent::Text { content: detail })
+                        .await;
                 });
             })
         };

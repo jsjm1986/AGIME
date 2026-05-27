@@ -88,9 +88,7 @@ impl Agent {
     fn document_tool_evidence_summary(
         structured: &serde_json::Map<String, serde_json::Value>,
     ) -> Option<String> {
-        let kind = structured
-            .get("type")
-            .and_then(serde_json::Value::as_str)?;
+        let kind = structured.get("type").and_then(serde_json::Value::as_str)?;
         let subject = structured
             .get("doc_name")
             .or_else(|| structured.get("source_name"))

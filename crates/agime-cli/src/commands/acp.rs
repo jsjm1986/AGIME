@@ -229,6 +229,7 @@ impl GooseAcpAgent {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
+            supports_multimodal: true,
             prompt_caching_mode: agime::model::PromptCachingMode::Auto,
             cache_edit_mode: agime::model::CacheEditMode::Auto,
             toolshim: false,

@@ -57,6 +57,7 @@ enum EcosystemServiceAgentBinding {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 enum AvatarBindingShadowIssue {
     ManagerRoleMismatch,
     ServiceRoleMismatch,

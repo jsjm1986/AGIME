@@ -749,6 +749,7 @@ fn build_public_url(base_url: &str, slug: &str, base_url_configured: bool) -> Op
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn inject_portal_urls(
     obj: &mut serde_json::Map<String, serde_json::Value>,
     team_id: &str,

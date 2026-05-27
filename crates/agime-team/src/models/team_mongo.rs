@@ -217,32 +217,19 @@ pub struct ChatAssistantSettings {
     pub tone_hint: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellSecurityMode {
     Off,
     Warn,
+    #[default]
     Block,
 }
 
-impl Default for ShellSecurityMode {
-    fn default() -> Self {
-        Self::Block
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ShellSecuritySettings {
     #[serde(default)]
     pub mode: ShellSecurityMode,
-}
-
-impl Default for ShellSecuritySettings {
-    fn default() -> Self {
-        Self {
-            mode: ShellSecurityMode::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

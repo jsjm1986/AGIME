@@ -212,6 +212,7 @@ impl SkillService {
         self.validate_and_insert(team_id, name, skill).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn list_with_filter(
         &self,
         team_id: &str,
@@ -297,6 +298,7 @@ impl SkillService {
 
     /// List skills visible to a specific user in the resource library.
     /// Admins pass `can_manage=true` and see all; members see only their uploads.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_visible_for_user(
         &self,
         team_id: &str,
@@ -454,6 +456,7 @@ impl SkillService {
     }
 
     /// Update a package skill in place while bumping its patch version.
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_package(
         &self,
         skill_id: &str,

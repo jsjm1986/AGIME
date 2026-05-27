@@ -489,6 +489,8 @@ derive_utoipa!(Icon as IconSchema);
         PrincipalType,
         ModelInfo,
         ModelConfig,
+        agime::model::PromptCachingMode,
+        agime::model::CacheEditMode,
         Session,
         SessionInsights,
         SessionType,

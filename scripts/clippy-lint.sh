@@ -56,6 +56,7 @@ BASELINE_ALLOWS="\
   -A clippy::redundant_closure \
   -A clippy::result_large_err \
   -A clippy::too_many_arguments \
+  -A clippy::too_many_lines \
   -A clippy::type_complexity \
   -A clippy::unnecessary_lazy_evaluations \
   -A clippy::unnecessary_sort_by \

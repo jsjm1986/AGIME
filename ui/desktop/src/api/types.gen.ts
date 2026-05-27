@@ -137,17 +137,6 @@ export type CapableModelsResponse = {
     thinking_models: Array<string>;
 };
 
-export type CfpmToolGateEventRecord = {
-    action: string;
-    createdTimestamp: number;
-    originalCommand: string;
-    path: string;
-    rewrittenCommand: string;
-    target: string;
-    tool: string;
-    verbosity: string;
-};
-
 export type ChatRequest = {
     messages: Array<Message>;
     recipe_name?: string | null;
@@ -477,15 +466,6 @@ export type KillJobResponse = {
     message: string;
 };
 
-export type ListMemoryCandidatesQuery = {
-    decision?: string | null;
-    limit?: number | null;
-};
-
-export type ListMemoryToolGatesQuery = {
-    limit?: number | null;
-};
-
 export type ListRecipeResponse = {
     manifests: Array<RecipeManifest>;
 };
@@ -547,25 +527,6 @@ export type ListSessionsQuery = {
 export type LoadedProvider = {
     config: DeclarativeProviderConfig;
     is_editable: boolean;
-};
-
-export type MemoryCandidate = {
-    category: string;
-    content: string;
-    createdAt: string;
-    decision: string;
-    id: string;
-    reason: string;
-    sessionId: string;
-    source: string;
-};
-
-export type MemorySnapshotRecord = {
-    createdAt: string;
-    factCount: number;
-    id: number;
-    reason: string;
-    sessionId: string;
 };
 
 /**
@@ -897,15 +858,6 @@ export type RemoveExtensionRequest = {
     session_id: string;
 };
 
-export type RenameMemoryPathRequest = {
-    fromPath: string;
-    toPath: string;
-};
-
-export type RenameMemoryPathResponse = {
-    updatedCount: number;
-};
-
 export type ResourceContents = {
     _meta?: {
         [key: string]: unknown;
@@ -958,14 +910,6 @@ export type RetryConfig = {
 };
 
 export type Role = string;
-
-export type RollbackMemorySnapshotRequest = {
-    snapshotId: number;
-};
-
-export type RollbackMemorySnapshotResponse = {
-    restoredCount: number;
-};
 
 export type RunNowResponse = {
     session_id: string;
@@ -3386,207 +3330,6 @@ export type ExportSessionResponses = {
 };
 
 export type ExportSessionResponse = ExportSessionResponses[keyof ExportSessionResponses];
-
-export type GetMemoryCandidatesData = {
-    body?: never;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: {
-        decision?: string | null;
-        limit?: number | null;
-    };
-    url: '/sessions/{session_id}/memory/candidates';
-};
-
-export type GetMemoryCandidatesErrors = {
-    /**
-     * Bad request - Invalid query
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type GetMemoryCandidatesResponses = {
-    /**
-     * Memory candidates retrieved successfully
-     */
-    200: Array<MemoryCandidate>;
-};
-
-export type GetMemoryCandidatesResponse = GetMemoryCandidatesResponses[keyof GetMemoryCandidatesResponses];
-
-export type RenameMemoryPathsData = {
-    body: RenameMemoryPathRequest;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/path-rename';
-};
-
-export type RenameMemoryPathsErrors = {
-    /**
-     * Bad request - Invalid rename payload
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type RenameMemoryPathsResponses = {
-    /**
-     * Memory path rename completed
-     */
-    200: RenameMemoryPathResponse;
-};
-
-export type RenameMemoryPathsResponse = RenameMemoryPathsResponses[keyof RenameMemoryPathsResponses];
-
-export type RollbackMemorySnapshotData = {
-    body: RollbackMemorySnapshotRequest;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/rollback';
-};
-
-export type RollbackMemorySnapshotErrors = {
-    /**
-     * Bad request - Invalid rollback payload
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session or snapshot not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type RollbackMemorySnapshotResponses = {
-    /**
-     * Memory snapshot rollback completed
-     */
-    200: RollbackMemorySnapshotResponse;
-};
-
-export type RollbackMemorySnapshotResponse2 = RollbackMemorySnapshotResponses[keyof RollbackMemorySnapshotResponses];
-
-export type GetMemorySnapshotsData = {
-    body?: never;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/snapshots';
-};
-
-export type GetMemorySnapshotsErrors = {
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type GetMemorySnapshotsResponses = {
-    /**
-     * Memory snapshots retrieved successfully
-     */
-    200: Array<MemorySnapshotRecord>;
-};
-
-export type GetMemorySnapshotsResponse = GetMemorySnapshotsResponses[keyof GetMemorySnapshotsResponses];
-
-export type GetMemoryToolGatesData = {
-    body?: never;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: {
-        limit?: number | null;
-    };
-    url: '/sessions/{session_id}/memory/tool-gates';
-};
-
-export type GetMemoryToolGatesErrors = {
-    /**
-     * Bad request - Invalid query
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type GetMemoryToolGatesResponses = {
-    /**
-     * CFPM tool gate events retrieved successfully
-     */
-    200: Array<CfpmToolGateEventRecord>;
-};
-
-export type GetMemoryToolGatesResponse = GetMemoryToolGatesResponses[keyof GetMemoryToolGatesResponses];
 
 export type UpdateSessionMetadataData = {
     body: UpdateSessionMetadataRequest;

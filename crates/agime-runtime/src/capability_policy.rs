@@ -20,8 +20,7 @@ use agime_team::models::{
 use crate::capability_types::{
     normalize_runtime_name, CapabilityDisplayGroup, CapabilityKind, CapabilityRegistryEntry,
     ConfiguredBuiltinCapability, DocumentScopeMode, DocumentWriteMode, ResolvedDocumentPolicy,
-    RuntimeCapabilitySnapshot, RuntimeDelivery, RuntimeExtensionResolution,
-    RuntimeSkillResolution,
+    RuntimeCapabilitySnapshot, RuntimeDelivery, RuntimeExtensionResolution, RuntimeSkillResolution,
 };
 
 /// Session-derived inputs the resolver needs.

@@ -730,8 +730,9 @@ fn yes_no(value: bool) -> &'static str {
 mod tests {
     use super::*;
     use crate::capability_types::{
-        CapabilityDisplayGroup, CapabilityKind, CapabilityRegistryEntry, ConfiguredBuiltinCapability,
-        RuntimeDelivery, RuntimeExtensionResolution, RuntimeSkillResolution,
+        CapabilityDisplayGroup, CapabilityKind, CapabilityRegistryEntry,
+        ConfiguredBuiltinCapability, RuntimeDelivery, RuntimeExtensionResolution,
+        RuntimeSkillResolution,
     };
     use agime_team::models::{DelegationPolicy, SkillBindingMode};
 

@@ -242,9 +242,18 @@ mod tests {
             "max_turns": 7
         });
         let payload = parse_task_payload(&content).unwrap();
-        assert_eq!(payload.turn_system_instruction.as_deref(), Some("be concise"));
-        assert_eq!(payload.target_artifacts, vec!["a".to_string(), "b".to_string()]);
-        assert_eq!(payload.allowed_extensions.as_deref(), Some(&["x".to_string()][..]));
+        assert_eq!(
+            payload.turn_system_instruction.as_deref(),
+            Some("be concise")
+        );
+        assert_eq!(
+            payload.target_artifacts,
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(
+            payload.allowed_extensions.as_deref(),
+            Some(&["x".to_string()][..])
+        );
         assert!(payload.validation_mode);
         assert_eq!(payload.max_turns, Some(7));
     }

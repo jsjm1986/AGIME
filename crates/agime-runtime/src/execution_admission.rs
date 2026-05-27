@@ -334,9 +334,10 @@ mod tests {
         let broadcaster = RecordingBroadcaster::default();
         let spawner = RecordingSpawner::default();
 
-        let outcome = admit_or_queue_task(&slots, &queue, &propagator, &broadcaster, &spawner, "t1")
-            .await
-            .unwrap();
+        let outcome =
+            admit_or_queue_task(&slots, &queue, &propagator, &broadcaster, &spawner, "t1")
+                .await
+                .unwrap();
 
         assert_eq!(outcome, TaskAdmissionOutcome::Started);
         assert_eq!(spawner.spawned.lock().unwrap().len(), 1);
@@ -353,9 +354,10 @@ mod tests {
         let broadcaster = RecordingBroadcaster::default();
         let spawner = RecordingSpawner::default();
 
-        let outcome = admit_or_queue_task(&slots, &queue, &propagator, &broadcaster, &spawner, "t1")
-            .await
-            .unwrap();
+        let outcome =
+            admit_or_queue_task(&slots, &queue, &propagator, &broadcaster, &spawner, "t1")
+                .await
+                .unwrap();
 
         assert_eq!(outcome, TaskAdmissionOutcome::Queued);
         assert!(spawner.spawned.lock().unwrap().is_empty());

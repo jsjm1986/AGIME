@@ -71,8 +71,12 @@ mod tests {
     #[test]
     fn delivery_handoff_recognizes_tool_boilerplate() {
         assert!(is_delivery_tool_handoff_text(""));
-        assert!(is_delivery_tool_handoff_text("Document exported to workspace successfully"));
-        assert!(is_delivery_tool_handoff_text("File exported to workspace successfully."));
+        assert!(is_delivery_tool_handoff_text(
+            "Document exported to workspace successfully"
+        ));
+        assert!(is_delivery_tool_handoff_text(
+            "File exported to workspace successfully."
+        ));
         assert!(is_delivery_tool_handoff_text(
             "Use developer shell, MCP, or another local tool to inspect the file content."
         ));

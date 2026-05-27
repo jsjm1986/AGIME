@@ -192,8 +192,12 @@ mod tests {
 
     #[test]
     fn infer_targets_dedups_in_order() {
-        let targets = infer_targets_from_user_message("see docs/a.md and again docs/a.md plus src/b.rs");
-        assert_eq!(targets, vec!["docs/a.md".to_string(), "src/b.rs".to_string()]);
+        let targets =
+            infer_targets_from_user_message("see docs/a.md and again docs/a.md plus src/b.rs");
+        assert_eq!(
+            targets,
+            vec!["docs/a.md".to_string(), "src/b.rs".to_string()]
+        );
     }
 
     #[test]
@@ -231,6 +235,8 @@ mod tests {
         assert!(is_compaction_inline_notification(
             "Context limit reached. Compacting to continue conversation..."
         ));
-        assert!(!is_compaction_inline_notification("regular assistant reply"));
+        assert!(!is_compaction_inline_notification(
+            "regular assistant reply"
+        ));
     }
 }

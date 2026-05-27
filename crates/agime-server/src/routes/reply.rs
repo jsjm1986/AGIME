@@ -255,7 +255,7 @@ pub async fn reply(
             }
         };
 
-        let session = match SessionManager::get_session(&session_id, false).await {
+        let _session = match SessionManager::get_session(&session_id, false).await {
             Ok(metadata) => metadata,
             Err(e) => {
                 tracing::error!("Failed to read session for {}: {}", session_id, e);

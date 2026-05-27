@@ -1793,7 +1793,11 @@ mod tests {
         let spec = format_messages_with_multimodal(&messages, &ImageFormat::OpenAi, None, false);
         let serialized = serde_json::to_string(&spec)?;
 
-        assert_eq!(spec.len(), 2, "image should not create deferred user message");
+        assert_eq!(
+            spec.len(),
+            2,
+            "image should not create deferred user message"
+        );
         assert!(!serialized.contains("image_url"));
         assert!(serialized.contains("not configured for multimodal input"));
         assert!(serialized.contains("/workspace/example.png"));

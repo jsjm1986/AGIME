@@ -657,6 +657,7 @@ fn governance_projection() -> FindOptions {
         .build()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_semantic_entity(
     id: String,
     entity_type: &str,

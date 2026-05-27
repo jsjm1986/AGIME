@@ -621,7 +621,11 @@ Do not add extra headings or filler."
         };
 
         let mut sections = Vec::new();
-        for file in files.iter().filter_map(|value| value.as_document()).take(12) {
+        for file in files
+            .iter()
+            .filter_map(|value| value.as_document())
+            .take(12)
+        {
             let path = file.get_str("path").unwrap_or("unknown");
             let content = file.get_str("content").unwrap_or("");
             if content.trim().is_empty() {

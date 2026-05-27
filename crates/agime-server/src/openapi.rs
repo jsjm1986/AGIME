@@ -7,10 +7,6 @@ use agime::conversation::Conversation;
 use agime::model::ModelConfig;
 use agime::permission::permission_confirmation::PrincipalType;
 use agime::providers::base::{ConfigKey, ModelInfo, ProviderMetadata, ProviderType};
-use agime::session::session_manager::{
-    CfpmToolGateEventRecord, MemoryCandidate, MemoryFact, MemoryFactPatch, MemoryFactStatus,
-    MemorySnapshotRecord,
-};
 use agime::session::{Session, SessionInsights, SessionType};
 use rmcp::model::{
     Annotations, Content, EmbeddedResource, Icon, ImageContent, JsonObject, RawAudioContent,
@@ -380,14 +376,6 @@ derive_utoipa!(Icon as IconSchema);
         super::routes::session::import_session,
         super::routes::session::update_session_user_recipe_values,
         super::routes::session::edit_message,
-        super::routes::session::get_memory_facts,
-        super::routes::session::get_memory_candidates,
-        super::routes::session::get_memory_tool_gates,
-        super::routes::session::create_memory_fact,
-        super::routes::session::update_memory_fact,
-        super::routes::session::rename_memory_paths,
-        super::routes::session::get_memory_snapshots,
-        super::routes::session::rollback_memory_snapshot,
         super::routes::recipe::create_recipe,
         super::routes::recipe::encode_recipe,
         super::routes::recipe::decode_recipe,
@@ -454,19 +442,6 @@ derive_utoipa!(Icon as IconSchema);
         super::routes::session::EditType,
         super::routes::session::EditMessageRequest,
         super::routes::session::EditMessageResponse,
-        super::routes::session::ListMemoryCandidatesQuery,
-        super::routes::session::ListMemoryToolGatesQuery,
-        super::routes::session::CreateMemoryFactRequest,
-        super::routes::session::RenameMemoryPathRequest,
-        super::routes::session::RenameMemoryPathResponse,
-        super::routes::session::RollbackMemorySnapshotRequest,
-        super::routes::session::RollbackMemorySnapshotResponse,
-        CfpmToolGateEventRecord,
-        MemoryCandidate,
-        MemoryFact,
-        MemoryFactPatch,
-        MemoryFactStatus,
-        MemorySnapshotRecord,
         Message,
         MessageContent,
         MessageMetadata,
@@ -514,6 +489,8 @@ derive_utoipa!(Icon as IconSchema);
         PrincipalType,
         ModelInfo,
         ModelConfig,
+        agime::model::PromptCachingMode,
+        agime::model::CacheEditMode,
         Session,
         SessionInsights,
         SessionType,

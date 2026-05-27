@@ -816,6 +816,7 @@ impl DocumentService {
     }
 
     /// List AI workbench documents (agent-created), optionally filtered by session/mission
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_ai_workbench(
         &self,
         team_id: &str,

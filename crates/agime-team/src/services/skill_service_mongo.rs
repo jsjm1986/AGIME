@@ -212,6 +212,7 @@ impl SkillService {
         self.validate_and_insert(team_id, name, skill).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn list_with_filter(
         &self,
         team_id: &str,
@@ -297,6 +298,7 @@ impl SkillService {
 
     /// List skills visible to a specific user in the resource library.
     /// Admins pass `can_manage=true` and see all; members see only their uploads.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_visible_for_user(
         &self,
         team_id: &str,
@@ -340,7 +342,10 @@ impl SkillService {
         note: Option<String>,
     ) -> Result<Skill> {
         let normalized = status.trim().to_ascii_lowercase();
-        if !matches!(normalized.as_str(), "approved" | "rejected" | "pending_review") {
+        if !matches!(
+            normalized.as_str(),
+            "approved" | "rejected" | "pending_review"
+        ) {
             return Err(anyhow!("Invalid skill review status: {}", status));
         }
         let oid = ObjectId::parse_str(skill_id)?;
@@ -351,10 +356,7 @@ impl SkillService {
             "reviewed_at": bson::DateTime::from_chrono(Utc::now()),
             "updated_at": bson::DateTime::from_chrono(Utc::now()),
         };
-        set_doc.insert(
-            "review_note",
-            note.map(Bson::String).unwrap_or(Bson::Null),
-        );
+        set_doc.insert("review_note", note.map(Bson::String).unwrap_or(Bson::Null));
         coll.update_one(
             doc! { "_id": oid, "is_deleted": { "$ne": true } },
             doc! { "$set": set_doc },
@@ -454,6 +456,7 @@ impl SkillService {
     }
 
     /// Update a package skill in place while bumping its patch version.
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_package(
         &self,
         skill_id: &str,

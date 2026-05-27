@@ -1204,10 +1204,7 @@ mod tests {
     #[test]
     fn guess_mime_from_extension_covers_common_image_uploads() {
         assert_eq!(guess_mime_from_extension("fig_1.png"), Some("image/png"));
-        assert_eq!(
-            guess_mime_from_extension("photo.jpeg"),
-            Some("image/jpeg")
-        );
+        assert_eq!(guess_mime_from_extension("photo.jpeg"), Some("image/jpeg"));
         assert_eq!(
             guess_mime_from_extension("diagram.svg"),
             Some("image/svg+xml")

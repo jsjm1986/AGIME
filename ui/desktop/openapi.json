@@ -1743,35 +1743,6 @@
         }
       }
     },
-    "/recipes/schedule": {
-      "post": {
-        "tags": [
-          "Recipe Management"
-        ],
-        "operationId": "schedule_recipe",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ScheduleRecipeRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Recipe scheduled successfully"
-          },
-          "404": {
-            "description": "Recipe not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
     "/recipes/slash-command": {
       "post": {
         "tags": [
@@ -1830,354 +1801,6 @@
           },
           "424": {
             "description": "Agent not initialized"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
-    "/schedule/create": {
-      "post": {
-        "tags": [
-          "schedule"
-        ],
-        "operationId": "create_schedule",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateScheduleRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Scheduled job created successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ScheduledJob"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid cron expression or recipe file"
-          },
-          "409": {
-            "description": "Job ID already exists"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
-    "/schedule/delete/{id}": {
-      "delete": {
-        "tags": [
-          "schedule"
-        ],
-        "operationId": "delete_schedule",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "ID of the schedule to delete",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Scheduled job deleted successfully"
-          },
-          "404": {
-            "description": "Scheduled job not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
-    "/schedule/list": {
-      "get": {
-        "tags": [
-          "schedule"
-        ],
-        "operationId": "list_schedules",
-        "responses": {
-          "200": {
-            "description": "A list of scheduled jobs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ListSchedulesResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
-    "/schedule/{id}": {
-      "put": {
-        "tags": [
-          "schedule"
-        ],
-        "operationId": "update_schedule",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "ID of the schedule to update",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateScheduleRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Scheduled job updated successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ScheduledJob"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Cannot update a currently running job or invalid request"
-          },
-          "404": {
-            "description": "Scheduled job not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
-    "/schedule/{id}/inspect": {
-      "get": {
-        "tags": [
-          "schedule"
-        ],
-        "operationId": "inspect_running_job",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "ID of the schedule to inspect",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Running job information",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/InspectJobResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Scheduled job not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
-    "/schedule/{id}/kill": {
-      "post": {
-        "tags": [
-          "schedule"
-        ],
-        "operationId": "kill_running_job",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Running job killed successfully"
-          }
-        }
-      }
-    },
-    "/schedule/{id}/pause": {
-      "post": {
-        "tags": [
-          "schedule"
-        ],
-        "operationId": "pause_schedule",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "ID of the schedule to pause",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Scheduled job paused successfully"
-          },
-          "400": {
-            "description": "Cannot pause a currently running job"
-          },
-          "404": {
-            "description": "Scheduled job not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
-    "/schedule/{id}/run_now": {
-      "post": {
-        "tags": [
-          "schedule"
-        ],
-        "operationId": "run_now_handler",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "ID of the schedule to run",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Scheduled job triggered successfully, returns new session ID",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunNowResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Scheduled job not found"
-          },
-          "500": {
-            "description": "Internal server error when trying to run the job"
-          }
-        }
-      }
-    },
-    "/schedule/{id}/sessions": {
-      "get": {
-        "tags": [
-          "schedule"
-        ],
-        "operationId": "sessions_handler",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "ID of the schedule",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "A list of session display info",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/SessionDisplayInfo"
-                  }
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
-    "/schedule/{id}/unpause": {
-      "post": {
-        "tags": [
-          "schedule"
-        ],
-        "operationId": "unpause_schedule",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "ID of the schedule to unpause",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Scheduled job unpaused successfully"
-          },
-          "404": {
-            "description": "Scheduled job not found"
           },
           "500": {
             "description": "Internal server error"
@@ -2623,474 +2246,6 @@
         ]
       }
     },
-    "/sessions/{session_id}/memory/candidates": {
-      "get": {
-        "tags": [
-          "Session Management"
-        ],
-        "operationId": "get_memory_candidates",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "description": "Unique identifier for the session",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "decision",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "nullable": true
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "nullable": true,
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Memory candidates retrieved successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/MemoryCandidate"
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request - Invalid query"
-          },
-          "401": {
-            "description": "Unauthorized - Invalid or missing API key"
-          },
-          "404": {
-            "description": "Session not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ]
-      }
-    },
-    "/sessions/{session_id}/memory/facts": {
-      "get": {
-        "tags": [
-          "Session Management"
-        ],
-        "operationId": "get_memory_facts",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "description": "Unique identifier for the session",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Memory facts retrieved successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/MemoryFact"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized - Invalid or missing API key"
-          },
-          "404": {
-            "description": "Session not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ]
-      },
-      "post": {
-        "tags": [
-          "Session Management"
-        ],
-        "operationId": "create_memory_fact",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "description": "Unique identifier for the session",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateMemoryFactRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Memory fact created successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryFact"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request - Invalid memory fact payload"
-          },
-          "401": {
-            "description": "Unauthorized - Invalid or missing API key"
-          },
-          "404": {
-            "description": "Session not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ]
-      }
-    },
-    "/sessions/{session_id}/memory/facts/{fact_id}": {
-      "patch": {
-        "tags": [
-          "Session Management"
-        ],
-        "operationId": "update_memory_fact",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "description": "Unique identifier for the session",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "fact_id",
-            "in": "path",
-            "description": "Unique identifier for the memory fact",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryFactPatch"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Memory fact updated successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryFact"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request - Invalid memory fact payload"
-          },
-          "401": {
-            "description": "Unauthorized - Invalid or missing API key"
-          },
-          "404": {
-            "description": "Session or memory fact not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ]
-      }
-    },
-    "/sessions/{session_id}/memory/path-rename": {
-      "post": {
-        "tags": [
-          "Session Management"
-        ],
-        "operationId": "rename_memory_paths",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "description": "Unique identifier for the session",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RenameMemoryPathRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Memory path rename completed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RenameMemoryPathResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request - Invalid rename payload"
-          },
-          "401": {
-            "description": "Unauthorized - Invalid or missing API key"
-          },
-          "404": {
-            "description": "Session not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ]
-      }
-    },
-    "/sessions/{session_id}/memory/rollback": {
-      "post": {
-        "tags": [
-          "Session Management"
-        ],
-        "operationId": "rollback_memory_snapshot",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "description": "Unique identifier for the session",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RollbackMemorySnapshotRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Memory snapshot rollback completed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RollbackMemorySnapshotResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request - Invalid rollback payload"
-          },
-          "401": {
-            "description": "Unauthorized - Invalid or missing API key"
-          },
-          "404": {
-            "description": "Session or snapshot not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ]
-      }
-    },
-    "/sessions/{session_id}/memory/snapshots": {
-      "get": {
-        "tags": [
-          "Session Management"
-        ],
-        "operationId": "get_memory_snapshots",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "description": "Unique identifier for the session",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Memory snapshots retrieved successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/MemorySnapshotRecord"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized - Invalid or missing API key"
-          },
-          "404": {
-            "description": "Session not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ]
-      }
-    },
-    "/sessions/{session_id}/memory/tool-gates": {
-      "get": {
-        "tags": [
-          "Session Management"
-        ],
-        "operationId": "get_memory_tool_gates",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "description": "Unique identifier for the session",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "nullable": true,
-              "minimum": 0
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "CFPM tool gate events retrieved successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CfpmToolGateEventRecord"
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request - Invalid query"
-          },
-          "401": {
-            "description": "Unauthorized - Invalid or missing API key"
-          },
-          "404": {
-            "description": "Session not found"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ]
-      }
-    },
     "/sessions/{session_id}/metadata": {
       "put": {
         "tags": [
@@ -3491,6 +2646,14 @@
           }
         }
       },
+      "CacheEditMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "off",
+          "prefer"
+        ]
+      },
       "CallToolRequest": {
         "type": "object",
         "required": [
@@ -3626,46 +2789,6 @@
               "type": "string"
             },
             "description": "Models that support thinking"
-          }
-        }
-      },
-      "CfpmToolGateEventRecord": {
-        "type": "object",
-        "required": [
-          "action",
-          "tool",
-          "target",
-          "path",
-          "originalCommand",
-          "rewrittenCommand",
-          "verbosity",
-          "createdTimestamp"
-        ],
-        "properties": {
-          "action": {
-            "type": "string"
-          },
-          "createdTimestamp": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "originalCommand": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          },
-          "rewrittenCommand": {
-            "type": "string"
-          },
-          "target": {
-            "type": "string"
-          },
-          "tool": {
-            "type": "string"
-          },
-          "verbosity": {
-            "type": "string"
           }
         }
       },
@@ -3840,29 +2963,6 @@
           "$ref": "#/components/schemas/Message"
         }
       },
-      "CreateMemoryFactRequest": {
-        "type": "object",
-        "required": [
-          "category",
-          "content"
-        ],
-        "properties": {
-          "category": {
-            "type": "string"
-          },
-          "content": {
-            "type": "string"
-          },
-          "pinned": {
-            "type": "boolean",
-            "nullable": true
-          },
-          "source": {
-            "type": "string",
-            "nullable": true
-          }
-        }
-      },
       "CreateRecipeRequest": {
         "type": "object",
         "required": [
@@ -3896,25 +2996,6 @@
               }
             ],
             "nullable": true
-          }
-        }
-      },
-      "CreateScheduleRequest": {
-        "type": "object",
-        "required": [
-          "id",
-          "recipe_source",
-          "cron"
-        ],
-        "properties": {
-          "cron": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "recipe_source": {
-            "type": "string"
           }
         }
       },
@@ -4648,64 +3729,9 @@
           }
         }
       },
-      "InspectJobResponse": {
-        "type": "object",
-        "properties": {
-          "processStartTime": {
-            "type": "string",
-            "nullable": true
-          },
-          "runningDurationSeconds": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "sessionId": {
-            "type": "string",
-            "nullable": true
-          }
-        }
-      },
       "JsonObject": {
         "type": "object",
         "additionalProperties": true
-      },
-      "KillJobResponse": {
-        "type": "object",
-        "required": [
-          "message"
-        ],
-        "properties": {
-          "message": {
-            "type": "string"
-          }
-        }
-      },
-      "ListMemoryCandidatesQuery": {
-        "type": "object",
-        "properties": {
-          "decision": {
-            "type": "string",
-            "nullable": true
-          },
-          "limit": {
-            "type": "integer",
-            "format": "int32",
-            "nullable": true,
-            "minimum": 0
-          }
-        }
-      },
-      "ListMemoryToolGatesQuery": {
-        "type": "object",
-        "properties": {
-          "limit": {
-            "type": "integer",
-            "format": "int32",
-            "nullable": true,
-            "minimum": 0
-          }
-        }
       },
       "ListRecipeResponse": {
         "type": "object",
@@ -4717,20 +3743,6 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/RecipeManifest"
-            }
-          }
-        }
-      },
-      "ListSchedulesResponse": {
-        "type": "object",
-        "required": [
-          "jobs"
-        ],
-        "properties": {
-          "jobs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ScheduledJob"
             }
           }
         }
@@ -4813,172 +3825,6 @@
           },
           "is_editable": {
             "type": "boolean"
-          }
-        }
-      },
-      "MemoryCandidate": {
-        "type": "object",
-        "required": [
-          "id",
-          "sessionId",
-          "category",
-          "content",
-          "source",
-          "decision",
-          "reason",
-          "createdAt"
-        ],
-        "properties": {
-          "category": {
-            "type": "string"
-          },
-          "content": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "decision": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "sessionId": {
-            "type": "string"
-          },
-          "source": {
-            "type": "string"
-          }
-        }
-      },
-      "MemoryFact": {
-        "type": "object",
-        "required": [
-          "id",
-          "sessionId",
-          "category",
-          "content",
-          "status",
-          "pinned",
-          "source",
-          "createdAt",
-          "updatedAt"
-        ],
-        "properties": {
-          "category": {
-            "type": "string"
-          },
-          "confidence": {
-            "type": "number",
-            "format": "double"
-          },
-          "content": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "evidenceCount": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "id": {
-            "type": "string"
-          },
-          "lastValidatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "pinned": {
-            "type": "boolean"
-          },
-          "sessionId": {
-            "type": "string"
-          },
-          "source": {
-            "type": "string"
-          },
-          "status": {
-            "$ref": "#/components/schemas/MemoryFactStatus"
-          },
-          "updatedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "validationCommand": {
-            "type": "string",
-            "nullable": true
-          }
-        }
-      },
-      "MemoryFactPatch": {
-        "type": "object",
-        "properties": {
-          "category": {
-            "type": "string",
-            "nullable": true
-          },
-          "content": {
-            "type": "string",
-            "nullable": true
-          },
-          "pinned": {
-            "type": "boolean",
-            "nullable": true
-          },
-          "status": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MemoryFactStatus"
-              }
-            ],
-            "nullable": true
-          }
-        }
-      },
-      "MemoryFactStatus": {
-        "type": "string",
-        "enum": [
-          "active",
-          "stale",
-          "forgotten",
-          "superseded"
-        ]
-      },
-      "MemorySnapshotRecord": {
-        "type": "object",
-        "required": [
-          "id",
-          "sessionId",
-          "reason",
-          "factCount",
-          "createdAt"
-        ],
-        "properties": {
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "factCount": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "id": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "sessionId": {
-            "type": "string"
           }
         }
       },
@@ -5402,6 +4248,14 @@
           "toolshim"
         ],
         "properties": {
+          "auto_compact_threshold": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "cache_edit_mode": {
+            "$ref": "#/components/schemas/CacheEditMode"
+          },
           "context_limit": {
             "type": "integer",
             "nullable": true,
@@ -5419,9 +4273,34 @@
           "model_name": {
             "type": "string"
           },
+          "output_reserve_tokens": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          },
+          "prompt_caching_mode": {
+            "$ref": "#/components/schemas/PromptCachingMode"
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "nullable": true
+          },
+          "supports_multimodal": {
+            "type": "boolean"
+          },
           "temperature": {
             "type": "number",
             "format": "float",
+            "nullable": true
+          },
+          "thinking_budget": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "minimum": 0
+          },
+          "thinking_enabled": {
+            "type": "boolean",
             "nullable": true
           },
           "toolshim": {
@@ -5605,6 +4484,14 @@
         "enum": [
           "Extension",
           "Tool"
+        ]
+      },
+      "PromptCachingMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "off",
+          "prefer"
         ]
       },
       "PromptResponse": {
@@ -5991,10 +4878,6 @@
           "recipe": {
             "$ref": "#/components/schemas/Recipe"
           },
-          "schedule_cron": {
-            "type": "string",
-            "nullable": true
-          },
           "slash_command": {
             "type": "string",
             "nullable": true
@@ -6077,34 +4960,6 @@
           },
           "session_id": {
             "type": "string"
-          }
-        }
-      },
-      "RenameMemoryPathRequest": {
-        "type": "object",
-        "required": [
-          "fromPath",
-          "toPath"
-        ],
-        "properties": {
-          "fromPath": {
-            "type": "string"
-          },
-          "toPath": {
-            "type": "string"
-          }
-        }
-      },
-      "RenameMemoryPathResponse": {
-        "type": "object",
-        "required": [
-          "updatedCount"
-        ],
-        "properties": {
-          "updatedCount": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
           }
         }
       },
@@ -6231,42 +5086,6 @@
           }
         ]
       },
-      "RollbackMemorySnapshotRequest": {
-        "type": "object",
-        "required": [
-          "snapshotId"
-        ],
-        "properties": {
-          "snapshotId": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
-      },
-      "RollbackMemorySnapshotResponse": {
-        "type": "object",
-        "required": [
-          "restoredCount"
-        ],
-        "properties": {
-          "restoredCount": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          }
-        }
-      },
-      "RunNowResponse": {
-        "type": "object",
-        "required": [
-          "session_id"
-        ],
-        "properties": {
-          "session_id": {
-            "type": "string"
-          }
-        }
-      },
       "SaveRecipeRequest": {
         "type": "object",
         "required": [
@@ -6312,60 +5131,6 @@
         "properties": {
           "has_security_warnings": {
             "type": "boolean"
-          }
-        }
-      },
-      "ScheduleRecipeRequest": {
-        "type": "object",
-        "required": [
-          "id"
-        ],
-        "properties": {
-          "cron_schedule": {
-            "type": "string",
-            "nullable": true
-          },
-          "id": {
-            "type": "string"
-          }
-        }
-      },
-      "ScheduledJob": {
-        "type": "object",
-        "required": [
-          "id",
-          "source",
-          "cron"
-        ],
-        "properties": {
-          "cron": {
-            "type": "string"
-          },
-          "current_session_id": {
-            "type": "string",
-            "nullable": true
-          },
-          "currently_running": {
-            "type": "boolean"
-          },
-          "id": {
-            "type": "string"
-          },
-          "last_run": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "paused": {
-            "type": "boolean"
-          },
-          "process_start_time": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "source": {
-            "type": "string"
           }
         }
       },
@@ -6482,68 +5247,6 @@
           }
         }
       },
-      "SessionDisplayInfo": {
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "createdAt",
-          "workingDir",
-          "messageCount"
-        ],
-        "properties": {
-          "accumulatedInputTokens": {
-            "type": "integer",
-            "format": "int32",
-            "nullable": true
-          },
-          "accumulatedOutputTokens": {
-            "type": "integer",
-            "format": "int32",
-            "nullable": true
-          },
-          "accumulatedTotalTokens": {
-            "type": "integer",
-            "format": "int32",
-            "nullable": true
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "inputTokens": {
-            "type": "integer",
-            "format": "int32",
-            "nullable": true
-          },
-          "messageCount": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "name": {
-            "type": "string"
-          },
-          "outputTokens": {
-            "type": "integer",
-            "format": "int32",
-            "nullable": true
-          },
-          "scheduleId": {
-            "type": "string",
-            "nullable": true
-          },
-          "totalTokens": {
-            "type": "integer",
-            "format": "int32",
-            "nullable": true
-          },
-          "workingDir": {
-            "type": "string"
-          }
-        }
-      },
       "SessionInsights": {
         "type": "object",
         "required": [
@@ -6605,18 +5308,6 @@
           "hidden",
           "terminal"
         ]
-      },
-      "SessionsQuery": {
-        "type": "object",
-        "required": [
-          "limit"
-        ],
-        "properties": {
-          "limit": {
-            "type": "integer",
-            "minimum": 0
-          }
-        }
       },
       "SetCustomPromptRequest": {
         "type": "object",
@@ -6852,7 +5543,8 @@
         "type": "string",
         "enum": [
           "thinkingMessage",
-          "inlineMessage"
+          "inlineMessage",
+          "runtimeNotificationAttachment"
         ]
       },
       "TaskSupport": {
@@ -7237,17 +5929,6 @@
         ],
         "properties": {
           "session_id": {
-            "type": "string"
-          }
-        }
-      },
-      "UpdateScheduleRequest": {
-        "type": "object",
-        "required": [
-          "cron"
-        ],
-        "properties": {
-          "cron": {
             "type": "string"
           }
         }

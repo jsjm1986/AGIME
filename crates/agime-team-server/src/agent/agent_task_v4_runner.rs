@@ -142,7 +142,8 @@ impl AgentTaskV4Runner {
                     self.settle_cancelled(task_id, Some(&session)).await;
                     return Ok(());
                 }
-                self.settle_failure(task_id, Some(&session), &error.to_string()).await;
+                self.settle_failure(task_id, Some(&session), &error.to_string())
+                    .await;
                 Err(error)
             }
             Err(_) => {
@@ -263,7 +264,8 @@ impl AgentTaskV4Runner {
         if let Some(path) = &payload.workspace_path {
             session.workspace_path = Some(path.clone());
         }
-        let binding = WorkspaceService::new(self.workspace_root.clone()).ensure_chat_workspace(session)?;
+        let binding =
+            WorkspaceService::new(self.workspace_root.clone()).ensure_chat_workspace(session)?;
         self.agent_service
             .set_session_workspace_binding(&session.session_id, &binding)
             .await?;
@@ -415,12 +417,7 @@ impl AgentTaskV4Runner {
             .await;
     }
 
-    async fn settle_failure(
-        &self,
-        task_id: &str,
-        session: Option<&AgentSessionDoc>,
-        error: &str,
-    ) {
+    async fn settle_failure(&self, task_id: &str, session: Option<&AgentSessionDoc>, error: &str) {
         if self.task_is_cancelled(task_id).await {
             self.settle_cancelled(task_id, session).await;
             return;
@@ -477,7 +474,8 @@ fn direct_host_timeout_secs() -> u64 {
 }
 
 fn is_success_status(status: &str) -> bool {
-    status.eq_ignore_ascii_case("completed") || status.eq_ignore_ascii_case("completed_with_warnings")
+    status.eq_ignore_ascii_case("completed")
+        || status.eq_ignore_ascii_case("completed_with_warnings")
 }
 
 fn parse_task_payload(content: &Value) -> Result<ParsedTaskPayload> {
@@ -490,7 +488,10 @@ fn parse_task_payload(content: &Value) -> Result<ParsedTaskPayload> {
     Ok(ParsedTaskPayload {
         prior_messages,
         user_message,
-        turn_system_instruction: string_field(content, &["turn_system_instruction", "turnSystemInstruction"]),
+        turn_system_instruction: string_field(
+            content,
+            &["turn_system_instruction", "turnSystemInstruction"],
+        ),
         workspace_path: string_field(content, &["workspace_path", "workspacePath"]),
         target_artifacts: string_array_field(content, &["target_artifacts", "targetArtifacts"]),
         result_contract: string_array_field(content, &["result_contract", "resultContract"]),
@@ -504,9 +505,17 @@ fn parse_task_payload(content: &Value) -> Result<ParsedTaskPayload> {
         ),
         attached_document_ids: string_array_field(
             content,
-            &["attached_document_ids", "attachedDocumentIds", "document_ids", "documentIds"],
+            &[
+                "attached_document_ids",
+                "attachedDocumentIds",
+                "document_ids",
+                "documentIds",
+            ],
         ),
-        llm_overrides: content.get("llm_overrides").or_else(|| content.get("llmOverrides")).cloned(),
+        llm_overrides: content
+            .get("llm_overrides")
+            .or_else(|| content.get("llmOverrides"))
+            .cloned(),
         retry_config: content
             .get("retry_config")
             .or_else(|| content.get("retryConfig"))
@@ -545,7 +554,9 @@ fn parse_messages(raw_messages: &[Value]) -> Result<(Vec<Message>, String)> {
         .rposition(|(role, _)| role.eq_ignore_ascii_case("user"))
         .or_else(|| parsed.len().checked_sub(1))
     else {
-        return Err(anyhow!("Invalid AgentTask content: messages contain no text"));
+        return Err(anyhow!(
+            "Invalid AgentTask content: messages contain no text"
+        ));
     };
 
     let user_message = parsed[last_user_index].1.clone();
@@ -575,10 +586,7 @@ fn extract_message_text(value: &Value) -> Option<String> {
                 .join("\n");
             (!text.trim().is_empty()).then_some(text)
         }
-        Value::Object(map) => map
-            .get("text")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        Value::Object(map) => map.get("text").and_then(Value::as_str).map(str::to_string),
         _ => None,
     }
 }

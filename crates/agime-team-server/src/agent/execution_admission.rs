@@ -185,15 +185,14 @@ fn spawn_task_runner(
                 error
             );
         }
-        if let Err(error) =
-            start_next_queued_tasks_for_agent(
-                &db,
-                &agent_service,
-                &task_manager,
-                &workspace_root,
-                &agent_id,
-            )
-            .await
+        if let Err(error) = start_next_queued_tasks_for_agent(
+            &db,
+            &agent_service,
+            &task_manager,
+            &workspace_root,
+            &agent_id,
+        )
+        .await
         {
             tracing::warn!(
                 "Failed to dispatch queued work for agent {} after task {}: {}",

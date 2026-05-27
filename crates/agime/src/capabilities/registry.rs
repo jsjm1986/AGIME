@@ -683,6 +683,24 @@ impl CapabilityRegistry {
             })
             .collect()
     }
+
+    /// Get the list of model patterns that declare thinking support.
+    pub fn get_thinking_model_patterns(&self) -> Vec<String> {
+        self.capabilities
+            .iter()
+            .filter(|c| c.capabilities.thinking.supported)
+            .map(|c| c.raw_pattern.clone())
+            .collect()
+    }
+
+    /// Get the list of model patterns that declare reasoning support.
+    pub fn get_reasoning_model_patterns(&self) -> Vec<String> {
+        self.capabilities
+            .iter()
+            .filter(|c| c.capabilities.reasoning.supported)
+            .map(|c| c.raw_pattern.clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]

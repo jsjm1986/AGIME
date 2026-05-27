@@ -53,6 +53,8 @@ export type AuthorRequest = {
     metadata?: string | null;
 };
 
+export type CacheEditMode = 'auto' | 'off' | 'prefer';
+
 export type CallToolRequest = {
     arguments: unknown;
     name: string;
@@ -137,17 +139,6 @@ export type CapableModelsResponse = {
     thinking_models: Array<string>;
 };
 
-export type CfpmToolGateEventRecord = {
-    action: string;
-    createdTimestamp: number;
-    originalCommand: string;
-    path: string;
-    rewrittenCommand: string;
-    target: string;
-    tool: string;
-    verbosity: string;
-};
-
 export type ChatRequest = {
     messages: Array<Message>;
     recipe_name?: string | null;
@@ -210,13 +201,6 @@ export type Content = RawTextContent | RawImageContent | RawEmbeddedResource | R
 
 export type Conversation = Array<Message>;
 
-export type CreateMemoryFactRequest = {
-    category: string;
-    content: string;
-    pinned?: boolean | null;
-    source?: string | null;
-};
-
 export type CreateRecipeRequest = {
     author?: AuthorRequest | null;
     session_id: string;
@@ -225,12 +209,6 @@ export type CreateRecipeRequest = {
 export type CreateRecipeResponse = {
     error?: string | null;
     recipe?: Recipe | null;
-};
-
-export type CreateScheduleRequest = {
-    cron: string;
-    id: string;
-    recipe_source: string;
 };
 
 export type DeclarativeProviderConfig = {
@@ -470,35 +448,12 @@ export type ImportSessionRequest = {
     json: string;
 };
 
-export type InspectJobResponse = {
-    processStartTime?: string | null;
-    runningDurationSeconds?: number | null;
-    sessionId?: string | null;
-};
-
 export type JsonObject = {
     [key: string]: unknown;
 };
 
-export type KillJobResponse = {
-    message: string;
-};
-
-export type ListMemoryCandidatesQuery = {
-    decision?: string | null;
-    limit?: number | null;
-};
-
-export type ListMemoryToolGatesQuery = {
-    limit?: number | null;
-};
-
 export type ListRecipeResponse = {
     manifests: Array<RecipeManifest>;
-};
-
-export type ListSchedulesResponse = {
-    jobs: Array<ScheduledJob>;
 };
 
 /**
@@ -554,50 +509,6 @@ export type ListSessionsQuery = {
 export type LoadedProvider = {
     config: DeclarativeProviderConfig;
     is_editable: boolean;
-};
-
-export type MemoryCandidate = {
-    category: string;
-    content: string;
-    createdAt: string;
-    decision: string;
-    id: string;
-    reason: string;
-    sessionId: string;
-    source: string;
-};
-
-export type MemoryFact = {
-    category: string;
-    confidence?: number;
-    content: string;
-    createdAt: string;
-    evidenceCount?: number;
-    id: string;
-    lastValidatedAt?: string | null;
-    pinned: boolean;
-    sessionId: string;
-    source: string;
-    status: MemoryFactStatus;
-    updatedAt: string;
-    validationCommand?: string | null;
-};
-
-export type MemoryFactPatch = {
-    category?: string | null;
-    content?: string | null;
-    pinned?: boolean | null;
-    status?: MemoryFactStatus | null;
-};
-
-export type MemoryFactStatus = 'active' | 'stale' | 'forgotten' | 'superseded';
-
-export type MemorySnapshotRecord = {
-    createdAt: string;
-    factCount: number;
-    id: number;
-    reason: string;
-    sessionId: string;
 };
 
 /**
@@ -679,11 +590,19 @@ export type MessageMetadata = {
 };
 
 export type ModelConfig = {
+    auto_compact_threshold?: number | null;
+    cache_edit_mode?: CacheEditMode;
     context_limit?: number | null;
     fast_model?: string | null;
     max_tokens?: number | null;
     model_name: string;
+    output_reserve_tokens?: number | null;
+    prompt_caching_mode?: PromptCachingMode;
+    reasoning_effort?: string | null;
+    supports_multimodal?: boolean;
     temperature?: number | null;
+    thinking_budget?: number | null;
+    thinking_enabled?: boolean | null;
     toolshim: boolean;
     toolshim_model?: string | null;
 };
@@ -769,6 +688,8 @@ export type PricingResponse = {
 };
 
 export type PrincipalType = 'Extension' | 'Tool';
+
+export type PromptCachingMode = 'auto' | 'off' | 'prefer';
 
 export type PromptResponse = {
     content: string;
@@ -903,7 +824,6 @@ export type RecipeManifest = {
     id: string;
     last_modified: string;
     recipe: Recipe;
-    schedule_cron?: string | null;
     slash_command?: string | null;
 };
 
@@ -927,15 +847,6 @@ export type RedactedThinkingContent = {
 export type RemoveExtensionRequest = {
     name: string;
     session_id: string;
-};
-
-export type RenameMemoryPathRequest = {
-    fromPath: string;
-    toPath: string;
-};
-
-export type RenameMemoryPathResponse = {
-    updatedCount: number;
 };
 
 export type ResourceContents = {
@@ -991,18 +902,6 @@ export type RetryConfig = {
 
 export type Role = string;
 
-export type RollbackMemorySnapshotRequest = {
-    snapshotId: number;
-};
-
-export type RollbackMemorySnapshotResponse = {
-    restoredCount: number;
-};
-
-export type RunNowResponse = {
-    session_id: string;
-};
-
 export type SaveRecipeRequest = {
     id?: string | null;
     recipe: Recipe;
@@ -1018,22 +917,6 @@ export type ScanRecipeRequest = {
 
 export type ScanRecipeResponse = {
     has_security_warnings: boolean;
-};
-
-export type ScheduleRecipeRequest = {
-    cron_schedule?: string | null;
-    id: string;
-};
-
-export type ScheduledJob = {
-    cron: string;
-    current_session_id?: string | null;
-    currently_running?: boolean;
-    id: string;
-    last_run?: string | null;
-    paused?: boolean;
-    process_start_time?: string | null;
-    source: string;
 };
 
 export type Session = {
@@ -1062,21 +945,6 @@ export type Session = {
     working_dir: string;
 };
 
-export type SessionDisplayInfo = {
-    accumulatedInputTokens?: number | null;
-    accumulatedOutputTokens?: number | null;
-    accumulatedTotalTokens?: number | null;
-    createdAt: string;
-    id: string;
-    inputTokens?: number | null;
-    messageCount: number;
-    name: string;
-    outputTokens?: number | null;
-    scheduleId?: string | null;
-    totalTokens?: number | null;
-    workingDir: string;
-};
-
 export type SessionInsights = {
     totalSessions: number;
     totalTokens: number;
@@ -1101,10 +969,6 @@ export type SessionMetadataResponse = {
 };
 
 export type SessionType = 'user' | 'scheduled' | 'sub_agent' | 'hidden' | 'terminal';
-
-export type SessionsQuery = {
-    limit: number;
-};
 
 export type SetCustomPromptRequest = {
     content: string;
@@ -1189,7 +1053,7 @@ export type SystemNotificationContent = {
     notificationType: SystemNotificationType;
 };
 
-export type SystemNotificationType = 'thinkingMessage' | 'inlineMessage';
+export type SystemNotificationType = 'thinkingMessage' | 'inlineMessage' | 'runtimeNotificationAttachment';
 
 export type TaskSupport = string;
 
@@ -1328,10 +1192,6 @@ export type UpdateProviderRequest = {
 
 export type UpdateRouterToolSelectorRequest = {
     session_id: string;
-};
-
-export type UpdateScheduleRequest = {
-    cron: string;
 };
 
 export type UpdateSessionMetadataRequest = {
@@ -2739,31 +2599,6 @@ export type ScanRecipeResponses = {
 
 export type ScanRecipeResponse2 = ScanRecipeResponses[keyof ScanRecipeResponses];
 
-export type ScheduleRecipeData = {
-    body: ScheduleRecipeRequest;
-    path?: never;
-    query?: never;
-    url: '/recipes/schedule';
-};
-
-export type ScheduleRecipeErrors = {
-    /**
-     * Recipe not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type ScheduleRecipeResponses = {
-    /**
-     * Recipe scheduled successfully
-     */
-    200: unknown;
-};
-
 export type SetRecipeSlashCommandData = {
     body: SetSlashCommandRequest;
     path?: never;
@@ -2815,306 +2650,6 @@ export type ReplyResponses = {
 };
 
 export type ReplyResponse = ReplyResponses[keyof ReplyResponses];
-
-export type CreateScheduleData = {
-    body: CreateScheduleRequest;
-    path?: never;
-    query?: never;
-    url: '/schedule/create';
-};
-
-export type CreateScheduleErrors = {
-    /**
-     * Invalid cron expression or recipe file
-     */
-    400: unknown;
-    /**
-     * Job ID already exists
-     */
-    409: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type CreateScheduleResponses = {
-    /**
-     * Scheduled job created successfully
-     */
-    200: ScheduledJob;
-};
-
-export type CreateScheduleResponse = CreateScheduleResponses[keyof CreateScheduleResponses];
-
-export type DeleteScheduleData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule to delete
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/delete/{id}';
-};
-
-export type DeleteScheduleErrors = {
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type DeleteScheduleResponses = {
-    /**
-     * Scheduled job deleted successfully
-     */
-    204: void;
-};
-
-export type DeleteScheduleResponse = DeleteScheduleResponses[keyof DeleteScheduleResponses];
-
-export type ListSchedulesData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/schedule/list';
-};
-
-export type ListSchedulesErrors = {
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type ListSchedulesResponses = {
-    /**
-     * A list of scheduled jobs
-     */
-    200: ListSchedulesResponse;
-};
-
-export type ListSchedulesResponse2 = ListSchedulesResponses[keyof ListSchedulesResponses];
-
-export type UpdateScheduleData = {
-    body: UpdateScheduleRequest;
-    path: {
-        /**
-         * ID of the schedule to update
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}';
-};
-
-export type UpdateScheduleErrors = {
-    /**
-     * Cannot update a currently running job or invalid request
-     */
-    400: unknown;
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type UpdateScheduleResponses = {
-    /**
-     * Scheduled job updated successfully
-     */
-    200: ScheduledJob;
-};
-
-export type UpdateScheduleResponse = UpdateScheduleResponses[keyof UpdateScheduleResponses];
-
-export type InspectRunningJobData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule to inspect
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}/inspect';
-};
-
-export type InspectRunningJobErrors = {
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type InspectRunningJobResponses = {
-    /**
-     * Running job information
-     */
-    200: InspectJobResponse;
-};
-
-export type InspectRunningJobResponse = InspectRunningJobResponses[keyof InspectRunningJobResponses];
-
-export type KillRunningJobData = {
-    body?: never;
-    path: {
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}/kill';
-};
-
-export type KillRunningJobResponses = {
-    /**
-     * Running job killed successfully
-     */
-    200: unknown;
-};
-
-export type PauseScheduleData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule to pause
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}/pause';
-};
-
-export type PauseScheduleErrors = {
-    /**
-     * Cannot pause a currently running job
-     */
-    400: unknown;
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type PauseScheduleResponses = {
-    /**
-     * Scheduled job paused successfully
-     */
-    204: void;
-};
-
-export type PauseScheduleResponse = PauseScheduleResponses[keyof PauseScheduleResponses];
-
-export type RunNowHandlerData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule to run
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}/run_now';
-};
-
-export type RunNowHandlerErrors = {
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error when trying to run the job
-     */
-    500: unknown;
-};
-
-export type RunNowHandlerResponses = {
-    /**
-     * Scheduled job triggered successfully, returns new session ID
-     */
-    200: RunNowResponse;
-};
-
-export type RunNowHandlerResponse = RunNowHandlerResponses[keyof RunNowHandlerResponses];
-
-export type SessionsHandlerData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule
-         */
-        id: string;
-    };
-    query: {
-        limit: number;
-    };
-    url: '/schedule/{id}/sessions';
-};
-
-export type SessionsHandlerErrors = {
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type SessionsHandlerResponses = {
-    /**
-     * A list of session display info
-     */
-    200: Array<SessionDisplayInfo>;
-};
-
-export type SessionsHandlerResponse = SessionsHandlerResponses[keyof SessionsHandlerResponses];
-
-export type UnpauseScheduleData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule to unpause
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}/unpause';
-};
-
-export type UnpauseScheduleErrors = {
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type UnpauseScheduleResponses = {
-    /**
-     * Scheduled job unpaused successfully
-     */
-    204: void;
-};
-
-export type UnpauseScheduleResponse = UnpauseScheduleResponses[keyof UnpauseScheduleResponses];
 
 export type ListSessionsData = {
     body?: never;
@@ -3418,327 +2953,6 @@ export type ExportSessionResponses = {
 };
 
 export type ExportSessionResponse = ExportSessionResponses[keyof ExportSessionResponses];
-
-export type GetMemoryCandidatesData = {
-    body?: never;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: {
-        decision?: string | null;
-        limit?: number | null;
-    };
-    url: '/sessions/{session_id}/memory/candidates';
-};
-
-export type GetMemoryCandidatesErrors = {
-    /**
-     * Bad request - Invalid query
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type GetMemoryCandidatesResponses = {
-    /**
-     * Memory candidates retrieved successfully
-     */
-    200: Array<MemoryCandidate>;
-};
-
-export type GetMemoryCandidatesResponse = GetMemoryCandidatesResponses[keyof GetMemoryCandidatesResponses];
-
-export type GetMemoryFactsData = {
-    body?: never;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/facts';
-};
-
-export type GetMemoryFactsErrors = {
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type GetMemoryFactsResponses = {
-    /**
-     * Memory facts retrieved successfully
-     */
-    200: Array<MemoryFact>;
-};
-
-export type GetMemoryFactsResponse = GetMemoryFactsResponses[keyof GetMemoryFactsResponses];
-
-export type CreateMemoryFactData = {
-    body: CreateMemoryFactRequest;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/facts';
-};
-
-export type CreateMemoryFactErrors = {
-    /**
-     * Bad request - Invalid memory fact payload
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type CreateMemoryFactResponses = {
-    /**
-     * Memory fact created successfully
-     */
-    200: MemoryFact;
-};
-
-export type CreateMemoryFactResponse = CreateMemoryFactResponses[keyof CreateMemoryFactResponses];
-
-export type UpdateMemoryFactData = {
-    body: MemoryFactPatch;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-        /**
-         * Unique identifier for the memory fact
-         */
-        fact_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/facts/{fact_id}';
-};
-
-export type UpdateMemoryFactErrors = {
-    /**
-     * Bad request - Invalid memory fact payload
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session or memory fact not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type UpdateMemoryFactResponses = {
-    /**
-     * Memory fact updated successfully
-     */
-    200: MemoryFact;
-};
-
-export type UpdateMemoryFactResponse = UpdateMemoryFactResponses[keyof UpdateMemoryFactResponses];
-
-export type RenameMemoryPathsData = {
-    body: RenameMemoryPathRequest;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/path-rename';
-};
-
-export type RenameMemoryPathsErrors = {
-    /**
-     * Bad request - Invalid rename payload
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type RenameMemoryPathsResponses = {
-    /**
-     * Memory path rename completed
-     */
-    200: RenameMemoryPathResponse;
-};
-
-export type RenameMemoryPathsResponse = RenameMemoryPathsResponses[keyof RenameMemoryPathsResponses];
-
-export type RollbackMemorySnapshotData = {
-    body: RollbackMemorySnapshotRequest;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/rollback';
-};
-
-export type RollbackMemorySnapshotErrors = {
-    /**
-     * Bad request - Invalid rollback payload
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session or snapshot not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type RollbackMemorySnapshotResponses = {
-    /**
-     * Memory snapshot rollback completed
-     */
-    200: RollbackMemorySnapshotResponse;
-};
-
-export type RollbackMemorySnapshotResponse2 = RollbackMemorySnapshotResponses[keyof RollbackMemorySnapshotResponses];
-
-export type GetMemorySnapshotsData = {
-    body?: never;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/snapshots';
-};
-
-export type GetMemorySnapshotsErrors = {
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type GetMemorySnapshotsResponses = {
-    /**
-     * Memory snapshots retrieved successfully
-     */
-    200: Array<MemorySnapshotRecord>;
-};
-
-export type GetMemorySnapshotsResponse = GetMemorySnapshotsResponses[keyof GetMemorySnapshotsResponses];
-
-export type GetMemoryToolGatesData = {
-    body?: never;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: {
-        limit?: number | null;
-    };
-    url: '/sessions/{session_id}/memory/tool-gates';
-};
-
-export type GetMemoryToolGatesErrors = {
-    /**
-     * Bad request - Invalid query
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type GetMemoryToolGatesResponses = {
-    /**
-     * CFPM tool gate events retrieved successfully
-     */
-    200: Array<CfpmToolGateEventRecord>;
-};
-
-export type GetMemoryToolGatesResponse = GetMemoryToolGatesResponses[keyof GetMemoryToolGatesResponses];
 
 export type UpdateSessionMetadataData = {
     body: UpdateSessionMetadataRequest;

@@ -1543,7 +1543,9 @@ fn is_supported_inline_image_mime(mime_type: &str) -> bool {
 
 fn document_tool_inline_image_content(value: &serde_json::Value) -> Option<Content> {
     match value.get("type").and_then(|item| item.as_str()) {
-        Some("document_access") | Some("workspace_export") | Some("binary_export")
+        Some("document_access")
+        | Some("workspace_export")
+        | Some("binary_export")
         | Some("document_access_redirect") => {}
         _ => return None,
     }
@@ -3033,7 +3035,9 @@ mod tests {
         assert_eq!(result.content.len(), 2);
         let rendered = result.content[0].as_text().unwrap().text.clone();
         assert!(rendered.contains("multimodal inspection"));
-        let image = result.content[1].as_image().expect("expected image content");
+        let image = result.content[1]
+            .as_image()
+            .expect("expected image content");
         assert_eq!(image.mime_type, "image/png");
         assert_eq!(image.data, base64::prelude::BASE64_STANDARD.encode(bytes));
     }

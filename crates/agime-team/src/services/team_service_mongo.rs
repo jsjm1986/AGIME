@@ -200,7 +200,7 @@ impl TeamService {
         let now = bson::DateTime::from_chrono(Utc::now());
 
         while let Some(team) = cursor.try_next().await? {
-            let Some(team_id) = team.id.clone() else {
+            let Some(team_id) = team.id else {
                 continue;
             };
 
@@ -503,6 +503,7 @@ impl TeamService {
     }
 
     /// Create a new invite
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_invite(
         &self,
         team_id: &str,

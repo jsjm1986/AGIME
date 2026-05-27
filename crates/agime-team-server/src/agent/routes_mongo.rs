@@ -758,15 +758,14 @@ async fn submit_task(
         match service.approve_task(&task_id, &user.user_id).await {
             Ok(Some(approved_task)) => {
                 tracing::info!("Auto-approved chat task {} for agent", task_id);
-                if let Err(error) =
-                    execution_admission::admit_or_queue_task(
-                        &db,
-                        &service,
-                        &task_manager,
-                        &workspace_root,
-                        &task_id,
-                    )
-                    .await
+                if let Err(error) = execution_admission::admit_or_queue_task(
+                    &db,
+                    &service,
+                    &task_manager,
+                    &workspace_root,
+                    &task_id,
+                )
+                .await
                 {
                     tracing::error!("Failed to admit auto-approved task {}: {}", task_id, error);
                 }
@@ -861,14 +860,8 @@ async fn approve_task(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     if let Err(error) =
-        execution_admission::admit_or_queue_task(
-            &db,
-            &service,
-            &task_manager,
-            &workspace_root,
-            &id,
-        )
-        .await
+        execution_admission::admit_or_queue_task(&db, &service, &task_manager, &workspace_root, &id)
+            .await
     {
         tracing::error!("Failed to admit approved task {}: {}", id, error);
         return Err(StatusCode::INTERNAL_SERVER_ERROR);

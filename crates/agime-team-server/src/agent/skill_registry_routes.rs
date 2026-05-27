@@ -187,12 +187,10 @@ fn registry_provider(
     actor_can_manage_team: bool,
 ) -> Result<SkillRegistryToolsProvider, Response> {
     let db = state.require_mongodb()?;
-    Ok(SkillRegistryToolsProvider::new(
-        db,
-        team_id.to_string(),
-        actor_id.to_string(),
+    Ok(
+        SkillRegistryToolsProvider::new(db, team_id.to_string(), actor_id.to_string())
+            .with_actor_can_manage_team(actor_can_manage_team),
     )
-    .with_actor_can_manage_team(actor_can_manage_team))
 }
 
 async fn search_registry(

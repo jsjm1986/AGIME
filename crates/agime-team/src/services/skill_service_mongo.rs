@@ -340,7 +340,10 @@ impl SkillService {
         note: Option<String>,
     ) -> Result<Skill> {
         let normalized = status.trim().to_ascii_lowercase();
-        if !matches!(normalized.as_str(), "approved" | "rejected" | "pending_review") {
+        if !matches!(
+            normalized.as_str(),
+            "approved" | "rejected" | "pending_review"
+        ) {
             return Err(anyhow!("Invalid skill review status: {}", status));
         }
         let oid = ObjectId::parse_str(skill_id)?;
@@ -351,10 +354,7 @@ impl SkillService {
             "reviewed_at": bson::DateTime::from_chrono(Utc::now()),
             "updated_at": bson::DateTime::from_chrono(Utc::now()),
         };
-        set_doc.insert(
-            "review_note",
-            note.map(Bson::String).unwrap_or(Bson::Null),
-        );
+        set_doc.insert("review_note", note.map(Bson::String).unwrap_or(Bson::Null));
         coll.update_one(
             doc! { "_id": oid, "is_deleted": { "$ne": true } },
             doc! { "$set": set_doc },

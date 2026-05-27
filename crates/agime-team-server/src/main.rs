@@ -682,9 +682,7 @@ fn build_router(state: Arc<AppState>) -> Router {
                 let startup_task_manager = agent::create_task_manager();
                 let startup_workspace_root = state.config.workspace_root.clone();
                 tokio::spawn(async move {
-                    let svc = Arc::new(agent::service_mongo::AgentService::new(
-                        startup_db.clone(),
-                    ));
+                    let svc = Arc::new(agent::service_mongo::AgentService::new(startup_db.clone()));
                     match svc
                         .reset_stuck_processing(std::time::Duration::from_secs(0))
                         .await

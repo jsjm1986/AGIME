@@ -21,6 +21,7 @@ regex = "1"
 agime-team = { path = "../agime-team" }
 agime = { path = "../agime", default-features = false, features = ["team"] }
 agime-mcp = { path = "../agime-mcp" }
+agime-runtime = { path = "../agime-runtime" }
 
 # CLI argument parsing
 clap = { version = "4", features = ["derive", "env"] }

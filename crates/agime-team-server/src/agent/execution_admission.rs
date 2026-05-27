@@ -1,7 +1,23 @@
+//! Execution-admission control (team-server side).
+//!
+//! Wraps the generic [`agime_runtime::execution_admission`] flow with adapters
+//! around `AgentService`, `ChatChannelService`, the Mongo task collection and
+//! `TaskManager` so existing call sites keep their `(&Arc<MongoDb>,
+//! &Arc<AgentService>, &Arc<TaskManager>, &str, &str)` signatures unchanged.
+
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use serde_json::Value;
+
+use agime_runtime::admission::{
+    ExecutionSlotAcquireOutcome as RtExecutionSlotAcquireOutcome, ExecutionSlotProvider,
+};
+use agime_runtime::execution_admission::{
+    self, QueuedTaskBroadcaster, QueuedTaskRef, TaskQueueRepository, TaskRuntimeSpawner,
+    TaskSurfacePropagator,
+};
 
 use super::agent_task_v4_runner::AgentTaskV4Runner;
 use super::chat_channels::ChatChannelService;
@@ -10,10 +26,153 @@ use super::task_manager::{StreamEvent, TaskManager};
 use agime_team::models::AgentTask;
 use agime_team::MongoDb;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskAdmissionOutcome {
-    Started,
-    Queued,
+pub use agime_runtime::execution_admission::TaskAdmissionOutcome;
+
+struct AgentServiceSlotAdapter<'a> {
+    agent_service: &'a AgentService,
+}
+
+#[async_trait]
+impl<'a> ExecutionSlotProvider for AgentServiceSlotAdapter<'a> {
+    async fn try_acquire_execution_slot(
+        &self,
+        agent_id: &str,
+    ) -> Result<RtExecutionSlotAcquireOutcome> {
+        match self
+            .agent_service
+            .try_acquire_execution_slot(agent_id)
+            .await
+            .map_err(|error| anyhow!("{}", error))?
+        {
+            ExecutionSlotAcquireOutcome::Acquired => Ok(RtExecutionSlotAcquireOutcome::Acquired),
+            ExecutionSlotAcquireOutcome::Saturated => Ok(RtExecutionSlotAcquireOutcome::Saturated),
+        }
+    }
+
+    async fn release_execution_slot(&self, agent_id: &str) -> Result<()> {
+        self.agent_service
+            .release_execution_slot(agent_id)
+            .await
+            .map_err(|error| anyhow!("{}", error))
+    }
+}
+
+struct AgentServiceQueueAdapter<'a> {
+    agent_service: &'a AgentService,
+}
+
+fn task_to_ref(task: &AgentTask) -> QueuedTaskRef {
+    QueuedTaskRef {
+        task_id: task.id.clone(),
+        agent_id: task.agent_id.clone(),
+    }
+}
+
+#[async_trait]
+impl<'a> TaskQueueRepository for AgentServiceQueueAdapter<'a> {
+    async fn get_task_ref(&self, task_id: &str) -> Result<Option<QueuedTaskRef>> {
+        Ok(self
+            .agent_service
+            .get_task(task_id)
+            .await?
+            .as_ref()
+            .map(task_to_ref))
+    }
+
+    async fn mark_task_queued(&self, task_id: &str) -> Result<Option<QueuedTaskRef>> {
+        Ok(self
+            .agent_service
+            .mark_task_queued(task_id)
+            .await?
+            .as_ref()
+            .map(task_to_ref))
+    }
+
+    async fn claim_next_queued_task_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<Option<QueuedTaskRef>> {
+        Ok(self
+            .agent_service
+            .claim_next_queued_task_for_agent(agent_id)
+            .await?
+            .as_ref()
+            .map(task_to_ref))
+    }
+
+    async fn list_agents_with_queued_tasks(&self) -> Result<Vec<String>> {
+        Ok(self
+            .agent_service
+            .list_agents_with_queued_tasks()
+            .await
+            .map_err(|error| anyhow!("{}", error))?)
+    }
+}
+
+struct SurfacePropagatorAdapter<'a> {
+    db: &'a Arc<MongoDb>,
+    agent_service: &'a Arc<AgentService>,
+}
+
+impl<'a> SurfacePropagatorAdapter<'a> {
+    async fn propagate(&self, task_id: &str, status: &str) {
+        let Ok(Some(task)) = self.agent_service.get_task(task_id).await else {
+            return;
+        };
+        apply_task_surface_state(self.db, self.agent_service, &task, status).await;
+    }
+}
+
+#[async_trait]
+impl<'a> TaskSurfacePropagator for SurfacePropagatorAdapter<'a> {
+    async fn apply_task_surface_state(&self, task_id: &str, status: &str) {
+        self.propagate(task_id, status).await;
+    }
+}
+
+struct QueuedBroadcasterAdapter<'a> {
+    task_manager: &'a TaskManager,
+}
+
+#[async_trait]
+impl<'a> QueuedTaskBroadcaster for QueuedBroadcasterAdapter<'a> {
+    async fn broadcast_queued(&self, task_id: &str) {
+        self.task_manager
+            .broadcast(
+                task_id,
+                StreamEvent::Status {
+                    status: "queued".to_string(),
+                },
+            )
+            .await;
+    }
+}
+
+struct AgentTaskSpawnerAdapter {
+    db: Arc<MongoDb>,
+    agent_service: Arc<AgentService>,
+    task_manager: Arc<TaskManager>,
+    workspace_root: String,
+}
+
+#[async_trait]
+impl TaskRuntimeSpawner for AgentTaskSpawnerAdapter {
+    async fn spawn_task_runner(&self, task: QueuedTaskRef) {
+        let Ok(Some(full_task)) = self.agent_service.get_task(&task.task_id).await else {
+            tracing::warn!(
+                "spawn_task_runner: task {} disappeared before spawn",
+                task.task_id
+            );
+            return;
+        };
+        spawn_task_runner(
+            self.db.clone(),
+            self.agent_service.clone(),
+            self.task_manager.clone(),
+            self.workspace_root.clone(),
+            full_task,
+        );
+    }
 }
 
 pub async fn admit_or_queue_task(
@@ -23,42 +182,25 @@ pub async fn admit_or_queue_task(
     workspace_root: &str,
     task_id: &str,
 ) -> Result<TaskAdmissionOutcome> {
-    let task = agent_service
-        .get_task(task_id)
-        .await?
-        .ok_or_else(|| anyhow!("Task {} not found", task_id))?;
-
-    match agent_service
-        .try_acquire_execution_slot(&task.agent_id)
-        .await?
-    {
-        ExecutionSlotAcquireOutcome::Acquired => {
-            spawn_task_runner(
-                db.clone(),
-                agent_service.clone(),
-                task_manager.clone(),
-                workspace_root.to_string(),
-                task,
-            );
-            Ok(TaskAdmissionOutcome::Started)
-        }
-        ExecutionSlotAcquireOutcome::Saturated => {
-            let task = agent_service
-                .mark_task_queued(task_id)
-                .await?
-                .ok_or_else(|| anyhow!("Task {} cannot be queued", task_id))?;
-            apply_task_surface_state(db, agent_service, &task, "queued").await;
-            task_manager
-                .broadcast(
-                    task_id,
-                    StreamEvent::Status {
-                        status: "queued".to_string(),
-                    },
-                )
-                .await;
-            Ok(TaskAdmissionOutcome::Queued)
-        }
-    }
+    let slots = AgentServiceSlotAdapter { agent_service };
+    let queue = AgentServiceQueueAdapter { agent_service };
+    let propagator = SurfacePropagatorAdapter { db, agent_service };
+    let broadcaster = QueuedBroadcasterAdapter { task_manager };
+    let spawner = AgentTaskSpawnerAdapter {
+        db: db.clone(),
+        agent_service: agent_service.clone(),
+        task_manager: task_manager.clone(),
+        workspace_root: workspace_root.to_string(),
+    };
+    execution_admission::admit_or_queue_task(
+        &slots,
+        &queue,
+        &propagator,
+        &broadcaster,
+        &spawner,
+        task_id,
+    )
+    .await
 }
 
 pub async fn start_next_queued_tasks_for_agent(
@@ -68,30 +210,15 @@ pub async fn start_next_queued_tasks_for_agent(
     workspace_root: &str,
     agent_id: &str,
 ) -> Result<()> {
-    loop {
-        match agent_service.try_acquire_execution_slot(agent_id).await? {
-            ExecutionSlotAcquireOutcome::Saturated => break,
-            ExecutionSlotAcquireOutcome::Acquired => {}
-        }
-
-        let Some(task) = agent_service
-            .claim_next_queued_task_for_agent(agent_id)
-            .await?
-        else {
-            agent_service.release_execution_slot(agent_id).await?;
-            break;
-        };
-
-        spawn_task_runner(
-            db.clone(),
-            agent_service.clone(),
-            task_manager.clone(),
-            workspace_root.to_string(),
-            task,
-        );
-    }
-
-    Ok(())
+    let slots = AgentServiceSlotAdapter { agent_service };
+    let queue = AgentServiceQueueAdapter { agent_service };
+    let spawner = AgentTaskSpawnerAdapter {
+        db: db.clone(),
+        agent_service: agent_service.clone(),
+        task_manager: task_manager.clone(),
+        workspace_root: workspace_root.to_string(),
+    };
+    execution_admission::start_next_queued_tasks_for_agent(&slots, &queue, &spawner, agent_id).await
 }
 
 pub async fn resume_queued_tasks(
@@ -100,26 +227,15 @@ pub async fn resume_queued_tasks(
     task_manager: &Arc<TaskManager>,
     workspace_root: &str,
 ) -> Result<usize> {
-    let agent_ids = agent_service.list_agents_with_queued_tasks().await?;
-    let count = agent_ids.len();
-    for agent_id in agent_ids {
-        if let Err(error) = start_next_queued_tasks_for_agent(
-            db,
-            agent_service,
-            task_manager,
-            workspace_root,
-            &agent_id,
-        )
-        .await
-        {
-            tracing::warn!(
-                "Failed to resume queued AgentTask work for agent {}: {}",
-                agent_id,
-                error
-            );
-        }
-    }
-    Ok(count)
+    let slots = AgentServiceSlotAdapter { agent_service };
+    let queue = AgentServiceQueueAdapter { agent_service };
+    let spawner = AgentTaskSpawnerAdapter {
+        db: db.clone(),
+        agent_service: agent_service.clone(),
+        task_manager: task_manager.clone(),
+        workspace_root: workspace_root.to_string(),
+    };
+    execution_admission::resume_queued_tasks(&slots, &queue, &spawner).await
 }
 
 fn spawn_task_runner(

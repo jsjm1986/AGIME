@@ -5,9 +5,10 @@
 
 use std::sync::Arc;
 
-use agime::agents::types::RetryConfig;
 use agime::context_runtime::ContextRuntimeState;
-use agime::conversation::message::Message;
+use agime_runtime::agent_task_payload::{
+    direct_host_timeout_secs, is_success_status, parse_task_payload, ParsedTaskPayload,
+};
 use agime_team::models::{AgentTask, TaskResultType, TaskStatus};
 use agime_team::MongoDb;
 use anyhow::{anyhow, Result};
@@ -26,23 +27,6 @@ pub struct AgentTaskV4Runner {
     agent_service: Arc<AgentService>,
     task_manager: Arc<TaskManager>,
     workspace_root: String,
-}
-
-#[derive(Debug)]
-struct ParsedTaskPayload {
-    prior_messages: Vec<Message>,
-    user_message: String,
-    turn_system_instruction: Option<String>,
-    workspace_path: Option<String>,
-    target_artifacts: Vec<String>,
-    result_contract: Vec<String>,
-    allowed_extensions: Option<Vec<String>>,
-    allowed_skill_ids: Option<Vec<String>>,
-    attached_document_ids: Vec<String>,
-    llm_overrides: Option<Value>,
-    retry_config: Option<RetryConfig>,
-    max_turns: Option<i32>,
-    validation_mode: bool,
 }
 
 impl AgentTaskV4Runner {
@@ -463,165 +447,4 @@ impl AgentTaskV4Runner {
             .flatten()
             .is_some_and(|task| matches!(task.status, TaskStatus::Cancelled))
     }
-}
-
-fn direct_host_timeout_secs() -> u64 {
-    std::env::var("TEAM_DIRECT_HOST_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(600)
-}
-
-fn is_success_status(status: &str) -> bool {
-    status.eq_ignore_ascii_case("completed")
-        || status.eq_ignore_ascii_case("completed_with_warnings")
-}
-
-fn parse_task_payload(content: &Value) -> Result<ParsedTaskPayload> {
-    let raw_messages = content
-        .get("messages")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("Invalid AgentTask content: missing messages"))?;
-    let (prior_messages, user_message) = parse_messages(raw_messages)?;
-
-    Ok(ParsedTaskPayload {
-        prior_messages,
-        user_message,
-        turn_system_instruction: string_field(
-            content,
-            &["turn_system_instruction", "turnSystemInstruction"],
-        ),
-        workspace_path: string_field(content, &["workspace_path", "workspacePath"]),
-        target_artifacts: string_array_field(content, &["target_artifacts", "targetArtifacts"]),
-        result_contract: string_array_field(content, &["result_contract", "resultContract"]),
-        allowed_extensions: optional_string_array_field(
-            content,
-            &["allowed_extensions", "allowedExtensions"],
-        ),
-        allowed_skill_ids: optional_string_array_field(
-            content,
-            &["allowed_skill_ids", "allowedSkillIds"],
-        ),
-        attached_document_ids: string_array_field(
-            content,
-            &[
-                "attached_document_ids",
-                "attachedDocumentIds",
-                "document_ids",
-                "documentIds",
-            ],
-        ),
-        llm_overrides: content
-            .get("llm_overrides")
-            .or_else(|| content.get("llmOverrides"))
-            .cloned(),
-        retry_config: content
-            .get("retry_config")
-            .or_else(|| content.get("retryConfig"))
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
-        max_turns: content
-            .get("max_turns")
-            .or_else(|| content.get("maxTurns"))
-            .and_then(Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok())
-            .filter(|value| *value > 0),
-        validation_mode: content
-            .get("validation_mode")
-            .or_else(|| content.get("validationMode"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    })
-}
-
-fn parse_messages(raw_messages: &[Value]) -> Result<(Vec<Message>, String)> {
-    let parsed = raw_messages
-        .iter()
-        .filter_map(|value| {
-            let role = value
-                .get("role")
-                .and_then(Value::as_str)
-                .unwrap_or("user")
-                .trim()
-                .to_ascii_lowercase();
-            let text = extract_message_text(value.get("content")?)?;
-            (!text.trim().is_empty()).then_some((role, text))
-        })
-        .collect::<Vec<_>>();
-
-    let Some(last_user_index) = parsed
-        .iter()
-        .rposition(|(role, _)| role.eq_ignore_ascii_case("user"))
-        .or_else(|| parsed.len().checked_sub(1))
-    else {
-        return Err(anyhow!(
-            "Invalid AgentTask content: messages contain no text"
-        ));
-    };
-
-    let user_message = parsed[last_user_index].1.clone();
-    let prior_messages = parsed[..last_user_index]
-        .iter()
-        .filter_map(|(role, text)| match role.as_str() {
-            "user" => Some(Message::user().with_text(text.clone())),
-            "assistant" => Some(Message::assistant().with_text(text.clone())),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    Ok((prior_messages, user_message))
-}
-
-fn extract_message_text(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) => Some(text.clone()),
-        Value::Array(items) => {
-            let text = items
-                .iter()
-                .filter_map(|item| {
-                    item.get("text")
-                        .and_then(Value::as_str)
-                        .or_else(|| item.get("content").and_then(Value::as_str))
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            (!text.trim().is_empty()).then_some(text)
-        }
-        Value::Object(map) => map.get("text").and_then(Value::as_str).map(str::to_string),
-        _ => None,
-    }
-}
-
-fn string_field(content: &Value, names: &[&str]) -> Option<String> {
-    names.iter().find_map(|name| {
-        content
-            .get(*name)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    })
-}
-
-fn optional_string_array_field(content: &Value, names: &[&str]) -> Option<Vec<String>> {
-    let values = string_array_field(content, names);
-    (!values.is_empty()).then_some(values)
-}
-
-fn string_array_field(content: &Value, names: &[&str]) -> Vec<String> {
-    names
-        .iter()
-        .find_map(|name| content.get(*name).and_then(Value::as_array))
-        .map(|items| {
-            let mut values = items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>();
-            values.sort();
-            values.dedup();
-            values
-        })
-        .unwrap_or_default()
 }

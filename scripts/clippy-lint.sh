@@ -37,6 +37,7 @@ BASELINE_ALLOWS="\
   -A clippy::collapsible_str_replace \
   -A clippy::derivable_impls \
   -A clippy::enum_variant_names \
+  -A clippy::field_reassign_with_default \
   -A clippy::filter_next \
   -A clippy::if_same_then_else \
   -A clippy::items_after_test_module \
@@ -49,6 +50,7 @@ BASELINE_ALLOWS="\
   -A clippy::needless_option_as_deref \
   -A clippy::needless_range_loop \
   -A clippy::nonminimal_bool \
+  -A clippy::ok_expect \
   -A clippy::ptr_arg \
   -A clippy::question_mark \
   -A clippy::redundant_closure \

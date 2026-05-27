@@ -210,13 +210,6 @@ export type Content = RawTextContent | RawImageContent | RawEmbeddedResource | R
 
 export type Conversation = Array<Message>;
 
-export type CreateMemoryFactRequest = {
-    category: string;
-    content: string;
-    pinned?: boolean | null;
-    source?: string | null;
-};
-
 export type CreateRecipeRequest = {
     author?: AuthorRequest | null;
     session_id: string;
@@ -566,31 +559,6 @@ export type MemoryCandidate = {
     sessionId: string;
     source: string;
 };
-
-export type MemoryFact = {
-    category: string;
-    confidence?: number;
-    content: string;
-    createdAt: string;
-    evidenceCount?: number;
-    id: string;
-    lastValidatedAt?: string | null;
-    pinned: boolean;
-    sessionId: string;
-    source: string;
-    status: MemoryFactStatus;
-    updatedAt: string;
-    validationCommand?: string | null;
-};
-
-export type MemoryFactPatch = {
-    category?: string | null;
-    content?: string | null;
-    pinned?: boolean | null;
-    status?: MemoryFactStatus | null;
-};
-
-export type MemoryFactStatus = 'active' | 'stale' | 'forgotten' | 'superseded';
 
 export type MemorySnapshotRecord = {
     createdAt: string;
@@ -3461,126 +3429,6 @@ export type GetMemoryCandidatesResponses = {
 };
 
 export type GetMemoryCandidatesResponse = GetMemoryCandidatesResponses[keyof GetMemoryCandidatesResponses];
-
-export type GetMemoryFactsData = {
-    body?: never;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/facts';
-};
-
-export type GetMemoryFactsErrors = {
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type GetMemoryFactsResponses = {
-    /**
-     * Memory facts retrieved successfully
-     */
-    200: Array<MemoryFact>;
-};
-
-export type GetMemoryFactsResponse = GetMemoryFactsResponses[keyof GetMemoryFactsResponses];
-
-export type CreateMemoryFactData = {
-    body: CreateMemoryFactRequest;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/facts';
-};
-
-export type CreateMemoryFactErrors = {
-    /**
-     * Bad request - Invalid memory fact payload
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type CreateMemoryFactResponses = {
-    /**
-     * Memory fact created successfully
-     */
-    200: MemoryFact;
-};
-
-export type CreateMemoryFactResponse = CreateMemoryFactResponses[keyof CreateMemoryFactResponses];
-
-export type UpdateMemoryFactData = {
-    body: MemoryFactPatch;
-    path: {
-        /**
-         * Unique identifier for the session
-         */
-        session_id: string;
-        /**
-         * Unique identifier for the memory fact
-         */
-        fact_id: string;
-    };
-    query?: never;
-    url: '/sessions/{session_id}/memory/facts/{fact_id}';
-};
-
-export type UpdateMemoryFactErrors = {
-    /**
-     * Bad request - Invalid memory fact payload
-     */
-    400: unknown;
-    /**
-     * Unauthorized - Invalid or missing API key
-     */
-    401: unknown;
-    /**
-     * Session or memory fact not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type UpdateMemoryFactResponses = {
-    /**
-     * Memory fact updated successfully
-     */
-    200: MemoryFact;
-};
-
-export type UpdateMemoryFactResponse = UpdateMemoryFactResponses[keyof UpdateMemoryFactResponses];
 
 export type RenameMemoryPathsData = {
     body: RenameMemoryPathRequest;

@@ -53,6 +53,8 @@ export type AuthorRequest = {
     metadata?: string | null;
 };
 
+export type CacheEditMode = 'auto' | 'off' | 'prefer';
+
 export type CallToolRequest = {
     arguments: unknown;
     name: string;
@@ -588,11 +590,19 @@ export type MessageMetadata = {
 };
 
 export type ModelConfig = {
+    auto_compact_threshold?: number | null;
+    cache_edit_mode?: CacheEditMode;
     context_limit?: number | null;
     fast_model?: string | null;
     max_tokens?: number | null;
     model_name: string;
+    output_reserve_tokens?: number | null;
+    prompt_caching_mode?: PromptCachingMode;
+    reasoning_effort?: string | null;
+    supports_multimodal?: boolean;
     temperature?: number | null;
+    thinking_budget?: number | null;
+    thinking_enabled?: boolean | null;
     toolshim: boolean;
     toolshim_model?: string | null;
 };
@@ -678,6 +688,8 @@ export type PricingResponse = {
 };
 
 export type PrincipalType = 'Extension' | 'Tool';
+
+export type PromptCachingMode = 'auto' | 'off' | 'prefer';
 
 export type PromptResponse = {
     content: string;
@@ -812,7 +824,6 @@ export type RecipeManifest = {
     id: string;
     last_modified: string;
     recipe: Recipe;
-    schedule_cron?: string | null;
     slash_command?: string | null;
 };
 
@@ -1042,7 +1053,7 @@ export type SystemNotificationContent = {
     notificationType: SystemNotificationType;
 };
 
-export type SystemNotificationType = 'thinkingMessage' | 'inlineMessage';
+export type SystemNotificationType = 'thinkingMessage' | 'inlineMessage' | 'runtimeNotificationAttachment';
 
 export type TaskSupport = string;
 

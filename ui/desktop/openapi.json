@@ -2646,6 +2646,14 @@
           }
         }
       },
+      "CacheEditMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "off",
+          "prefer"
+        ]
+      },
       "CallToolRequest": {
         "type": "object",
         "required": [
@@ -4240,6 +4248,14 @@
           "toolshim"
         ],
         "properties": {
+          "auto_compact_threshold": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "cache_edit_mode": {
+            "$ref": "#/components/schemas/CacheEditMode"
+          },
           "context_limit": {
             "type": "integer",
             "nullable": true,
@@ -4257,9 +4273,34 @@
           "model_name": {
             "type": "string"
           },
+          "output_reserve_tokens": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          },
+          "prompt_caching_mode": {
+            "$ref": "#/components/schemas/PromptCachingMode"
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "nullable": true
+          },
+          "supports_multimodal": {
+            "type": "boolean"
+          },
           "temperature": {
             "type": "number",
             "format": "float",
+            "nullable": true
+          },
+          "thinking_budget": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "minimum": 0
+          },
+          "thinking_enabled": {
+            "type": "boolean",
             "nullable": true
           },
           "toolshim": {
@@ -4443,6 +4484,14 @@
         "enum": [
           "Extension",
           "Tool"
+        ]
+      },
+      "PromptCachingMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "off",
+          "prefer"
         ]
       },
       "PromptResponse": {
@@ -4828,10 +4877,6 @@
           },
           "recipe": {
             "$ref": "#/components/schemas/Recipe"
-          },
-          "schedule_cron": {
-            "type": "string",
-            "nullable": true
           },
           "slash_command": {
             "type": "string",
@@ -5498,7 +5543,8 @@
         "type": "string",
         "enum": [
           "thinkingMessage",
-          "inlineMessage"
+          "inlineMessage",
+          "runtimeNotificationAttachment"
         ]
       },
       "TaskSupport": {

@@ -152,6 +152,16 @@ pub fn get_model_limit_hints() -> Vec<ModelLimitConfig> {
     with_registry(|r| r.get_model_limit_hints())
 }
 
+/// Get the list of model patterns that support thinking mode.
+pub fn get_thinking_models() -> Vec<String> {
+    with_registry(|r| r.get_thinking_model_patterns())
+}
+
+/// Get the list of model patterns that support reasoning effort.
+pub fn get_reasoning_models() -> Vec<String> {
+    with_registry(|r| r.get_reasoning_model_patterns())
+}
+
 /// Reload capability configuration.
 ///
 /// This clears the cache and reloads capabilities from file (or bundled) and user overrides.

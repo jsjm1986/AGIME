@@ -209,12 +209,6 @@ export type CreateRecipeResponse = {
     recipe?: Recipe | null;
 };
 
-export type CreateScheduleRequest = {
-    cron: string;
-    id: string;
-    recipe_source: string;
-};
-
 export type DeclarativeProviderConfig = {
     api_key_env: string;
     base_url: string;
@@ -452,26 +446,12 @@ export type ImportSessionRequest = {
     json: string;
 };
 
-export type InspectJobResponse = {
-    processStartTime?: string | null;
-    runningDurationSeconds?: number | null;
-    sessionId?: string | null;
-};
-
 export type JsonObject = {
     [key: string]: unknown;
 };
 
-export type KillJobResponse = {
-    message: string;
-};
-
 export type ListRecipeResponse = {
     manifests: Array<RecipeManifest>;
-};
-
-export type ListSchedulesResponse = {
-    jobs: Array<ScheduledJob>;
 };
 
 /**
@@ -911,10 +891,6 @@ export type RetryConfig = {
 
 export type Role = string;
 
-export type RunNowResponse = {
-    session_id: string;
-};
-
 export type SaveRecipeRequest = {
     id?: string | null;
     recipe: Recipe;
@@ -930,22 +906,6 @@ export type ScanRecipeRequest = {
 
 export type ScanRecipeResponse = {
     has_security_warnings: boolean;
-};
-
-export type ScheduleRecipeRequest = {
-    cron_schedule?: string | null;
-    id: string;
-};
-
-export type ScheduledJob = {
-    cron: string;
-    current_session_id?: string | null;
-    currently_running?: boolean;
-    id: string;
-    last_run?: string | null;
-    paused?: boolean;
-    process_start_time?: string | null;
-    source: string;
 };
 
 export type Session = {
@@ -974,21 +934,6 @@ export type Session = {
     working_dir: string;
 };
 
-export type SessionDisplayInfo = {
-    accumulatedInputTokens?: number | null;
-    accumulatedOutputTokens?: number | null;
-    accumulatedTotalTokens?: number | null;
-    createdAt: string;
-    id: string;
-    inputTokens?: number | null;
-    messageCount: number;
-    name: string;
-    outputTokens?: number | null;
-    scheduleId?: string | null;
-    totalTokens?: number | null;
-    workingDir: string;
-};
-
 export type SessionInsights = {
     totalSessions: number;
     totalTokens: number;
@@ -1013,10 +958,6 @@ export type SessionMetadataResponse = {
 };
 
 export type SessionType = 'user' | 'scheduled' | 'sub_agent' | 'hidden' | 'terminal';
-
-export type SessionsQuery = {
-    limit: number;
-};
 
 export type SetCustomPromptRequest = {
     content: string;
@@ -1240,10 +1181,6 @@ export type UpdateProviderRequest = {
 
 export type UpdateRouterToolSelectorRequest = {
     session_id: string;
-};
-
-export type UpdateScheduleRequest = {
-    cron: string;
 };
 
 export type UpdateSessionMetadataRequest = {
@@ -2651,31 +2588,6 @@ export type ScanRecipeResponses = {
 
 export type ScanRecipeResponse2 = ScanRecipeResponses[keyof ScanRecipeResponses];
 
-export type ScheduleRecipeData = {
-    body: ScheduleRecipeRequest;
-    path?: never;
-    query?: never;
-    url: '/recipes/schedule';
-};
-
-export type ScheduleRecipeErrors = {
-    /**
-     * Recipe not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type ScheduleRecipeResponses = {
-    /**
-     * Recipe scheduled successfully
-     */
-    200: unknown;
-};
-
 export type SetRecipeSlashCommandData = {
     body: SetSlashCommandRequest;
     path?: never;
@@ -2727,306 +2639,6 @@ export type ReplyResponses = {
 };
 
 export type ReplyResponse = ReplyResponses[keyof ReplyResponses];
-
-export type CreateScheduleData = {
-    body: CreateScheduleRequest;
-    path?: never;
-    query?: never;
-    url: '/schedule/create';
-};
-
-export type CreateScheduleErrors = {
-    /**
-     * Invalid cron expression or recipe file
-     */
-    400: unknown;
-    /**
-     * Job ID already exists
-     */
-    409: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type CreateScheduleResponses = {
-    /**
-     * Scheduled job created successfully
-     */
-    200: ScheduledJob;
-};
-
-export type CreateScheduleResponse = CreateScheduleResponses[keyof CreateScheduleResponses];
-
-export type DeleteScheduleData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule to delete
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/delete/{id}';
-};
-
-export type DeleteScheduleErrors = {
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type DeleteScheduleResponses = {
-    /**
-     * Scheduled job deleted successfully
-     */
-    204: void;
-};
-
-export type DeleteScheduleResponse = DeleteScheduleResponses[keyof DeleteScheduleResponses];
-
-export type ListSchedulesData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/schedule/list';
-};
-
-export type ListSchedulesErrors = {
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type ListSchedulesResponses = {
-    /**
-     * A list of scheduled jobs
-     */
-    200: ListSchedulesResponse;
-};
-
-export type ListSchedulesResponse2 = ListSchedulesResponses[keyof ListSchedulesResponses];
-
-export type UpdateScheduleData = {
-    body: UpdateScheduleRequest;
-    path: {
-        /**
-         * ID of the schedule to update
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}';
-};
-
-export type UpdateScheduleErrors = {
-    /**
-     * Cannot update a currently running job or invalid request
-     */
-    400: unknown;
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type UpdateScheduleResponses = {
-    /**
-     * Scheduled job updated successfully
-     */
-    200: ScheduledJob;
-};
-
-export type UpdateScheduleResponse = UpdateScheduleResponses[keyof UpdateScheduleResponses];
-
-export type InspectRunningJobData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule to inspect
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}/inspect';
-};
-
-export type InspectRunningJobErrors = {
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type InspectRunningJobResponses = {
-    /**
-     * Running job information
-     */
-    200: InspectJobResponse;
-};
-
-export type InspectRunningJobResponse = InspectRunningJobResponses[keyof InspectRunningJobResponses];
-
-export type KillRunningJobData = {
-    body?: never;
-    path: {
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}/kill';
-};
-
-export type KillRunningJobResponses = {
-    /**
-     * Running job killed successfully
-     */
-    200: unknown;
-};
-
-export type PauseScheduleData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule to pause
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}/pause';
-};
-
-export type PauseScheduleErrors = {
-    /**
-     * Cannot pause a currently running job
-     */
-    400: unknown;
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type PauseScheduleResponses = {
-    /**
-     * Scheduled job paused successfully
-     */
-    204: void;
-};
-
-export type PauseScheduleResponse = PauseScheduleResponses[keyof PauseScheduleResponses];
-
-export type RunNowHandlerData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule to run
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}/run_now';
-};
-
-export type RunNowHandlerErrors = {
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error when trying to run the job
-     */
-    500: unknown;
-};
-
-export type RunNowHandlerResponses = {
-    /**
-     * Scheduled job triggered successfully, returns new session ID
-     */
-    200: RunNowResponse;
-};
-
-export type RunNowHandlerResponse = RunNowHandlerResponses[keyof RunNowHandlerResponses];
-
-export type SessionsHandlerData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule
-         */
-        id: string;
-    };
-    query: {
-        limit: number;
-    };
-    url: '/schedule/{id}/sessions';
-};
-
-export type SessionsHandlerErrors = {
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type SessionsHandlerResponses = {
-    /**
-     * A list of session display info
-     */
-    200: Array<SessionDisplayInfo>;
-};
-
-export type SessionsHandlerResponse = SessionsHandlerResponses[keyof SessionsHandlerResponses];
-
-export type UnpauseScheduleData = {
-    body?: never;
-    path: {
-        /**
-         * ID of the schedule to unpause
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/schedule/{id}/unpause';
-};
-
-export type UnpauseScheduleErrors = {
-    /**
-     * Scheduled job not found
-     */
-    404: unknown;
-    /**
-     * Internal server error
-     */
-    500: unknown;
-};
-
-export type UnpauseScheduleResponses = {
-    /**
-     * Scheduled job unpaused successfully
-     */
-    204: void;
-};
-
-export type UnpauseScheduleResponse = UnpauseScheduleResponses[keyof UnpauseScheduleResponses];
 
 export type ListSessionsData = {
     body?: never;

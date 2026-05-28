@@ -1,3 +1,6 @@
+use crate::host_prompt::{PromptCapabilitySnapshot, PromptHarnessOverlay, PromptSurfaceContract};
+use crate::host_provider::HostProviderConfig;
+use crate::host_workspace::WorkspaceExecutionContext;
 use crate::routes::errors::ErrorResponse;
 use crate::routes::recipe_utils::{
     apply_recipe_to_agent, build_recipe_with_parameter_values, load_recipe_by_id, validate_recipe,
@@ -70,7 +73,7 @@ pub struct SessionOverrideRequest {
     /// drive the four extra slots `temperature` / `max_tokens` /
     /// `context_limit` / `prompt_caching_mode` / etc. that the flat shape does
     /// not expose.
-    provider_config: Option<crate::host_provider::HostProviderConfig>,
+    provider_config: Option<HostProviderConfig>,
     prompt_profile_overlay: Option<String>,
     extra_instructions: Option<String>,
     turn_system_instruction: Option<String>,
@@ -84,21 +87,21 @@ pub struct SessionOverrideRequest {
     /// [`crate::host_prompt::build_runtime_capability_snapshot_overlay`] when
     /// `runtime_overlay_text` is unset; pre-rendered text wins when both are
     /// supplied.
-    capability_snapshot: Option<crate::host_prompt::PromptCapabilitySnapshot>,
+    capability_snapshot: Option<PromptCapabilitySnapshot>,
     /// Typed harness delegation overlay. Rendered via
     /// [`crate::host_prompt::build_harness_delegation_overlay_text`] when
     /// `harness_delegation_overlay_text` is unset.
-    harness_overlay: Option<crate::host_prompt::PromptHarnessOverlay>,
+    harness_overlay: Option<PromptHarnessOverlay>,
     /// Typed surface contract. Rendered via
     /// [`crate::host_prompt::build_surface_contract_overlay_text`] when
     /// `surface_contract_overlay_text` is unset.
-    surface_contract: Option<crate::host_prompt::PromptSurfaceContract>,
+    surface_contract: Option<PromptSurfaceContract>,
     /// Workspace execution boundary (workspace_root / run_dir / write-allowed
     /// roots / artifact dirs / kind). When present, the chat reply path
     /// renders the boundary instruction into the system prompt overlay and
     /// (after wiring the dispatch enforcement) refuses writes outside the
     /// allowed roots.
-    workspace_context: Option<crate::host_workspace::WorkspaceExecutionContext>,
+    workspace_context: Option<WorkspaceExecutionContext>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]

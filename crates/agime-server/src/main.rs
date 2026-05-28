@@ -1,11 +1,47 @@
 mod auth;
 mod commands;
 mod configuration;
+#[cfg(feature = "desktop_harness_host")]
+mod desktop_harness_host;
 mod error;
+#[cfg(feature = "desktop_harness_host")]
+mod host_admission;
+#[cfg(feature = "desktop_harness_host")]
+mod host_capability;
+#[cfg(feature = "desktop_harness_host")]
+mod host_control_sink;
+#[cfg(feature = "desktop_harness_host")]
+mod host_document_analysis;
+#[cfg(feature = "desktop_harness_host")]
+mod host_event_sink;
+mod host_helpers;
+#[cfg(feature = "desktop_harness_host")]
+mod host_persistence;
+mod host_prompt;
+mod host_provider;
+#[cfg(feature = "desktop_harness_host")]
+mod host_stream;
+#[cfg(feature = "desktop_harness_host")]
+mod host_task;
+#[cfg(feature = "desktop_harness_host")]
+mod host_task_runtime;
+#[cfg(feature = "desktop_harness_host")]
+mod host_tool_dispatch;
+mod host_workspace;
+#[cfg(feature = "desktop_harness_host")]
+mod host_workspace_runtime;
+#[cfg(feature = "desktop_harness_host")]
+mod host_workspace_service;
+#[cfg(feature = "desktop_harness_host")]
+mod host_workspace_store;
+#[cfg(feature = "desktop_harness_host")]
+mod host_workspace_types;
 mod logging;
 mod openapi;
 mod routes;
 mod state;
+#[cfg(feature = "team")]
+mod team;
 
 use agime::config::paths::Paths;
 use agime_mcp::{

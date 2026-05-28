@@ -38,6 +38,10 @@
 // rather than per-call-site to keep the helpers byte-for-byte aligned with
 // the team-server original (CLAUDE.md long-term maintenance strategy).
 #![allow(clippy::string_slice)]
+#![allow(dead_code)]
+// Phase-6 pure-logic helpers: the desktop reply path will exercise the full
+// surface in Milestone B; until then `--all-targets` lint sees several items
+// (selectors, MIME predicates, filename sanitiser) as unused.
 
 use agime::agents::{format_execution_host_completion_text, ExecutionHostCompletionReport};
 use serde::{Deserialize, Serialize};

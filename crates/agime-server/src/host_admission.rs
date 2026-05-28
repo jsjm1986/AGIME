@@ -22,6 +22,11 @@
 //! SOURCE: crates/agime-runtime/src/admission.rs +
 //! crates/agime-runtime/src/execution_admission.rs at commit 961109f.
 
+#![allow(dead_code)]
+// Phase-4 verbatim runtime mirror: the desktop reply path will exercise this
+// surface in Milestone B; until then `--all-targets` lint sees several items
+// as unused.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

@@ -150,6 +150,10 @@ export type CheckProviderRequest = {
     provider: string;
 };
 
+export type ClearSessionOverrideRequest = {
+    session_id: string;
+};
+
 export type CommandType = 'Builtin' | 'Recipe';
 
 /**
@@ -427,6 +431,29 @@ export type GetToolsQuery = {
     session_id: string;
 };
 
+export type HostApiFormat = 'open_a_i' | 'anthropic' | 'lite_l_l_m' | 'local';
+
+export type HostProviderConfig = {
+    api_format?: HostApiFormat;
+    api_key?: string | null;
+    api_url?: string | null;
+    auto_compact_threshold?: number | null;
+    cache_edit_mode?: HostRuntimeOptimizationMode;
+    context_limit?: number | null;
+    max_tokens?: number | null;
+    model?: string | null;
+    name: string;
+    output_reserve_tokens?: number | null;
+    prompt_caching_mode?: HostRuntimeOptimizationMode;
+    reasoning_effort?: string | null;
+    supports_multimodal?: boolean;
+    temperature?: number | null;
+    thinking_budget?: number | null;
+    thinking_enabled?: boolean;
+};
+
+export type HostRuntimeOptimizationMode = 'auto' | 'off' | 'prefer';
+
 export type Icon = {
     mimeType?: string;
     sizes?: Array<string>;
@@ -572,6 +599,11 @@ export type MessageEvent = {
     conversation: Conversation;
     type: 'UpdateConversation';
 } | {
+    envelope: {
+        [key: string]: unknown;
+    };
+    type: 'HarnessControl';
+} | {
     type: 'Ping';
 };
 
@@ -689,12 +721,64 @@ export type PricingResponse = {
 
 export type PrincipalType = 'Extension' | 'Tool';
 
+/**
+ * Approval mode for delegation ownership. Mirrors
+ * `agime_team::models::ApprovalMode`, *not* the desktop UI's three-state
+ * permission policy in [`crate::host_capability::ApprovalMode`].
+ */
+export type PromptApprovalMode = 'leader_owned' | 'headless_fallback';
+
 export type PromptCachingMode = 'auto' | 'off' | 'prefer';
+
+/**
+ * Flattened, render-ready mirror of team-server's
+ * `RuntimeCapabilitySnapshot`. Extension display names are pre-resolved so
+ * the builder has no dependency on `agime_team::models`.
+ */
+export type PromptCapabilitySnapshot = {
+    attachedTeamExtensions?: Array<string>;
+    builtinCapabilities?: Array<string>;
+    customExtensions?: Array<string>;
+    documentAccessMode?: string | null;
+    documentScopeMode?: string | null;
+    documentWriteMode?: string | null;
+    effectiveAllowedSkillIds?: Array<string> | null;
+    portalRestricted?: boolean;
+    sessionInjectedCapabilities?: Array<string>;
+    sessionSource: string;
+    skillBindingMode?: string | null;
+};
+
+export type PromptHarnessOverlay = {
+    approvalMode: PromptApprovalMode;
+    autoSwarmEnabled: boolean;
+    documentAccessMode?: string | null;
+    documentScopeMode?: string | null;
+    documentWriteMode?: string | null;
+    planEnabled: boolean;
+    promptSnapshotVersion: string;
+    requireFinalReport: boolean;
+    sessionSource: string;
+    subagentEnabled: boolean;
+    swarmEnabled: boolean;
+    tasksEnabled: boolean;
+    validationWorkerEnabled: boolean;
+    workerPeerMessagingEnabled: boolean;
+};
 
 export type PromptResponse = {
     content: string;
     is_custom: boolean;
     is_enabled: boolean;
+};
+
+export type PromptSurfaceContract = {
+    documentAccessMode?: string | null;
+    documentScopeMode?: string | null;
+    documentWriteMode?: string | null;
+    portalRestricted: boolean;
+    requireFinalReport: boolean;
+    sessionSource: string;
 };
 
 export type PromptTemplate = {
@@ -966,6 +1050,49 @@ export type SessionMetadataResponse = {
      * Tags assigned to the session
      */
     tags: Array<string>;
+};
+
+/**
+ * Per-session override payload accepted by `/agent/session_override`.
+ *
+ * All fields are optional. Sending `null` (or omitting a field) leaves that
+ * slot of the stored override unchanged when the override already exists; on
+ * a new override the field defaults to `None`. Use `/agent/session_override`
+ * (DELETE) to drop the override entirely.
+ */
+export type SessionOverrideRequest = {
+    api_key?: string | null;
+    api_url?: string | null;
+    capability_snapshot?: PromptCapabilitySnapshot | null;
+    extra_instructions?: string | null;
+    /**
+     * Pre-rendered harness delegation overlay (V2 prompt pack).
+     */
+    harness_delegation_overlay_text?: string | null;
+    harness_overlay?: PromptHarnessOverlay | null;
+    model?: string | null;
+    prompt_profile_overlay?: string | null;
+    /**
+     * Provider name as registered with `agime::providers::create` (e.g.
+     * "openai", "anthropic"). When set together with `api_key` / `api_url`,
+     * the desktop will use [`crate::host_provider::create_provider_for_config`]
+     * to build a per-session provider; otherwise the registry path keeps
+     * reading env vars.
+     */
+    provider?: string | null;
+    provider_config?: HostProviderConfig | null;
+    /**
+     * Pre-rendered runtime capability snapshot overlay (V2 prompt pack).
+     */
+    runtime_overlay_text?: string | null;
+    session_id: string;
+    surface_contract?: PromptSurfaceContract | null;
+    /**
+     * Pre-rendered surface contract overlay (V2 prompt pack).
+     */
+    surface_contract_overlay_text?: string | null;
+    turn_system_instruction?: string | null;
+    workspace_context?: WorkspaceExecutionContext | null;
 };
 
 export type SessionType = 'user' | 'scheduled' | 'sub_agent' | 'hidden' | 'terminal';
@@ -1267,6 +1394,18 @@ export type UpsertPermissionsQuery = {
     tool_permissions: Array<ToolPermission>;
 };
 
+export type WorkspaceExecutionContext = {
+    allowed_read_roots?: Array<string>;
+    allowed_write_roots?: Array<string>;
+    artifact_dirs?: Array<string>;
+    run_dir: string;
+    run_id: string;
+    workspace_kind?: WorkspaceKind;
+    workspace_root: string;
+};
+
+export type WorkspaceKind = 'conversation' | 'document' | 'skill';
+
 export type ConfirmToolActionData = {
     body: ConfirmToolActionRequest;
     path?: never;
@@ -1454,6 +1593,74 @@ export type ResumeAgentResponses = {
 };
 
 export type ResumeAgentResponse = ResumeAgentResponses[keyof ResumeAgentResponses];
+
+export type DeleteSessionOverrideData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * Session whose override should be cleared
+         */
+        session_id: string;
+    };
+    url: '/agent/session_override';
+};
+
+export type DeleteSessionOverrideErrors = {
+    /**
+     * Unauthorized - invalid secret key
+     */
+    401: unknown;
+};
+
+export type DeleteSessionOverrideResponses = {
+    /**
+     * Session override cleared (or did not exist)
+     */
+    200: unknown;
+};
+
+export type SetSessionOverrideData = {
+    body: SessionOverrideRequest;
+    path?: never;
+    query?: never;
+    url: '/agent/session_override';
+};
+
+export type SetSessionOverrideErrors = {
+    /**
+     * Unauthorized - invalid secret key
+     */
+    401: unknown;
+};
+
+export type SetSessionOverrideResponses = {
+    /**
+     * Session override stored
+     */
+    200: unknown;
+};
+
+export type ClearSessionOverrideData = {
+    body: ClearSessionOverrideRequest;
+    path?: never;
+    query?: never;
+    url: '/agent/session_override/clear';
+};
+
+export type ClearSessionOverrideErrors = {
+    /**
+     * Unauthorized - invalid secret key
+     */
+    401: unknown;
+};
+
+export type ClearSessionOverrideResponses = {
+    /**
+     * Session override cleared (or did not exist)
+     */
+    200: unknown;
+};
 
 export type StartAgentData = {
     body: StartAgentRequest;

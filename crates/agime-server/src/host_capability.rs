@@ -28,6 +28,10 @@
 // keep the helper aligned with the runtime version (CLAUDE.md long-term
 // maintenance strategy).
 #![allow(clippy::should_implement_trait)]
+#![allow(dead_code)]
+// Phase-3 capability facade: the desktop reply path will consume the resolver
+// + snapshot in Milestone B; until then `--all-targets` lint sees several
+// items as unused.
 
 use std::collections::HashSet;
 

@@ -247,6 +247,85 @@
         }
       }
     },
+    "/agent/session_override": {
+      "post": {
+        "tags": [
+          "super::routes::agent"
+        ],
+        "operationId": "set_session_override",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Session override stored"
+          },
+          "401": {
+            "description": "Unauthorized - invalid secret key"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "super::routes::agent"
+        ],
+        "summary": "REST-style alias: `DELETE /agent/session_override?session_id=...`. Same",
+        "description": "behavior as the legacy `POST /agent/session_override/clear`. Prefer the\nDELETE form for new clients; the POST form is kept as a back-compat alias.",
+        "operationId": "delete_session_override",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "description": "Session whose override should be cleared",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session override cleared (or did not exist)"
+          },
+          "401": {
+            "description": "Unauthorized - invalid secret key"
+          }
+        }
+      }
+    },
+    "/agent/session_override/clear": {
+      "post": {
+        "tags": [
+          "super::routes::agent"
+        ],
+        "operationId": "clear_session_override",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClearSessionOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Session override cleared (or did not exist)"
+          },
+          "401": {
+            "description": "Unauthorized - invalid secret key"
+          }
+        }
+      }
+    },
     "/agent/start": {
       "post": {
         "tags": [
@@ -2829,6 +2908,17 @@
           }
         }
       },
+      "ClearSessionOverrideRequest": {
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string"
+          }
+        }
+      },
       "CommandType": {
         "type": "string",
         "enum": [
@@ -3669,6 +3759,96 @@
           }
         }
       },
+      "HostApiFormat": {
+        "type": "string",
+        "enum": [
+          "open_a_i",
+          "anthropic",
+          "lite_l_l_m",
+          "local"
+        ]
+      },
+      "HostProviderConfig": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "api_format": {
+            "$ref": "#/components/schemas/HostApiFormat"
+          },
+          "api_key": {
+            "type": "string",
+            "nullable": true
+          },
+          "api_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "auto_compact_threshold": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "cache_edit_mode": {
+            "$ref": "#/components/schemas/HostRuntimeOptimizationMode"
+          },
+          "context_limit": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          },
+          "max_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "output_reserve_tokens": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          },
+          "prompt_caching_mode": {
+            "$ref": "#/components/schemas/HostRuntimeOptimizationMode"
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "nullable": true
+          },
+          "supports_multimodal": {
+            "type": "boolean"
+          },
+          "temperature": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "thinking_budget": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true,
+            "minimum": 0
+          },
+          "thinking_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "HostRuntimeOptimizationMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "off",
+          "prefer"
+        ]
+      },
       "Icon": {
         "type": "object",
         "required": [
@@ -4206,6 +4386,25 @@
           },
           {
             "type": "object",
+            "description": "Harness control envelope mirroring an `AgentEvent` as a sequenced\n`HarnessControlMessage`. Only emitted when the\n`desktop_harness_host` cargo feature is enabled.",
+            "required": [
+              "envelope",
+              "type"
+            ],
+            "properties": {
+              "envelope": {
+                "type": "object"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "HarnessControl"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "required": [
               "type"
             ],
@@ -4486,6 +4685,14 @@
           "Tool"
         ]
       },
+      "PromptApprovalMode": {
+        "type": "string",
+        "description": "Approval mode for delegation ownership. Mirrors\n`agime_team::models::ApprovalMode`, *not* the desktop UI's three-state\npermission policy in [`crate::host_capability::ApprovalMode`].",
+        "enum": [
+          "leader_owned",
+          "headless_fallback"
+        ]
+      },
       "PromptCachingMode": {
         "type": "string",
         "enum": [
@@ -4493,6 +4700,131 @@
           "off",
           "prefer"
         ]
+      },
+      "PromptCapabilitySnapshot": {
+        "type": "object",
+        "description": "Flattened, render-ready mirror of team-server's\n`RuntimeCapabilitySnapshot`. Extension display names are pre-resolved so\nthe builder has no dependency on `agime_team::models`.",
+        "required": [
+          "sessionSource"
+        ],
+        "properties": {
+          "attachedTeamExtensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "builtinCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "customExtensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "documentAccessMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "documentScopeMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "documentWriteMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "effectiveAllowedSkillIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "portalRestricted": {
+            "type": "boolean"
+          },
+          "sessionInjectedCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sessionSource": {
+            "type": "string"
+          },
+          "skillBindingMode": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "PromptHarnessOverlay": {
+        "type": "object",
+        "required": [
+          "promptSnapshotVersion",
+          "sessionSource",
+          "tasksEnabled",
+          "planEnabled",
+          "subagentEnabled",
+          "swarmEnabled",
+          "workerPeerMessagingEnabled",
+          "autoSwarmEnabled",
+          "validationWorkerEnabled",
+          "approvalMode",
+          "requireFinalReport"
+        ],
+        "properties": {
+          "approvalMode": {
+            "$ref": "#/components/schemas/PromptApprovalMode"
+          },
+          "autoSwarmEnabled": {
+            "type": "boolean"
+          },
+          "documentAccessMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "documentScopeMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "documentWriteMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "planEnabled": {
+            "type": "boolean"
+          },
+          "promptSnapshotVersion": {
+            "type": "string"
+          },
+          "requireFinalReport": {
+            "type": "boolean"
+          },
+          "sessionSource": {
+            "type": "string"
+          },
+          "subagentEnabled": {
+            "type": "boolean"
+          },
+          "swarmEnabled": {
+            "type": "boolean"
+          },
+          "tasksEnabled": {
+            "type": "boolean"
+          },
+          "validationWorkerEnabled": {
+            "type": "boolean"
+          },
+          "workerPeerMessagingEnabled": {
+            "type": "boolean"
+          }
+        }
       },
       "PromptResponse": {
         "type": "object",
@@ -4510,6 +4842,37 @@
           },
           "is_enabled": {
             "type": "boolean"
+          }
+        }
+      },
+      "PromptSurfaceContract": {
+        "type": "object",
+        "required": [
+          "sessionSource",
+          "portalRestricted",
+          "requireFinalReport"
+        ],
+        "properties": {
+          "documentAccessMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "documentScopeMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "documentWriteMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "portalRestricted": {
+            "type": "boolean"
+          },
+          "requireFinalReport": {
+            "type": "boolean"
+          },
+          "sessionSource": {
+            "type": "string"
           }
         }
       },
@@ -5299,6 +5662,102 @@
           }
         }
       },
+      "SessionOverrideRequest": {
+        "type": "object",
+        "description": "Per-session override payload accepted by `/agent/session_override`.\n\nAll fields are optional. Sending `null` (or omitting a field) leaves that\nslot of the stored override unchanged when the override already exists; on\na new override the field defaults to `None`. Use `/agent/session_override`\n(DELETE) to drop the override entirely.",
+        "required": [
+          "session_id"
+        ],
+        "properties": {
+          "api_key": {
+            "type": "string",
+            "nullable": true
+          },
+          "api_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "capability_snapshot": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PromptCapabilitySnapshot"
+              }
+            ],
+            "nullable": true
+          },
+          "extra_instructions": {
+            "type": "string",
+            "nullable": true
+          },
+          "harness_delegation_overlay_text": {
+            "type": "string",
+            "description": "Pre-rendered harness delegation overlay (V2 prompt pack).",
+            "nullable": true
+          },
+          "harness_overlay": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PromptHarnessOverlay"
+              }
+            ],
+            "nullable": true
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "prompt_profile_overlay": {
+            "type": "string",
+            "nullable": true
+          },
+          "provider": {
+            "type": "string",
+            "description": "Provider name as registered with `agime::providers::create` (e.g.\n\"openai\", \"anthropic\"). When set together with `api_key` / `api_url`,\nthe desktop will use [`crate::host_provider::create_provider_for_config`]\nto build a per-session provider; otherwise the registry path keeps\nreading env vars.",
+            "nullable": true
+          },
+          "provider_config": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HostProviderConfig"
+              }
+            ],
+            "nullable": true
+          },
+          "runtime_overlay_text": {
+            "type": "string",
+            "description": "Pre-rendered runtime capability snapshot overlay (V2 prompt pack).",
+            "nullable": true
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "surface_contract": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PromptSurfaceContract"
+              }
+            ],
+            "nullable": true
+          },
+          "surface_contract_overlay_text": {
+            "type": "string",
+            "description": "Pre-rendered surface contract overlay (V2 prompt pack).",
+            "nullable": true
+          },
+          "turn_system_instruction": {
+            "type": "string",
+            "nullable": true
+          },
+          "workspace_context": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkspaceExecutionContext"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
       "SessionType": {
         "type": "string",
         "enum": [
@@ -6064,6 +6523,54 @@
             }
           }
         }
+      },
+      "WorkspaceExecutionContext": {
+        "type": "object",
+        "required": [
+          "workspace_root",
+          "run_id",
+          "run_dir"
+        ],
+        "properties": {
+          "allowed_read_roots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowed_write_roots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "artifact_dirs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "run_dir": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "workspace_kind": {
+            "$ref": "#/components/schemas/WorkspaceKind"
+          },
+          "workspace_root": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkspaceKind": {
+        "type": "string",
+        "enum": [
+          "conversation",
+          "document",
+          "skill"
+        ]
       }
     }
   }

@@ -15,12 +15,11 @@
 //!
 //! SOURCE: crates/agime-runtime/src/agent_task_payload.rs at commit 961109f.
 
-#![cfg(feature = "desktop_harness_host")]
+#![allow(dead_code)]
 // Phase-5 scaffolding: round-trips fields the team variant uses
 // (`allowed_skill_ids`, `attached_document_ids`, `workspace_path`,
 // `result_contract`, `llm_overrides`, `retry_config`) for shape compatibility
 // with the runtime payload spec. Wired in once the recipe-task runner lands.
-#![allow(dead_code)]
 
 use agime::agents::types::RetryConfig;
 use agime::conversation::message::Message;

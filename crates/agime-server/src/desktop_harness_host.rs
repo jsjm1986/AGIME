@@ -38,8 +38,6 @@
 //! commit 961109f. Keep in sync manually — see CLAUDE.md long-term
 //! maintenance strategy.
 
-#![cfg(feature = "desktop_harness_host")]
-
 use std::sync::Arc;
 
 use agime::agents::harness::host::{run_harness_host, HarnessHostDependencies, HarnessHostRequest};

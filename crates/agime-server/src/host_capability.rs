@@ -22,8 +22,6 @@
 //! (desktop reimplementation, not a verbatim copy — see CLAUDE.md long-term
 //! maintenance strategy).
 
-#![cfg(feature = "desktop_harness_host")]
-
 use std::collections::HashSet;
 
 /// Approval mode mirrors the desktop UI's three-state permission setting:

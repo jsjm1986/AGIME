@@ -11,7 +11,6 @@
 //! ChannelProject / ChannelThread / DocumentAnalysis / PortalProject /
 //! McpAdmin) so manifests round-trip cleanly with team-server payloads.
 
-#![cfg(feature = "desktop_harness_host")]
 #![allow(dead_code)]
 
 use chrono::{DateTime, Utc};

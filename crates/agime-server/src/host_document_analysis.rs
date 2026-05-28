@@ -31,8 +31,6 @@
 //! commit 961109f (desktop reimplementation, not a verbatim copy — the Mongo
 //! surface is dropped per the long-term maintenance strategy in CLAUDE.md).
 
-#![cfg(feature = "desktop_harness_host")]
-
 use agime::agents::{format_execution_host_completion_text, ExecutionHostCompletionReport};
 use serde::{Deserialize, Serialize};
 

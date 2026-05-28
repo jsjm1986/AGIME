@@ -22,8 +22,6 @@
 //! SOURCE: crates/agime-runtime/src/admission.rs +
 //! crates/agime-runtime/src/execution_admission.rs at commit 961109f.
 
-#![cfg(feature = "desktop_harness_host")]
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

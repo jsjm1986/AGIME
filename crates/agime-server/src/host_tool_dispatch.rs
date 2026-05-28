@@ -19,11 +19,10 @@
 //!   - crates/agime-runtime/src/traits.rs       at commit 961109f
 //!   - crates/agime-runtime/src/tool_dispatch.rs at commit 961109f
 
-#![cfg(feature = "desktop_harness_host")]
+#![allow(dead_code)]
 // Phase-5b verbatim runtime copy: full tool-dispatch surface mirrors the
 // agime-runtime contract so the future tool-interception bridge plugs in
 // unchanged. Items remain dead until the bridge is wired in Milestone B.
-#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

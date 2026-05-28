@@ -141,6 +141,14 @@ pub enum MessageEvent {
     UpdateConversation {
         conversation: Conversation,
     },
+    /// Harness control envelope mirroring an `AgentEvent` as a sequenced
+    /// `HarnessControlMessage`. Only emitted when the
+    /// `desktop_harness_host` cargo feature is enabled.
+    #[cfg(feature = "desktop_harness_host")]
+    HarnessControl {
+        #[schema(value_type = Object)]
+        envelope: agime::agents::HarnessControlEnvelope,
+    },
     Ping,
 }
 
@@ -278,6 +286,20 @@ pub async fn reply(
             retry_config: None,
         };
 
+        // Workspace execution boundary: when the session has a registered
+        // `WorkspaceExecutionContext` (set via `/agent/session_override`),
+        // append the rendered boundary instruction to the agent's system
+        // prompt. This mirrors the team-server harness behavior of letting
+        // the model see the workspace root, run dir, and write-allowed roots.
+        if let Some(override_value) = state.session_override(&session_id).await {
+            if let Some(text) = crate::host_workspace::merge_workspace_execution_instruction(
+                None,
+                override_value.workspace_context.as_ref(),
+            ) {
+                agent.extend_system_prompt(text).await;
+            }
+        }
+
         let user_message = match messages.last() {
             Some(msg) => msg,
             _ => {
@@ -293,14 +315,53 @@ pub async fn reply(
             }
         };
 
-        let mut stream = match agent
-            .reply(
-                user_message.clone(),
-                session_config,
-                Some(task_cancel.clone()),
-            )
-            .await
-        {
+        let mut stream = match {
+            #[cfg(feature = "desktop_harness_host")]
+            {
+                let host = crate::desktop_harness_host::DesktopHarnessHost::new(state.clone());
+                let (control_tx, mut control_rx) =
+                    mpsc::channel::<agime::agents::HarnessControlEnvelope>(64);
+
+                // Forward harness control envelopes to the SSE stream as
+                // `MessageEvent::HarnessControl` frames. Best-effort, never
+                // blocks the agent stream; ends when the agent stream ends or
+                // the cancel token fires.
+                let mirror_tx = task_tx.clone();
+                let mirror_cancel = task_cancel.clone();
+                drop(tokio::spawn(async move {
+                    while let Some(envelope) = control_rx.recv().await {
+                        if mirror_cancel.is_cancelled() {
+                            break;
+                        }
+                        stream_event(
+                            MessageEvent::HarnessControl { envelope },
+                            &mirror_tx,
+                            &mirror_cancel,
+                        )
+                        .await;
+                    }
+                }));
+
+                host.execute_chat_host_with_mirror(
+                    &agent,
+                    user_message.clone(),
+                    session_config,
+                    Some(task_cancel.clone()),
+                    control_tx,
+                )
+                .await
+            }
+            #[cfg(not(feature = "desktop_harness_host"))]
+            {
+                agent
+                    .reply(
+                        user_message.clone(),
+                        session_config,
+                        Some(task_cancel.clone()),
+                    )
+                    .await
+            }
+        } {
             Ok(stream) => {
                 tracing::info!(
                     "[PERF] agent.reply() stream ready, elapsed: {:?}",

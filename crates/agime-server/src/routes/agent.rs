@@ -47,6 +47,34 @@ pub struct UpdateProviderRequest {
     session_id: String,
 }
 
+/// Per-session override payload accepted by `/agent/session_override`.
+///
+/// All fields are optional. Sending `null` (or omitting a field) leaves that
+/// slot of the stored override unchanged when the override already exists; on
+/// a new override the field defaults to `None`. Use `/agent/session_override`
+/// (DELETE) to drop the override entirely.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct SessionOverrideRequest {
+    session_id: String,
+    /// Provider name as registered with `agime::providers::create` (e.g.
+    /// "openai", "anthropic"). When set together with `api_key` / `api_url`,
+    /// the desktop will use [`crate::host_provider::create_provider_for_config`]
+    /// to build a per-session provider; otherwise the registry path keeps
+    /// reading env vars.
+    provider: Option<String>,
+    model: Option<String>,
+    api_url: Option<String>,
+    api_key: Option<String>,
+    prompt_profile_overlay: Option<String>,
+    extra_instructions: Option<String>,
+    turn_system_instruction: Option<String>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct ClearSessionOverrideRequest {
+    session_id: String,
+}
+
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct GetToolsQuery {
     extension_name: Option<String>,
@@ -349,19 +377,28 @@ async fn update_from_session(
             status: StatusCode::INTERNAL_SERVER_ERROR,
         })?;
 
-    // Load system prompt from config (new runtime-configurable architecture)
+    // Resolve the active prompt: if AGIME_ACTIVE_SYSTEM_PROMPT is set, the
+    // legacy contract is that it *replaces* system.md entirely. Preserve that
+    // behavior by overriding the agent's system prompt directly and skipping
+    // the composer (which treats custom_prompt as an `<agent_instructions>`
+    // overlay rather than a replacement).
     let config = Config::global();
-    if let Ok(active_prompt) = config.get_param::<String>("AGIME_ACTIVE_SYSTEM_PROMPT") {
-        if !active_prompt.is_empty() {
-            agent.override_system_prompt(active_prompt).await;
-        }
+    let active_prompt = config
+        .get_param::<String>("AGIME_ACTIVE_SYSTEM_PROMPT")
+        .ok()
+        .filter(|value| !value.is_empty());
+    if let Some(prompt) = active_prompt.as_ref() {
+        agent.override_system_prompt(prompt.clone()).await;
     }
-    // Note: If AGIME_ACTIVE_SYSTEM_PROMPT is not set, PromptManager will use embedded default
 
+    // Compose the desktop_prompt overlay (and recipe overlay, if any) into a
+    // single `extra_instructions` blob. Even when the legacy active_prompt
+    // path is taken above, the desktop_prompt / recipe overlays still flow
+    // through `extend_system_prompt` exactly as before.
     let context: HashMap<&str, Value> = HashMap::new();
     let desktop_prompt =
         render_global_file("desktop_prompt.md", &context).expect("Prompt should render");
-    let mut update_prompt = desktop_prompt;
+    let mut composer_extra = desktop_prompt;
     if let Some(recipe) = session.recipe {
         match build_recipe_with_parameter_values(
             &recipe,
@@ -371,11 +408,11 @@ async fn update_from_session(
         {
             Ok(Some(recipe)) => {
                 if let Some(prompt) = apply_recipe_to_agent(&agent, &recipe, true).await {
-                    update_prompt = prompt;
+                    composer_extra = prompt;
                 }
             }
             Ok(None) => {
-                // Recipe has missing parameters - use default prompt
+                // Recipe has missing parameters - keep desktop_prompt as the extra body.
             }
             Err(e) => {
                 return Err(ErrorResponse {
@@ -385,7 +422,72 @@ async fn update_from_session(
             }
         }
     }
-    agent.extend_system_prompt(update_prompt).await;
+
+    let session_override = state.session_override(&payload.session_id).await;
+
+    // Append the session-override `extra_instructions` (if set via
+    // `/agent/session_override`) below the desktop_prompt / recipe overlay.
+    if let Some(override_extra) = session_override
+        .as_ref()
+        .and_then(|o| o.extra_instructions.as_deref())
+        .filter(|value| !value.trim().is_empty())
+    {
+        composer_extra.push_str("\n\n");
+        composer_extra.push_str(override_extra);
+    }
+
+    // If the session has any override overlays beyond extra_instructions
+    // (profile / turn / runtime / harness_delegation / surface_contract), or
+    // there's no legacy active_prompt, route through the host_prompt composer
+    // so the extras get the canonical V2 packaging. Otherwise fall back to the
+    // legacy `extend_system_prompt` path so existing desktop deployments see
+    // identical wire output.
+    let has_overlay = session_override.as_ref().is_some_and(|o| {
+        o.prompt_profile_overlay.is_some()
+            || o.turn_system_instruction.is_some()
+            || o.runtime_overlay_text.is_some()
+            || o.harness_delegation_overlay_text.is_some()
+            || o.surface_contract_overlay_text.is_some()
+    });
+
+    if has_overlay {
+        let extensions = agent.extension_manager.get_extensions_info().await;
+        let model_name = agent
+            .provider()
+            .await
+            .ok()
+            .map(|p| p.get_model_config().model_name)
+            .unwrap_or_default();
+
+        let composition = crate::host_prompt::compose_top_level_prompt(
+            crate::host_prompt::AgentPromptComposerInput {
+                extensions: &extensions,
+                custom_prompt: active_prompt.as_deref(),
+                session_extra_instructions: Some(composer_extra.as_str()),
+                prompt_profile_overlay: session_override
+                    .as_ref()
+                    .and_then(|o| o.prompt_profile_overlay.as_deref()),
+                turn_system_instruction: session_override
+                    .as_ref()
+                    .and_then(|o| o.turn_system_instruction.as_deref()),
+                runtime_overlay_text: session_override
+                    .as_ref()
+                    .and_then(|o| o.runtime_overlay_text.as_deref()),
+                harness_delegation_overlay_text: session_override
+                    .as_ref()
+                    .and_then(|o| o.harness_delegation_overlay_text.as_deref()),
+                surface_contract_overlay_text: session_override
+                    .as_ref()
+                    .and_then(|o| o.surface_contract_overlay_text.as_deref()),
+                model_name: model_name.as_str(),
+            },
+        );
+        agent
+            .override_system_prompt(composition.top_level_prompt)
+            .await;
+    } else {
+        agent.extend_system_prompt(composer_extra).await;
+    }
 
     Ok(StatusCode::OK)
 }
@@ -482,12 +584,38 @@ async fn update_agent_provider(
         )
     })?;
 
-    let new_provider = create(&payload.provider, model_config).await.map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("Failed to create {} provider: {}", &payload.provider, e),
-        )
-    })?;
+    // Per-session override path: when the caller has registered a
+    // [`crate::host_provider::HostProviderConfig`] via
+    // `/agent/session_override`, build the provider directly from that value
+    // object. Otherwise fall through to the registry path, which reads
+    // per-provider api_url / api_key from env via each provider's
+    // `from_env(model)` constructor (preserves existing behavior for
+    // Anthropic / OpenAI users that rely on env keys).
+    let session_override = state.session_override(&payload.session_id).await;
+    let new_provider = if let Some(cfg) = session_override.as_ref().and_then(|o| {
+        o.provider_config
+            .as_ref()
+            .filter(|c| c.name.eq_ignore_ascii_case(&payload.provider))
+    }) {
+        let mut cfg = cfg.clone();
+        cfg.model.get_or_insert_with(|| model.clone());
+        crate::host_provider::create_provider_for_config(&cfg).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Failed to create {} provider from override: {}",
+                    &payload.provider, e
+                ),
+            )
+        })?
+    } else {
+        create(&payload.provider, model_config).await.map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Failed to create {} provider: {}", &payload.provider, e),
+            )
+        })?
+    };
 
     agent
         .update_provider(new_provider, &payload.session_id)
@@ -685,6 +813,65 @@ async fn call_tool(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/agent/session_override",
+    request_body = SessionOverrideRequest,
+    responses(
+        (status = 200, description = "Session override stored"),
+        (status = 401, description = "Unauthorized - invalid secret key"),
+    ),
+)]
+async fn set_session_override(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<SessionOverrideRequest>,
+) -> StatusCode {
+    use crate::host_provider::{host_api_format_from_provider_name, HostProviderConfig};
+    use crate::state::SessionOverride;
+
+    let provider_config = payload.provider.as_deref().and_then(|name| {
+        host_api_format_from_provider_name(name).map(|api_format| HostProviderConfig {
+            name: name.to_string(),
+            api_format,
+            api_url: payload.api_url.clone(),
+            api_key: payload.api_key.clone(),
+            model: payload.model.clone(),
+            ..Default::default()
+        })
+    });
+
+    let override_value = SessionOverride {
+        provider_config,
+        prompt_profile_overlay: payload.prompt_profile_overlay,
+        extra_instructions: payload.extra_instructions,
+        turn_system_instruction: payload.turn_system_instruction,
+        ..Default::default()
+    };
+
+    state
+        .set_session_override(payload.session_id, override_value)
+        .await;
+
+    StatusCode::OK
+}
+
+#[utoipa::path(
+    post,
+    path = "/agent/session_override/clear",
+    request_body = ClearSessionOverrideRequest,
+    responses(
+        (status = 200, description = "Session override cleared (or did not exist)"),
+        (status = 401, description = "Unauthorized - invalid secret key"),
+    ),
+)]
+async fn clear_session_override(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ClearSessionOverrideRequest>,
+) -> StatusCode {
+    state.clear_session_override(&payload.session_id).await;
+    StatusCode::OK
+}
+
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/agent/start", post(start_agent))
@@ -700,6 +887,11 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/agent/update_from_session", post(update_from_session))
         .route("/agent/add_extension", post(agent_add_extension))
         .route("/agent/remove_extension", post(agent_remove_extension))
+        .route("/agent/session_override", post(set_session_override))
+        .route(
+            "/agent/session_override/clear",
+            post(clear_session_override),
+        )
         .route("/agent/stop", post(stop_agent))
         .with_state(state)
 }

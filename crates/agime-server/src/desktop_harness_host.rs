@@ -161,7 +161,7 @@ impl DesktopHarnessHost {
             logical_session_id: logical_session_id.clone(),
             working_dir,
             session_name,
-            session_type: SessionType::Default,
+            session_type: SessionType::User,
             initial_conversation,
             user_message,
             session_config,

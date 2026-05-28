@@ -2200,6 +2200,34 @@ impl Agent {
         prompt_manager.add_system_prompt_extra(instruction);
     }
 
+    /// Drop every previously-appended system prompt extra. Hosts that
+    /// re-derive the extras for each turn (e.g. session-level overlay
+    /// overrides) should call this before re-applying the current set so
+    /// stale entries from prior turns don't leak through.
+    pub async fn clear_system_prompt_extras(&self) {
+        let mut prompt_manager = self.prompt_manager.lock().await;
+        prompt_manager.clear_system_prompt_extras();
+    }
+
+    /// Append a host-level override extra. Use this from server hosts
+    /// (e.g. desktop chat path) that need a per-turn lifecycle independent
+    /// of the session-static `system_prompt_extras` channel: the host can
+    /// drop its own extras with [`Self::clear_host_override_extras`]
+    /// without touching extras placed by other layers
+    /// (desktop_prompt, recipe overlay, hints).
+    pub async fn extend_host_override_extras(&self, instruction: String) {
+        let mut prompt_manager = self.prompt_manager.lock().await;
+        prompt_manager.add_host_override_extra(instruction);
+    }
+
+    /// Drop every host-level override extra previously appended via
+    /// [`Self::extend_host_override_extras`]. Static
+    /// `system_prompt_extras` are not affected.
+    pub async fn clear_host_override_extras(&self) {
+        let mut prompt_manager = self.prompt_manager.lock().await;
+        prompt_manager.clear_host_override_extras();
+    }
+
     pub async fn update_provider(
         &self,
         provider: Arc<dyn Provider>,

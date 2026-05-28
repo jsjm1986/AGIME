@@ -78,6 +78,7 @@ pub struct HostSessionPolicyContext {
 /// the reply path actually checks.
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeCapabilitySnapshot {
+    #[allow(dead_code)]
     pub session_source: String,
     pub approval_mode: ApprovalMode,
     pub allowed_extensions: Option<HashSet<String>>,

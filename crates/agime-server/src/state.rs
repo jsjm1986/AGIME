@@ -275,6 +275,7 @@ impl AppState {
     /// installed via [`Self::set_capability_context`]. Returns a clone so
     /// callers can hold the value without keeping the lock.
     #[cfg(feature = "desktop_harness_host")]
+    #[allow(dead_code)]
     pub async fn capability_snapshot(
         &self,
         session_id: &str,
@@ -381,6 +382,7 @@ impl AppState {
     /// `session_id`, if any. Used by the completion-mirror persist path to
     /// reuse the same `run_id` the prompt advertised for this turn.
     #[cfg(feature = "desktop_harness_host")]
+    #[allow(dead_code)]
     pub async fn cached_workspace_execution_context(
         &self,
         session_id: &str,

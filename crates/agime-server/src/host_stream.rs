@@ -19,6 +19,11 @@
 //! CLAUDE.md long-term maintenance strategy.
 
 #![cfg(feature = "desktop_harness_host")]
+// Phase-2 infrastructure: helpers are wired into the active reply path in
+// Milestones B/C/D per the desktop harness rollout plan. Until then they live
+// here as fully-typed scaffolding ready for use; suppress the dead-code lint
+// at file scope rather than tagging each item individually.
+#![allow(dead_code)]
 
 use agime::agents::{
     build_permission_requested_control_message, build_permission_resolved_control_message,

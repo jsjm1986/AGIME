@@ -85,6 +85,7 @@ impl DesktopExecutionSlotProvider {
 
     /// Override the per-agent slot ceiling. Existing entries keep their
     /// previous max; new agents pick this up.
+    #[allow(dead_code)]
     pub fn with_max_slots(default_max: u32) -> Self {
         Self::new(default_max)
     }

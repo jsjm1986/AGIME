@@ -45,6 +45,7 @@ pub struct DocumentAnalysisInput {
     pub doc_id: String,
     pub doc_name: String,
     pub mime_type: String,
+    #[allow(dead_code)]
     pub file_size: u64,
     pub lang: Option<String>,
 }

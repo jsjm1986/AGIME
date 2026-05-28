@@ -11,6 +11,8 @@ pub mod session;
 pub mod setup;
 pub mod shared_session;
 pub mod status;
+#[cfg(feature = "desktop_harness_host")]
+pub mod tasks;
 pub mod upload;
 pub mod utils;
 pub mod web_ui;
@@ -32,7 +34,7 @@ pub struct TeamRoutesConfig {
 
 // Function to configure all routes
 pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Router {
-    Router::new()
+    let router = Router::new()
         .merge(status::routes())
         .merge(reply::routes(state.clone()))
         .merge(action_required::routes(state.clone()))
@@ -44,7 +46,12 @@ pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Rout
         .merge(shared_session::routes(state.clone()))
         .merge(setup::routes(state.clone()))
         .merge(upload::routes())
-        .merge(mcp_ui_proxy::routes(secret_key))
+        .merge(mcp_ui_proxy::routes(secret_key));
+
+    #[cfg(feature = "desktop_harness_host")]
+    let router = router.merge(tasks::routes(state.clone()));
+
+    router
 }
 
 /// Configure routes with team support (only available with 'team' feature)

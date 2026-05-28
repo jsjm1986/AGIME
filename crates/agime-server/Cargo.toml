@@ -69,10 +69,11 @@ async-trait = "0.1.89"
 tempfile = "3.15.0"
 
 [features]
-default = []
+default = ["desktop_harness_host"]
 team = ["agime-team", "sqlx", "dirs", "agime/team"]
-# Routes the chat reply path through `DesktopHarnessHost::execute_chat_host`
-# instead of calling `agent.reply()` directly. The first iteration is a
-# bit-for-bit pass-through; later phases add capability policy / admission
-# control / workspace service / dual-channel mirror events behind this gate.
+# Routes the chat reply path through `DesktopHarnessHost::execute_chat_host_with_mirror`,
+# which drives `run_harness_host` instead of calling `agent.reply()` directly.
+# Provides the full 26-type SSE envelope protocol, sub-agent / swarm-worker
+# orchestration, context compaction events, and conversation mirror back to
+# the desktop's logical session.
 desktop_harness_host = ["mime_guess"]

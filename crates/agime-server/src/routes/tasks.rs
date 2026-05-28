@@ -24,8 +24,6 @@
 //! paths would cause CI schema drift. The desktop client should call
 //! this route via plain `fetch` until the feature becomes default.
 
-#![cfg(feature = "desktop_harness_host")]
-
 use crate::state::AppState;
 use axum::{
     extract::{Query, State},

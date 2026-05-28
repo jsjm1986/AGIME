@@ -22,6 +22,13 @@
 //! (desktop reimplementation, not a verbatim copy — see CLAUDE.md long-term
 //! maintenance strategy).
 
+// `ApprovalMode::from_str` is a parser, not a `std::str::FromStr` impl —
+// it returns `Option<Self>` and is named to mirror the team-server original.
+// Suppress `should_implement_trait` at file scope rather than per-call-site to
+// keep the helper aligned with the runtime version (CLAUDE.md long-term
+// maintenance strategy).
+#![allow(clippy::should_implement_trait)]
+
 use std::collections::HashSet;
 
 /// Approval mode mirrors the desktop UI's three-state permission setting:

@@ -31,6 +31,14 @@
 //! commit 961109f (desktop reimplementation, not a verbatim copy — the Mongo
 //! surface is dropped per the long-term maintenance strategy in CLAUDE.md).
 
+// JSON-ish field extractors index `text` / `rest` by byte offsets returned
+// from `str::find`. The offsets always land on ASCII character boundaries
+// (the `"field":"`, `"`, `,` markers), so the slices are safe — but clippy
+// can't see that invariant. Suppress the `string_slice` lint at file scope
+// rather than per-call-site to keep the helpers byte-for-byte aligned with
+// the team-server original (CLAUDE.md long-term maintenance strategy).
+#![allow(clippy::string_slice)]
+
 use agime::agents::{format_execution_host_completion_text, ExecutionHostCompletionReport};
 use serde::{Deserialize, Serialize};
 

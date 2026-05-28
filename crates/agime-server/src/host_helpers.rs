@@ -18,6 +18,12 @@
 //! `host_provider`, `host_workspace`, and `host_prompt` modules.
 
 #![allow(dead_code)]
+// `parse_turn_tool_gate_allow_only` indexes `text` / `after` by byte offsets
+// returned from `str::find` against ASCII markers (`<turn_tool_gate mode=...>`
+// / `</turn_tool_gate>`), so the slices always land on UTF-8 boundaries.
+// Suppress `string_slice` at file scope to keep the helper byte-for-byte
+// aligned with the team-server original.
+#![allow(clippy::string_slice)]
 
 use std::collections::HashSet;
 

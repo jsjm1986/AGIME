@@ -1,9 +1,10 @@
 //! Desktop harness host — Phase 5b: standard tool dispatch.
 //!
 //! Combined verbatim copy of three `agime-runtime` modules:
-//! - `tool_content.rs`  → `ToolContentBlock`, `ToolTaskProgress`, `ToolTaskProgressCallback`
-//! - `traits.rs`        → `ToolDispatchProgressSink`, `ToolDispatchExtensionState`,
-//!                        `SharedToolDispatchState`
+//! - `tool_content.rs`  → `ToolContentBlock`, `ToolTaskProgress`,
+//!   `ToolTaskProgressCallback`
+//! - `traits.rs`        → `ToolDispatchProgressSink`,
+//!   `ToolDispatchExtensionState`, `SharedToolDispatchState`
 //! - `tool_dispatch.rs` → `execute_standard_tool_call`
 //!
 //! Squashed into one file to keep the desktop harness host's helpers flat at

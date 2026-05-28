@@ -480,7 +480,7 @@ pub async fn reply(
             }
         };
 
-        let mut stream = match {
+        let stream_result = {
             #[cfg(feature = "desktop_harness_host")]
             {
                 let host = crate::desktop_harness_host::DesktopHarnessHost::new(state.clone());
@@ -561,7 +561,9 @@ pub async fn reply(
                     )
                     .await
             }
-        } {
+        };
+
+        let mut stream = match stream_result {
             Ok(stream) => {
                 tracing::info!(
                     "[PERF] agent.reply() stream ready, elapsed: {:?}",

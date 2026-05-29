@@ -17,8 +17,7 @@
 //! and user-visible task UUIDs. The desktop keeps everything in-process:
 //! - `Arc<Mutex<HashMap<task_id, UserTaskRecord>>>` is the task table.
 //! - Each task owns a `CancellationToken` and a `broadcast::Sender` event bus.
-//! - A bounded ring buffer per task retains the last N events so an attaching
-//!   client can replay missed events via `last_event_id`.
+//! - A bounded ring buffer per task retains the last N events for replay.
 //!
 //! When the desktop later wants durability (resume across process restarts),
 //! a SQLite-backed implementation plugs in behind the same `submit` / `list`

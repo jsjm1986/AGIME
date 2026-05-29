@@ -15,8 +15,7 @@
 //! - `GET    /tasks`            — list tasks (optionally `?session_id=`)
 //! - `GET    /tasks/:id`        — fetch a task snapshot
 //! - `POST   /tasks/:id/cancel` — cancel a running task
-//! - `GET    /tasks/:id/stream` — attach to the live SSE event stream,
-//!                                replaying from `?last_event_id=` if given
+//! - `GET    /tasks/:id/stream` — attach to the live SSE event stream (replays from `?last_event_id=` if given)
 //! - `GET    /tasks/active`     — (pre-existing) sub-agent activity probe
 //!
 //! NOTE: these routes are intentionally *not* registered in `openapi.rs`.

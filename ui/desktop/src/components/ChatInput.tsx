@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
-import { Bug, ScrollText, Repeat } from 'lucide-react';
+import { Bug, ScrollText, Repeat, Rocket } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/Tooltip';
 import { Button } from './ui/button';
@@ -34,6 +34,9 @@ import CreateRecipeFromSessionModal from './recipes/CreateRecipeFromSessionModal
 import CreateEditRecipeModal from './recipes/CreateEditRecipeModal';
 import { ConfirmationModal } from './ui/ConfirmationModal';
 import { ThinkingMenuButton } from './bottom_menu/ThinkingMenuButton';
+import { BackgroundTasksMenu } from './bottom_menu/BackgroundTasksMenu';
+import { taskManager } from '../services/TaskManager';
+import { toastSuccess } from '../toasts';
 import { isWeb, isMac } from '../platform';
 import { useIsMobile } from '../hooks/use-mobile';
 import { uploadFilesToServer } from '../utils/webUpload';
@@ -1166,6 +1169,32 @@ export default function ChatInput({
     ]
   );
 
+  // Submit the current composer text as a detached background long-running task
+  // (POST /tasks) instead of streaming it inline. Images/files aren't supported
+  // by the task route yet, so this only sends text.
+  const handleRunInBackground = useCallback(async () => {
+    const prompt = displayValue.trim();
+    if (!prompt || !sessionId) {
+      return;
+    }
+    try {
+      LocalMessageStorage.addMessage(prompt);
+      await taskManager.submit(sessionId, prompt);
+      setDisplayValue('');
+      setValue('');
+      setHasUserTyped(false);
+      toastSuccess({
+        title: '已转为后台任务',
+        msg: '任务正在后台运行，可在工具栏的后台任务中查看进度。',
+      });
+    } catch (error) {
+      toastError({
+        title: '提交后台任务失败',
+        msg: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [displayValue, sessionId]);
+
   const handleKeyDown = (evt: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // If mention popover is open, handle arrow keys and enter
     if (mentionPopover.isOpen && mentionPopoverRef.current) {
@@ -1946,6 +1975,28 @@ export default function ChatInput({
               </TooltipTrigger>
               <TooltipContent>{t('generateDiagnostics')}</TooltipContent>
             </Tooltip>
+          )}
+          {/* Background long-running tasks: convert-to-task button + status menu */}
+          {!isMobile && sessionId && (
+            <>
+              <div className="toolbar-divider w-px h-4 bg-border-default mx-2" />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    onClick={handleRunInBackground}
+                    disabled={!displayValue.trim()}
+                    variant="ghost"
+                    size="sm"
+                    className="flex items-center justify-center text-text-default/70 hover:text-text-default text-xs cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Rocket className="w-4 h-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>转为后台长程任务</TooltipContent>
+              </Tooltip>
+              <BackgroundTasksMenu sessionId={sessionId} />
+            </>
           )}
         </div>
         {/* Right group on mobile: thinking button */}

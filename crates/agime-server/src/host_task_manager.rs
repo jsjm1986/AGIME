@@ -387,7 +387,17 @@ impl DesktopTaskManager {
             .await;
         self.emit(&task_id, UserTaskEventPayload::Started).await;
 
-        let agent = match state.get_agent(session_id.clone()).await {
+        // Background tasks run on a dedicated agent keyed by task id, NOT the
+        // shared per-session agent that `/reply` uses. This avoids contention on
+        // the session agent's provider/system-prompt/extension mutexes and the
+        // per-session execution slot when a foreground chat and a background
+        // task target the same logical session. The logical session id still
+        // flows through `session_config.id` below so persistence and the
+        // conversation mirror write back to the correct session. The fresh
+        // agent inherits the manager's default provider, so its later
+        // `agent.provider()` lookup succeeds.
+        let task_agent_key = format!("{}::task::{}", session_id, task_id);
+        let agent = match state.get_agent(task_agent_key.clone()).await {
             Ok(agent) => agent,
             Err(e) => {
                 let error = format!("failed to get session agent: {}", e);
@@ -444,6 +454,7 @@ impl DesktopTaskManager {
             Ok(stream) => stream,
             Err(e) => {
                 control_forwarder.abort();
+                let _ = state.agent_manager.remove_session(&task_agent_key).await;
                 self.finish_failed(&task_id, format!("harness host failed to start: {}", e))
                     .await;
                 return;
@@ -472,6 +483,11 @@ impl DesktopTaskManager {
         }
 
         control_forwarder.abort();
+
+        // Drop the dedicated task agent. Best-effort: the manager's LruCache
+        // would evict it eventually, but removing it now keeps short-lived task
+        // agents from pushing live session agents out of the cache.
+        let _ = state.agent_manager.remove_session(&task_agent_key).await;
 
         if cancel_token.is_cancelled() {
             self.finish_cancelled(&task_id).await;

@@ -7,8 +7,10 @@ use agime::conversation::message::Message;
 use agime::conversation::Conversation;
 use agime::permission::Permission;
 use rmcp::model::JsonObject;
+use serial_test::serial;
 
 #[test]
+#[serial(swarm_planner_auto_env)]
 fn planner_upgrade_prefers_stable_result_contract_targets() {
     std::env::set_var("AGIME_ENABLE_SWARM_PLANNER_AUTO", "true");
     let delegation = DelegationRuntimeState::new(
@@ -36,6 +38,7 @@ fn planner_upgrade_prefers_stable_result_contract_targets() {
 }
 
 #[test]
+#[serial(swarm_planner_auto_env)]
 fn planner_upgrade_stays_disabled_after_swarm_fallback() {
     std::env::set_var("AGIME_ENABLE_SWARM_PLANNER_AUTO", "true");
     let mut delegation = DelegationRuntimeState::new(
@@ -81,6 +84,7 @@ fn validation_worker_permission_policy_denies_mutation() {
 }
 
 #[test]
+#[serial(swarm_planner_auto_env)]
 fn planner_upgrade_can_build_auto_swarm_tool_request() {
     std::env::set_var("AGIME_ENABLE_SWARM_PLANNER_AUTO", "true");
     let delegation = DelegationRuntimeState::new(
@@ -112,6 +116,7 @@ fn planner_upgrade_can_build_auto_swarm_tool_request() {
 }
 
 #[test]
+#[serial(swarm_planner_auto_env)]
 fn planner_upgrade_requires_auto_swarm_execution_mode() {
     std::env::set_var("AGIME_ENABLE_SWARM_PLANNER_AUTO", "true");
     let delegation = DelegationRuntimeState::new(

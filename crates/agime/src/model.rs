@@ -128,7 +128,7 @@ impl ModelConfig {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
-            supports_multimodal: true,
+            supports_multimodal: Self::parse_supports_multimodal()?,
             prompt_caching_mode: PromptCachingMode::Auto,
             cache_edit_mode: CacheEditMode::Auto,
             toolshim,
@@ -207,6 +207,52 @@ impl ModelConfig {
             }
         } else {
             Ok(false)
+        }
+    }
+
+    /// Whether the model/endpoint should be sent image (multimodal) content.
+    /// Defaults to `true`. The value is read with the standard dual-prefix
+    /// precedence (`AGIME_MULTIMODAL` env, then `GOOSE_MULTIMODAL` env, then the
+    /// `AGIME_MULTIMODAL` key in `config.yaml`) so the desktop UI toggle — which
+    /// persists to `config.yaml` — is honored on the registry chat path. Set it
+    /// to a falsey value to force images to be down-converted to text
+    /// placeholders, which avoids 400 rejections from endpoints that only
+    /// accept text.
+    fn parse_supports_multimodal() -> Result<bool, ConfigError> {
+        match crate::config::Config::global().get_param::<serde_json::Value>("MULTIMODAL") {
+            Ok(value) => Self::interpret_multimodal_value(&value),
+            Err(_) => Ok(true),
+        }
+    }
+
+    fn interpret_multimodal_value(value: &serde_json::Value) -> Result<bool, ConfigError> {
+        match value {
+            serde_json::Value::Bool(b) => Ok(*b),
+            serde_json::Value::String(s) => match s.trim().to_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => Ok(true),
+                "0" | "false" | "no" | "off" => Ok(false),
+                _ => Err(ConfigError::InvalidValue(
+                    "MULTIMODAL".to_string(),
+                    s.clone(),
+                    "must be one of: 1, true, yes, on, 0, false, no, off".to_string(),
+                )),
+            },
+            // Numeric env values like `0` / `1` are JSON-parsed into numbers
+            // before reaching here (see Config::parse_env_value).
+            serde_json::Value::Number(n) => match n.as_i64() {
+                Some(0) => Ok(false),
+                Some(1) => Ok(true),
+                _ => Err(ConfigError::InvalidValue(
+                    "MULTIMODAL".to_string(),
+                    n.to_string(),
+                    "numeric value must be 0 or 1".to_string(),
+                )),
+            },
+            other => Err(ConfigError::InvalidValue(
+                "MULTIMODAL".to_string(),
+                other.to_string(),
+                "must be a boolean or one of: 1, true, yes, on, 0, false, no, off".to_string(),
+            )),
         }
     }
 
@@ -314,5 +360,119 @@ impl ModelConfig {
     pub fn new_or_fail(model_name: &str) -> ModelConfig {
         ModelConfig::new(model_name)
             .unwrap_or_else(|_| panic!("Failed to create model config for {}", model_name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use std::env;
+
+    const AGIME_KEY: &str = "AGIME_MULTIMODAL";
+    const GOOSE_KEY: &str = "GOOSE_MULTIMODAL";
+
+    fn clear_multimodal_env() {
+        env::remove_var(AGIME_KEY);
+        env::remove_var(GOOSE_KEY);
+    }
+
+    #[test]
+    #[serial]
+    fn supports_multimodal_defaults_to_true_when_unset() {
+        clear_multimodal_env();
+        assert!(ModelConfig::parse_supports_multimodal().unwrap());
+        let config = ModelConfig::new("test-model").unwrap();
+        assert!(config.supports_multimodal);
+    }
+
+    #[test]
+    #[serial]
+    fn supports_multimodal_disabled_by_falsey_values() {
+        for val in ["0", "false", "no", "off", "OFF", "False"] {
+            clear_multimodal_env();
+            env::set_var(AGIME_KEY, val);
+            assert!(
+                !ModelConfig::parse_supports_multimodal().unwrap(),
+                "value {val:?} should disable multimodal"
+            );
+        }
+        clear_multimodal_env();
+    }
+
+    #[test]
+    #[serial]
+    fn supports_multimodal_enabled_by_truthy_values() {
+        for val in ["1", "true", "yes", "on", "ON", "True"] {
+            clear_multimodal_env();
+            env::set_var(AGIME_KEY, val);
+            assert!(
+                ModelConfig::parse_supports_multimodal().unwrap(),
+                "value {val:?} should enable multimodal"
+            );
+        }
+        clear_multimodal_env();
+    }
+
+    #[test]
+    #[serial]
+    fn supports_multimodal_rejects_garbage_values() {
+        clear_multimodal_env();
+        env::set_var(AGIME_KEY, "maybe");
+        let err = ModelConfig::parse_supports_multimodal().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidValue(name, _, _) if name == "MULTIMODAL"));
+        clear_multimodal_env();
+    }
+
+    #[test]
+    #[serial]
+    fn supports_multimodal_honors_goose_legacy_prefix() {
+        clear_multimodal_env();
+        env::set_var(GOOSE_KEY, "false");
+        assert!(!ModelConfig::parse_supports_multimodal().unwrap());
+        let config = ModelConfig::new("test-model").unwrap();
+        assert!(!config.supports_multimodal);
+        clear_multimodal_env();
+    }
+
+    // Direct coverage for the config.yaml value shapes that
+    // `Config::get_param` can return (native YAML bool, quoted string, number).
+    // The desktop UI persists this key to config.yaml, so these shapes are the
+    // real-world inputs the registry chat path must interpret.
+
+    #[test]
+    fn interprets_native_bool_from_config_yaml() {
+        assert!(ModelConfig::interpret_multimodal_value(&serde_json::json!(true)).unwrap());
+        assert!(!ModelConfig::interpret_multimodal_value(&serde_json::json!(false)).unwrap());
+    }
+
+    #[test]
+    fn interprets_string_values_from_config_yaml() {
+        for val in ["true", "yes", "on", "1", "True"] {
+            assert!(
+                ModelConfig::interpret_multimodal_value(&serde_json::json!(val)).unwrap(),
+                "string {val:?} should enable multimodal"
+            );
+        }
+        for val in ["false", "no", "off", "0", "False"] {
+            assert!(
+                !ModelConfig::interpret_multimodal_value(&serde_json::json!(val)).unwrap(),
+                "string {val:?} should disable multimodal"
+            );
+        }
+    }
+
+    #[test]
+    fn interprets_numeric_values_from_config_yaml() {
+        assert!(ModelConfig::interpret_multimodal_value(&serde_json::json!(1)).unwrap());
+        assert!(!ModelConfig::interpret_multimodal_value(&serde_json::json!(0)).unwrap());
+        assert!(ModelConfig::interpret_multimodal_value(&serde_json::json!(2)).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_config_yaml_shapes() {
+        assert!(ModelConfig::interpret_multimodal_value(&serde_json::json!("maybe")).is_err());
+        assert!(ModelConfig::interpret_multimodal_value(&serde_json::json!(["a"])).is_err());
+        assert!(ModelConfig::interpret_multimodal_value(&serde_json::json!({"k": "v"})).is_err());
     }
 }

@@ -14,14 +14,17 @@
 //! That is what this module provides.
 //!
 //! The team-server backs the equivalent `TaskManager` with Mongo persistence
-//! and user-visible task UUIDs. The desktop keeps everything in-process:
+//! and user-visible task UUIDs. The desktop keeps the live table in-process:
 //! - `Arc<Mutex<HashMap<task_id, UserTaskRecord>>>` is the task table.
 //! - Each task owns a `CancellationToken` and a `broadcast::Sender` event bus.
 //! - A bounded ring buffer per task retains the last N events for replay.
 //!
-//! When the desktop later wants durability (resume across process restarts),
-//! a SQLite-backed implementation plugs in behind the same `submit` / `list`
-//! / `get` / `cancel` / `subscribe` surface without changing the routes.
+//! Durability across process restarts is provided by
+//! [`crate::host_task_store::DesktopTaskStore`] — a file-based JSON store
+//! (one `<task_id>.json` per task), used here instead of SQLite because the
+//! `desktop_harness_host` feature does not pull in `sqlx`. Each snapshot
+//! transition is persisted best-effort, and [`Self::resume_queued_tasks`]
+//! rebuilds the table on start, reconciling any task left mid-flight.
 //!
 //! All callers are gated by the `desktop_harness_host` cargo feature.
 
@@ -38,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
+use crate::host_task_store::{DesktopTaskStore, PersistedTask};
 use crate::state::AppState;
 
 /// Capacity of each task's live event broadcast channel. A slow attaching
@@ -133,6 +137,9 @@ pub enum UserTaskEventPayload {
 
 struct UserTaskRecord {
     snapshot: UserTaskSnapshot,
+    /// The original user prompt, retained so the durable store can persist it
+    /// for restart reconciliation.
+    user_message: Message,
     cancel_token: CancellationToken,
     event_tx: broadcast::Sender<UserTaskEvent>,
     /// Retained recent events for `last_event_id` replay on attach.
@@ -145,12 +152,158 @@ struct UserTaskRecord {
 #[derive(Clone)]
 pub struct DesktopTaskManager {
     inner: Arc<Mutex<HashMap<String, UserTaskRecord>>>,
+    /// Durable file-backed store. `None` if the data dir could not be created
+    /// (e.g. read-only filesystem); the manager then runs in-memory only and
+    /// logs the degradation once at construction.
+    store: Option<DesktopTaskStore>,
 }
 
 impl DesktopTaskManager {
     pub fn new() -> Self {
+        let store = match DesktopTaskStore::new() {
+            Ok(store) => Some(store),
+            Err(e) => {
+                tracing::warn!(
+                    "DesktopTaskManager: durable task store unavailable, running in-memory only: {}",
+                    e
+                );
+                None
+            }
+        };
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            store,
+        }
+    }
+
+    /// In-memory-only manager (no durable store). Used by unit tests so they
+    /// never touch the real data directory.
+    #[cfg(test)]
+    fn new_in_memory() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            store: None,
+        }
+    }
+
+    /// Persist the current snapshot for `task_id` (best-effort). Reads the
+    /// record under the lock, then writes outside any await on the map so the
+    /// lock is not held across filesystem I/O.
+    async fn persist(&self, task_id: &str) {
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        let record = {
+            let map = self.inner.lock().await;
+            map.get(task_id).map(|r| PersistedTask {
+                snapshot: r.snapshot.clone(),
+                user_message: r.user_message.clone(),
+            })
+        };
+        if let Some(record) = record {
+            if let Err(e) = store.save(&record) {
+                tracing::warn!(
+                    "DesktopTaskManager: failed to persist task {}: {}",
+                    task_id,
+                    e
+                );
+            }
+        }
+    }
+
+    /// Rebuild the in-memory task table from the durable store on server
+    /// start, reconciling any task that was mid-flight when the process last
+    /// exited.
+    ///
+    /// Terminal tasks (Completed / Failed / Cancelled) are reloaded as-is so
+    /// the UI's task list survives a restart. A task left in `Pending` or
+    /// `Running` could not have finished — its background turn died with the
+    /// process — so it is reconciled to `Failed` with an explicit "interrupted
+    /// by server restart" error and re-persisted.
+    ///
+    /// We deliberately do **not** auto-re-execute interrupted tasks: the
+    /// desktop agent's provider/extensions are only configured when the UI
+    /// calls `resume_agent`, so a cold-start re-drive would either fail or fire
+    /// a surprise paid LLM turn before the user has opened the app. A user who
+    /// wants the work redone can resubmit from the recovered task entry.
+    pub async fn resume_queued_tasks(&self) {
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        let persisted = match store.load_all() {
+            Ok(records) => records,
+            Err(e) => {
+                tracing::warn!("DesktopTaskManager: failed to load persisted tasks: {}", e);
+                return;
+            }
+        };
+
+        let mut reconciled = 0usize;
+        let mut recovered = 0usize;
+        let mut map = self.inner.lock().await;
+        for PersistedTask {
+            mut snapshot,
+            user_message,
+        } in persisted
+        {
+            // Skip anything already live (resume runs once at startup, but be
+            // defensive against a double-call).
+            if map.contains_key(&snapshot.task_id) {
+                continue;
+            }
+            let interrupted = matches!(
+                snapshot.status,
+                UserTaskStatus::Pending | UserTaskStatus::Running
+            );
+            if interrupted {
+                snapshot.status = UserTaskStatus::Failed;
+                snapshot.error = Some("interrupted by server restart".to_string());
+                let now = Utc::now().timestamp();
+                snapshot.updated_at = now;
+                snapshot.finished_at = Some(now);
+                reconciled += 1;
+            } else {
+                recovered += 1;
+            }
+            let next_seq = snapshot.last_event_id.saturating_add(1);
+            let (event_tx, _) = broadcast::channel(TASK_EVENT_CHANNEL_CAPACITY);
+            let needs_persist = interrupted;
+            let task_id = snapshot.task_id.clone();
+            map.insert(
+                task_id.clone(),
+                UserTaskRecord {
+                    snapshot,
+                    user_message,
+                    // Terminal tasks have no live turn; the cancel token is
+                    // inert but kept for shape uniformity.
+                    cancel_token: CancellationToken::new(),
+                    event_tx,
+                    replay: VecDeque::new(),
+                    next_seq,
+                },
+            );
+            if needs_persist {
+                if let Some(record) = map.get(&task_id) {
+                    let persisted = PersistedTask {
+                        snapshot: record.snapshot.clone(),
+                        user_message: record.user_message.clone(),
+                    };
+                    if let Err(e) = store.save(&persisted) {
+                        tracing::warn!(
+                            "DesktopTaskManager: failed to re-persist reconciled task {}: {}",
+                            task_id,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        if reconciled > 0 || recovered > 0 {
+            tracing::info!(
+                reconciled,
+                recovered,
+                "DesktopTaskManager: resumed persisted tasks (interrupted ones marked failed)"
+            );
         }
     }
 
@@ -188,6 +341,7 @@ impl DesktopTaskManager {
                 task_id.clone(),
                 UserTaskRecord {
                     snapshot,
+                    user_message: user_message.clone(),
                     cancel_token: cancel_token.clone(),
                     event_tx,
                     replay: VecDeque::new(),
@@ -195,6 +349,10 @@ impl DesktopTaskManager {
                 },
             );
         }
+
+        // Persist the Pending record immediately so a crash between submit and
+        // the first transition still leaves a durable trace for reconciliation.
+        self.persist(&task_id).await;
 
         let manager = self.clone();
         let spawn_session_id = session_id.clone();
@@ -414,20 +572,24 @@ impl DesktopTaskManager {
         let _ = record.event_tx.send(event);
     }
 
-    /// Update a task's lifecycle status without emitting an event.
+    /// Update a task's lifecycle status without emitting an event. Persists
+    /// the updated snapshot to the durable store (best-effort).
     async fn transition(&self, task_id: &str, status: UserTaskStatus, error: Option<String>) {
-        let mut map = self.inner.lock().await;
-        let Some(record) = map.get_mut(task_id) else {
-            return;
-        };
-        record.snapshot.status = status;
-        record.snapshot.updated_at = Utc::now().timestamp();
-        if let Some(error) = error {
-            record.snapshot.error = Some(error);
+        {
+            let mut map = self.inner.lock().await;
+            let Some(record) = map.get_mut(task_id) else {
+                return;
+            };
+            record.snapshot.status = status;
+            record.snapshot.updated_at = Utc::now().timestamp();
+            if let Some(error) = error {
+                record.snapshot.error = Some(error);
+            }
+            if status.is_terminal() {
+                record.snapshot.finished_at = Some(record.snapshot.updated_at);
+            }
         }
-        if status.is_terminal() {
-            record.snapshot.finished_at = Some(record.snapshot.updated_at);
-        }
+        self.persist(task_id).await;
     }
 
     async fn finish_completed(&self, task_id: &str) {
@@ -502,6 +664,10 @@ fn preview_of(message: &Message) -> String {
 mod tests {
     use super::*;
 
+    fn test_message() -> Message {
+        Message::user().with_text("test")
+    }
+
     fn make_event(task_id: &str, seq: u64) -> UserTaskEvent {
         UserTaskEvent {
             task_id: task_id.to_string(),
@@ -521,7 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn emit_assigns_monotonic_seq_and_updates_snapshot() {
-        let manager = DesktopTaskManager::new();
+        let manager = DesktopTaskManager::new_in_memory();
         let (tx, _) = broadcast::channel(16);
         {
             let mut map = manager.inner.lock().await;
@@ -539,6 +705,7 @@ mod tests {
                         updated_at: 0,
                         finished_at: None,
                     },
+                    user_message: test_message(),
                     cancel_token: CancellationToken::new(),
                     event_tx: tx,
                     replay: VecDeque::new(),
@@ -561,7 +728,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribe_replays_only_after_seq() {
-        let manager = DesktopTaskManager::new();
+        let manager = DesktopTaskManager::new_in_memory();
         let (tx, _) = broadcast::channel(16);
         {
             let mut map = manager.inner.lock().await;
@@ -583,6 +750,7 @@ mod tests {
                         updated_at: 0,
                         finished_at: None,
                     },
+                    user_message: test_message(),
                     cancel_token: CancellationToken::new(),
                     event_tx: tx,
                     replay,
@@ -599,7 +767,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_filters_by_session_and_sorts_newest_first() {
-        let manager = DesktopTaskManager::new();
+        let manager = DesktopTaskManager::new_in_memory();
         {
             let mut map = manager.inner.lock().await;
             for (id, session, created) in [("a", "s1", 100), ("b", "s1", 200), ("c", "s2", 150)] {
@@ -618,6 +786,7 @@ mod tests {
                             updated_at: created,
                             finished_at: None,
                         },
+                        user_message: test_message(),
                         cancel_token: CancellationToken::new(),
                         event_tx: tx,
                         replay: VecDeque::new(),
@@ -638,7 +807,65 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_unknown_task_errors() {
-        let manager = DesktopTaskManager::new();
+        let manager = DesktopTaskManager::new_in_memory();
         assert!(manager.cancel("nope").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn resume_reconciles_interrupted_and_recovers_terminal() {
+        use crate::host_task_store::{DesktopTaskStore, PersistedTask};
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = DesktopTaskStore::new_at(dir.path());
+
+        // A task left Running (interrupted) and one that Completed cleanly.
+        for (id, status) in [
+            ("task-run", UserTaskStatus::Running),
+            ("task-done", UserTaskStatus::Completed),
+        ] {
+            store
+                .save(&PersistedTask {
+                    snapshot: UserTaskSnapshot {
+                        task_id: id.to_string(),
+                        session_id: "s1".to_string(),
+                        status,
+                        prompt_preview: "p".to_string(),
+                        last_event_id: 4,
+                        error: None,
+                        created_at: 1,
+                        updated_at: 1,
+                        finished_at: if status.is_terminal() { Some(1) } else { None },
+                    },
+                    user_message: test_message(),
+                })
+                .unwrap();
+        }
+
+        let manager = DesktopTaskManager {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            store: Some(store),
+        };
+        manager.resume_queued_tasks().await;
+
+        let interrupted = manager.get("task-run").await.unwrap();
+        assert_eq!(interrupted.status, UserTaskStatus::Failed);
+        assert_eq!(
+            interrupted.error.as_deref(),
+            Some("interrupted by server restart")
+        );
+        // next_seq continues past the persisted last_event_id.
+        let completed = manager.get("task-done").await.unwrap();
+        assert_eq!(completed.status, UserTaskStatus::Completed);
+
+        // The reconciliation was persisted, so a second resume is stable.
+        let manager2 = DesktopTaskManager {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            store: Some(DesktopTaskStore::new_at(dir.path())),
+        };
+        manager2.resume_queued_tasks().await;
+        assert_eq!(
+            manager2.get("task-run").await.unwrap().status,
+            UserTaskStatus::Failed
+        );
     }
 }

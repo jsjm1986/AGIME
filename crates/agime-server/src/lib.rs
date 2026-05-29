@@ -27,6 +27,8 @@ pub mod host_task_manager;
 #[cfg(feature = "desktop_harness_host")]
 pub mod host_task_runtime;
 #[cfg(feature = "desktop_harness_host")]
+pub mod host_task_store;
+#[cfg(feature = "desktop_harness_host")]
 pub mod host_tool_dispatch;
 pub mod host_workspace;
 #[cfg(feature = "desktop_harness_host")]

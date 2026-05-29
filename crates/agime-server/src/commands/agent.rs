@@ -121,6 +121,15 @@ pub async fn run() -> Result<()> {
 
     let app_state = state::AppState::new().await?;
 
+    // Reconcile any user-level long-running tasks that were mid-flight when
+    // the process last exited: terminal tasks are reloaded so the UI list
+    // survives a restart; interrupted ones are marked failed. Best-effort —
+    // never blocks server start.
+    #[cfg(feature = "desktop_harness_host")]
+    {
+        app_state.task_manager().await.resume_queued_tasks().await;
+    }
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)

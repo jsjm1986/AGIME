@@ -28,6 +28,8 @@ mod host_task_manager;
 #[cfg(feature = "desktop_harness_host")]
 mod host_task_runtime;
 #[cfg(feature = "desktop_harness_host")]
+mod host_task_store;
+#[cfg(feature = "desktop_harness_host")]
 mod host_tool_dispatch;
 mod host_workspace;
 #[cfg(feature = "desktop_harness_host")]

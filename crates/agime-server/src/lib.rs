@@ -23,6 +23,8 @@ pub mod host_stream;
 #[cfg(feature = "desktop_harness_host")]
 pub mod host_task;
 #[cfg(feature = "desktop_harness_host")]
+pub mod host_task_manager;
+#[cfg(feature = "desktop_harness_host")]
 pub mod host_task_runtime;
 #[cfg(feature = "desktop_harness_host")]
 pub mod host_tool_dispatch;

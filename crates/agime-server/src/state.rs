@@ -114,6 +114,13 @@ pub struct AppState {
     /// [`TaskRuntime`]: agime::agents::harness::TaskRuntime
     #[cfg(feature = "desktop_harness_host")]
     pub(crate) task_runtime: Arc<Mutex<Option<Arc<crate::host_task_runtime::DesktopTaskRuntime>>>>,
+    /// Process-wide manager for **user-level** long-running tasks. Distinct
+    /// from [`Self::task_runtime`] (which is harness's internal sub-agent /
+    /// swarm-worker dispatcher): this drives detached background chat turns
+    /// that the desktop UI submits, lists, attaches to, and cancels via the
+    /// `/tasks` routes. Lazy-init on first access via [`AppState::task_manager`].
+    #[cfg(feature = "desktop_harness_host")]
+    pub(crate) task_manager: Arc<Mutex<Option<Arc<crate::host_task_manager::DesktopTaskManager>>>>,
 }
 
 impl AppState {
@@ -141,6 +148,8 @@ impl AppState {
             workspace_execution_contexts: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "desktop_harness_host")]
             task_runtime: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "desktop_harness_host")]
+            task_manager: Arc::new(Mutex::new(None)),
         }))
     }
     pub async fn set_recipe_file_hash_map(&self, hash_map: HashMap<String, PathBuf>) {
@@ -406,5 +415,19 @@ impl AppState {
         let rt = Arc::new(crate::host_task_runtime::DesktopTaskRuntime::new());
         *guard = Some(rt.clone());
         rt
+    }
+
+    /// Return the process-wide [`crate::host_task_manager::DesktopTaskManager`],
+    /// initialising it on first access. Drives user-level long-running tasks
+    /// for the `/tasks` routes (submit / list / get / stream / cancel).
+    #[cfg(feature = "desktop_harness_host")]
+    pub async fn task_manager(&self) -> Arc<crate::host_task_manager::DesktopTaskManager> {
+        let mut guard = self.task_manager.lock().await;
+        if let Some(mgr) = guard.as_ref() {
+            return mgr.clone();
+        }
+        let mgr = Arc::new(crate::host_task_manager::DesktopTaskManager::new());
+        *guard = Some(mgr.clone());
+        mgr
     }
 }

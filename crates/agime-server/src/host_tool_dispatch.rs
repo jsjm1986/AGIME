@@ -15,15 +15,33 @@
 //!
 //! All callers are gated by the `desktop_harness_host` cargo feature.
 //!
+//! ## Why this dispatcher is NOT wired into the harness path
+//!
+//! The desktop chat loop runs through `agime::agents::harness::
+//! run_harness_host`, which drives tool execution via the Agent's own
+//! extension manager and permission inspector. `run_harness_host` offers no
+//! seam to substitute an external tool dispatcher, so this
+//! `execute_standard_tool_call` is never reached on the live path — invoking it
+//! would *duplicate* tool execution that the Agent already performs, not
+//! intercept it.
+//!
+//! It is retained as a bit-for-bit tested mirror of the runtime's dispatch
+//! contract (`[step:tool_*]` tagging, cancel/timeout semantics, MCP progress
+//! wiring) so the desktop has a reference implementation and a drop-in if core
+//! ever exposes a dispatcher hook. The `#![allow(dead_code)]` below marks that
+//! deliberate state, not deferred work. See [[project-desktop-harness-parity]].
+//!
 //! SOURCE:
 //!   - crates/agime-runtime/src/tool_content.rs at commit 961109f
 //!   - crates/agime-runtime/src/traits.rs       at commit 961109f
 //!   - crates/agime-runtime/src/tool_dispatch.rs at commit 961109f
 
 #![allow(dead_code)]
-// Phase-5b verbatim runtime copy: full tool-dispatch surface mirrors the
-// agime-runtime contract so the future tool-interception bridge plugs in
-// unchanged. Items remain dead until the bridge is wired in Milestone B.
+// Intentionally un-wired: core `run_harness_host` drives tool execution through
+// the Agent's extension manager, with no seam to inject this dispatcher.
+// Calling it on the live path would double-execute tools, not intercept them.
+// Kept as a tested mirror of the runtime contract; the items below stay dead by
+// design, not because a bridge is pending.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

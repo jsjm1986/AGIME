@@ -28,9 +28,11 @@
 //!   [`crate::host_persistence::DesktopHarnessPersistence`].
 //!
 //! Inputs that the team-server harness derives from richer session metadata
-//! (session_source, recipe contract, swarm budget, …) are pinned to the
-//! desktop's "chat" defaults below — these can grow as desktop UI features
-//! land.
+//! (session_source, recipe contract, …) are pinned to the desktop's "chat"
+//! defaults below — these can grow as desktop UI features land. Delegation
+//! budgets (`parallelism_budget` / `swarm_budget`) default to a modest fan-out
+//! and are overridable via `AGIME_DESKTOP_PARALLELISM_BUDGET` /
+//! `AGIME_DESKTOP_SWARM_BUDGET` (set to `0` to disable delegation entirely).
 //!
 //! All callers are gated by the `desktop_harness_host` cargo feature.
 //!
@@ -73,6 +75,33 @@ const DESKTOP_SESSION_SOURCE: &str = "chat";
 /// applies backpressure to the harness instead of allocating without
 /// bound.
 const EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// Default per-turn cap on concurrently running coordinator workers. The
+/// coordinator/planner still decides *whether* to delegate; this only caps
+/// the fan-out when it does. `0` disables delegation (matches the previous
+/// `None` behavior). Override with `AGIME_DESKTOP_PARALLELISM_BUDGET`.
+const DEFAULT_PARALLELISM_BUDGET: u32 = 2;
+
+/// Default per-turn cap on swarm workers. Same semantics as
+/// [`DEFAULT_PARALLELISM_BUDGET`]; override with `AGIME_DESKTOP_SWARM_BUDGET`.
+const DEFAULT_SWARM_BUDGET: u32 = 2;
+
+/// Read a `u32` budget from `env_key`, falling back to `default`. A value of
+/// `0` (from either source) maps to `None`, which disables that form of
+/// delegation in the core harness. Any unparseable value falls back to the
+/// default so a typo can never silently disable the capability.
+fn budget_from_env(env_key: &str, default: u32) -> Option<u32> {
+    resolve_budget(std::env::var(env_key).ok().as_deref(), default)
+}
+
+/// Pure budget resolution, split out from [`budget_from_env`] so it can be
+/// unit-tested without mutating process-wide environment state.
+fn resolve_budget(raw: Option<&str>, default: u32) -> Option<u32> {
+    let value = raw
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .unwrap_or(default);
+    (value > 0).then_some(value)
+}
 
 pub struct DesktopHarnessHost {
     state: Arc<AppState>,
@@ -174,8 +203,11 @@ impl DesktopHarnessHost {
             result_contract,
             server_local_tool_names,
             required_tool_prefixes,
-            parallelism_budget: None,
-            swarm_budget: None,
+            parallelism_budget: budget_from_env(
+                "AGIME_DESKTOP_PARALLELISM_BUDGET",
+                DEFAULT_PARALLELISM_BUDGET,
+            ),
+            swarm_budget: budget_from_env("AGIME_DESKTOP_SWARM_BUDGET", DEFAULT_SWARM_BUDGET),
             validation_mode: false,
             worker_extensions: Vec::new(),
             initial_context_runtime_state: None,
@@ -224,4 +256,36 @@ fn collect_text(message: &Message) -> String {
         }
     }
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_budget, DEFAULT_PARALLELISM_BUDGET, DEFAULT_SWARM_BUDGET};
+
+    #[test]
+    fn resolve_budget_uses_default_when_unset() {
+        assert_eq!(resolve_budget(None, DEFAULT_PARALLELISM_BUDGET), Some(2));
+        assert_eq!(resolve_budget(None, DEFAULT_SWARM_BUDGET), Some(2));
+    }
+
+    #[test]
+    fn resolve_budget_zero_disables_delegation() {
+        assert_eq!(resolve_budget(Some("0"), DEFAULT_PARALLELISM_BUDGET), None);
+    }
+
+    #[test]
+    fn resolve_budget_parses_override() {
+        assert_eq!(resolve_budget(Some("4"), DEFAULT_SWARM_BUDGET), Some(4));
+        assert_eq!(resolve_budget(Some("  3  "), 2), Some(3));
+    }
+
+    #[test]
+    fn resolve_budget_falls_back_on_garbage() {
+        // A typo must never silently disable the capability.
+        assert_eq!(
+            resolve_budget(Some("abc"), DEFAULT_PARALLELISM_BUDGET),
+            Some(2)
+        );
+        assert_eq!(resolve_budget(Some(""), DEFAULT_SWARM_BUDGET), Some(2));
+    }
 }

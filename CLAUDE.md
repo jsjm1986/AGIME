@@ -129,3 +129,12 @@ If you change Axum route types or shared DTOs, regenerate the OpenAPI schema and
 - `rust-analyzer.toml` exists at the root — respect its settings when configuring tooling.
 - Husky hooks are installed via `ui/desktop/`'s `prepare` script; if `npm install` is skipped, hooks won't fire locally but CI will still catch issues.
 - The repo has `node_modules/` at the **root** as well as in `ui/desktop/` and `crates/agime-team-server/web-admin/` — don't be surprised by it.
+
+## Desktop harness env knobs
+
+The desktop chat path (`agime-server` with the default `desktop_harness_host` feature) routes turns through core `run_harness_host`. Two env vars tune coordinator delegation; both are read in `crates/agime-server/src/desktop_harness_host.rs` and default to a modest fan-out so sub-agent/swarm delegation is enabled out of the box:
+
+- `AGIME_DESKTOP_PARALLELISM_BUDGET` (default `2`) — per-turn cap on concurrently running coordinator workers.
+- `AGIME_DESKTOP_SWARM_BUDGET` (default `2`) — per-turn cap on swarm workers.
+
+Set either to `0` to disable that form of delegation (reverts to the pre-`v2` `None` behavior). Unparseable values fall back to the default, so a typo can't silently disable the capability. The budget is only a ceiling — the core coordinator/planner still decides *whether* to delegate based on the turn's content, so simple single-shot chats won't spawn workers.

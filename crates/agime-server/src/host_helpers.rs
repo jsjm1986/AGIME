@@ -18,6 +18,12 @@
 //! `host_provider`, `host_workspace`, and `host_prompt` modules.
 
 #![allow(dead_code)]
+// `parse_turn_tool_gate_allow_only` indexes `text` / `after` by byte offsets
+// returned from `str::find` against ASCII markers (`<turn_tool_gate mode=...>`
+// / `</turn_tool_gate>`), so the slices always land on UTF-8 boundaries.
+// Suppress `string_slice` at file scope to keep the helper byte-for-byte
+// aligned with the team-server original.
+#![allow(clippy::string_slice)]
 
 use std::collections::HashSet;
 
@@ -299,6 +305,34 @@ pub fn required_tool_prefixes_for_session_source(session_source: &str) -> Vec<St
         ]
     } else {
         Vec::new()
+    }
+}
+
+/// Pick the JSON-schema response contract a recipe should pin for a given
+/// `(session_source, harness_mode, require_final_report)` tuple. Returns
+/// `None` when the surface should not enforce a structured completion
+/// contract (e.g. plain conversation turns, or document_analysis runs whose
+/// schema is owned by the document-analysis driver itself).
+///
+/// Mirror of `completion_contract_for_session_source` in
+/// `crates/agime-team-server/src/agent/server_harness_host.rs:765` —
+/// preserves the exact branching the team-server uses, but defers to the
+/// schemas already published by `host_workspace::execution_host_completion_response`
+/// and `host_workspace::document_analysis_completion_response` so a single
+/// JSON shape stays in sync between the prompt overlay and the recipe.
+pub fn completion_contract_for_session_source(
+    session_source: &str,
+    harness_mode: HarnessMode,
+    require_final_report: bool,
+) -> Option<agime::recipe::Response> {
+    if session_source.eq_ignore_ascii_case("system") {
+        Some(crate::host_workspace::document_analysis_completion_response())
+    } else if session_source.eq_ignore_ascii_case("document_analysis") {
+        None
+    } else if matches!(harness_mode, HarnessMode::Execute) && require_final_report {
+        Some(crate::host_workspace::execution_host_completion_response())
+    } else {
+        None
     }
 }
 

@@ -25,6 +25,11 @@ const MAX_TOOLS: usize = 50;
 pub struct PromptManager {
     system_prompt_override: Option<String>,
     system_prompt_extras: Vec<String>,
+    /// Extras pushed by host integrations that need per-turn lifecycle
+    /// (e.g. desktop server's `/reply` re-applies session overlays each
+    /// turn). They are appended *after* `system_prompt_extras` and can be
+    /// cleared independently via [`Self::clear_host_override_extras`].
+    host_override_extras: Vec<String>,
     current_date_timestamp: String,
 }
 
@@ -210,6 +215,14 @@ impl<'a> SystemPromptBuilder<'a, PromptManager> {
             );
         }
 
+        // Append host override extras AFTER the session-static extras and
+        // hints so they read as the most-recent layer of guidance. They
+        // travel through the same sanitization / dedup as the static
+        // extras.
+        for extra in &self.manager.host_override_extras {
+            system_prompt_extras.push(extra.clone());
+        }
+
         let sanitized_system_prompt_extras =
             Self::normalize_system_prompt_extras(system_prompt_extras);
 
@@ -230,6 +243,7 @@ impl PromptManager {
         PromptManager {
             system_prompt_override: None,
             system_prompt_extras: Vec::new(),
+            host_override_extras: Vec::new(),
             // Use the fixed current date time so that prompt cache can be used.
             // Filtering to an hour to balance user time accuracy and multi session prompt cache hits.
             current_date_timestamp: Utc::now().format("%Y-%m-%d %H:00").to_string(),
@@ -241,6 +255,7 @@ impl PromptManager {
         PromptManager {
             system_prompt_override: None,
             system_prompt_extras: Vec::new(),
+            host_override_extras: Vec::new(),
             current_date_timestamp: dt.format("%Y-%m-%d %H:%M:%S").to_string(),
         }
     }
@@ -248,6 +263,29 @@ impl PromptManager {
     /// Add an additional instruction to the system prompt
     pub fn add_system_prompt_extra(&mut self, instruction: String) {
         self.system_prompt_extras.push(instruction);
+    }
+
+    /// Drop all previously-appended system prompt extras. Useful when a
+    /// caller (e.g. the desktop server's per-turn override hook) needs to
+    /// re-derive the extras from scratch instead of accumulating them
+    /// across turns.
+    pub fn clear_system_prompt_extras(&mut self) {
+        self.system_prompt_extras.clear();
+    }
+
+    /// Append a host-level override extra. These are kept in a separate
+    /// channel from [`Self::add_system_prompt_extra`] so the host can
+    /// reset them per-turn ([`Self::clear_host_override_extras`]) without
+    /// touching the agent's session-static extras (e.g. desktop_prompt,
+    /// recipe overlay).
+    pub fn add_host_override_extra(&mut self, instruction: String) {
+        self.host_override_extras.push(instruction);
+    }
+
+    /// Drop every host-level override extra. The session-static
+    /// `system_prompt_extras` are *not* affected.
+    pub fn clear_host_override_extras(&mut self) {
+        self.host_override_extras.clear();
     }
 
     /// Override the system prompt with custom text
@@ -352,6 +390,43 @@ mod tests {
         assert!(result.contains("🌍"));
         assert!(result.contains("Instruction with"));
         assert!(result.contains("emojis"));
+    }
+
+    #[test]
+    fn test_host_override_extras_render_alongside_static_extras() {
+        let mut manager = PromptManager::new();
+        manager.add_system_prompt_extra("static extra".to_string());
+        manager.add_host_override_extra("host override extra".to_string());
+
+        let result = manager.builder("gpt-4o").build();
+        assert!(result.contains("static extra"));
+        assert!(result.contains("host override extra"));
+    }
+
+    #[test]
+    fn test_clear_host_override_extras_does_not_affect_static_extras() {
+        let mut manager = PromptManager::new();
+        manager.add_system_prompt_extra("static extra".to_string());
+        manager.add_host_override_extra("first host override".to_string());
+        manager.clear_host_override_extras();
+        manager.add_host_override_extra("second host override".to_string());
+
+        let result = manager.builder("gpt-4o").build();
+        assert!(result.contains("static extra"));
+        assert!(!result.contains("first host override"));
+        assert!(result.contains("second host override"));
+    }
+
+    #[test]
+    fn test_clear_system_prompt_extras_does_not_affect_host_override_extras() {
+        let mut manager = PromptManager::new();
+        manager.add_system_prompt_extra("static extra".to_string());
+        manager.add_host_override_extra("host override extra".to_string());
+        manager.clear_system_prompt_extras();
+
+        let result = manager.builder("gpt-4o").build();
+        assert!(!result.contains("static extra"));
+        assert!(result.contains("host override extra"));
     }
 
     #[test]

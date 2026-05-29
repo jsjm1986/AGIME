@@ -23,7 +23,6 @@
 //!
 //! See CLAUDE.md long-term maintenance strategy.
 
-#![cfg(feature = "desktop_harness_host")]
 #![allow(dead_code)]
 
 use anyhow::Result;

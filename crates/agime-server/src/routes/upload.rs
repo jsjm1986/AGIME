@@ -245,13 +245,168 @@ pub async fn upload_files(mut multipart: Multipart) -> Result<Json<UploadRespons
     }))
 }
 
+/// Request body for `/upload/analysis_prompt`. Mirrors the desktop-flavoured
+/// [`crate::host_document_analysis::DocumentAnalysisInput`] plus the optional
+/// materialised path metadata that already lives on disk after `/upload`.
+#[cfg(feature = "desktop_harness_host")]
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AnalysisPromptRequest {
+    pub doc_id: String,
+    pub doc_name: String,
+    pub mime_type: String,
+    #[serde(default)]
+    pub file_size: u64,
+    #[serde(default)]
+    pub lang: Option<String>,
+    #[serde(default)]
+    pub file_path: Option<String>,
+    #[serde(default)]
+    pub relative_path: Option<String>,
+    #[serde(default)]
+    pub content_snapshot: Option<String>,
+    #[serde(default)]
+    pub extra_instructions: Option<String>,
+}
+
+#[cfg(feature = "desktop_harness_host")]
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AnalysisPromptResponse {
+    /// Final user-facing prompt; the caller should send this through the
+    /// regular `/reply` SSE pipeline as the next user message.
+    pub prompt: String,
+}
+
+#[cfg(feature = "desktop_harness_host")]
+#[utoipa::path(
+    post,
+    path = "/upload/analysis_prompt",
+    request_body = AnalysisPromptRequest,
+    responses(
+        (status = 200, description = "Prompt built", body = AnalysisPromptResponse),
+        (status = 400, description = "Invalid input"),
+    ),
+    security(("secret_key" = []))
+)]
+pub async fn build_analysis_prompt_route(
+    Json(payload): Json<AnalysisPromptRequest>,
+) -> Result<Json<AnalysisPromptResponse>, ErrorResponse> {
+    use crate::host_document_analysis::{
+        build_analysis_prompt, DocumentAnalysisInput, MaterializedAnalysisDocument,
+    };
+
+    if payload.doc_id.trim().is_empty() || payload.doc_name.trim().is_empty() {
+        return Err(ErrorResponse {
+            message: "doc_id and doc_name are required".to_string(),
+            status: StatusCode::BAD_REQUEST,
+        });
+    }
+
+    let ctx = DocumentAnalysisInput {
+        doc_id: payload.doc_id,
+        doc_name: payload.doc_name.clone(),
+        mime_type: payload.mime_type.clone(),
+        file_size: payload.file_size,
+        lang: payload.lang,
+    };
+
+    let materialised = payload
+        .file_path
+        .as_ref()
+        .map(|fp| MaterializedAnalysisDocument {
+            file_path: fp.clone(),
+            relative_path: payload.relative_path.clone().unwrap_or_else(|| fp.clone()),
+            file_name: payload.doc_name.clone(),
+            mime_type: payload.mime_type.clone(),
+            file_size: payload.file_size,
+        });
+
+    let mut prompt = build_analysis_prompt(
+        &ctx,
+        materialised.as_ref(),
+        payload.content_snapshot.as_deref(),
+    );
+
+    if let Some(extra) = payload.extra_instructions.as_deref() {
+        let trimmed = extra.trim();
+        if !trimmed.is_empty() {
+            prompt.push_str("\n\n## 用户补充要求\n");
+            prompt.push_str(trimmed);
+        }
+    }
+
+    Ok(Json(AnalysisPromptResponse { prompt }))
+}
+
+/// Request body for `/upload/analysis_persistence`. The frontend supplies the
+/// visible text it captured from the analysis `/reply` stream; the server
+/// applies the team-server-equivalent JSON / terminal / blocked classification.
+#[cfg(feature = "desktop_harness_host")]
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AnalysisPersistenceRequest {
+    pub doc_name: String,
+    #[serde(default)]
+    pub analysis_text: Option<String>,
+}
+
+#[cfg(feature = "desktop_harness_host")]
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AnalysisPersistenceResponse {
+    pub json_payload: String,
+    pub status: String,
+}
+
+#[cfg(feature = "desktop_harness_host")]
+#[utoipa::path(
+    post,
+    path = "/upload/analysis_persistence",
+    request_body = AnalysisPersistenceRequest,
+    responses(
+        (status = 200, description = "Persistence shape derived", body = AnalysisPersistenceResponse),
+        (status = 400, description = "Invalid input"),
+    ),
+    security(("secret_key" = []))
+)]
+pub async fn derive_analysis_persistence_route(
+    Json(payload): Json<AnalysisPersistenceRequest>,
+) -> Result<Json<AnalysisPersistenceResponse>, ErrorResponse> {
+    use crate::host_document_analysis::derive_document_analysis_persistence;
+
+    if payload.doc_name.trim().is_empty() {
+        return Err(ErrorResponse {
+            message: "doc_name is required".to_string(),
+            status: StatusCode::BAD_REQUEST,
+        });
+    }
+
+    let (json_payload, status) = derive_document_analysis_persistence(
+        None,
+        payload.analysis_text.as_deref(),
+        &payload.doc_name,
+    );
+
+    Ok(Json(AnalysisPersistenceResponse {
+        json_payload,
+        status: status.to_string(),
+    }))
+}
+
 pub fn routes() -> Router {
-    Router::new().route(
+    let router = Router::new().route(
         "/upload",
         post(upload_files).layer(DefaultBodyLimit::max(
             MAX_FILE_SIZE_BYTES * MAX_FILES_PER_REQUEST,
         )),
-    )
+    );
+
+    #[cfg(feature = "desktop_harness_host")]
+    let router = router
+        .route("/upload/analysis_prompt", post(build_analysis_prompt_route))
+        .route(
+            "/upload/analysis_persistence",
+            post(derive_analysis_persistence_route),
+        );
+
+    router
 }
 
 #[cfg(test)]

@@ -31,7 +31,17 @@
 //! commit 961109f (desktop reimplementation, not a verbatim copy — the Mongo
 //! surface is dropped per the long-term maintenance strategy in CLAUDE.md).
 
-#![cfg(feature = "desktop_harness_host")]
+// JSON-ish field extractors index `text` / `rest` by byte offsets returned
+// from `str::find`. The offsets always land on ASCII character boundaries
+// (the `"field":"`, `"`, `,` markers), so the slices are safe — but clippy
+// can't see that invariant. Suppress the `string_slice` lint at file scope
+// rather than per-call-site to keep the helpers byte-for-byte aligned with
+// the team-server original (CLAUDE.md long-term maintenance strategy).
+#![allow(clippy::string_slice)]
+#![allow(dead_code)]
+// Phase-6 pure-logic helpers: the desktop reply path will exercise the full
+// surface in Milestone B; until then `--all-targets` lint sees several items
+// (selectors, MIME predicates, filename sanitiser) as unused.
 
 use agime::agents::{format_execution_host_completion_text, ExecutionHostCompletionReport};
 use serde::{Deserialize, Serialize};
@@ -45,6 +55,7 @@ pub struct DocumentAnalysisInput {
     pub doc_id: String,
     pub doc_name: String,
     pub mime_type: String,
+    #[allow(dead_code)]
     pub file_size: u64,
     pub lang: Option<String>,
 }

@@ -13,16 +13,48 @@
 //! - `RuntimeCapabilitySnapshot` carries only what the desktop reply path
 //!   actually consumes — allowed extensions / approval mode / minor flags
 //!
-//! Future phases that want to inject capability decisions before tool calls
-//! can call `resolve_capabilities(...)` and inspect the snapshot. The default
-//! resolver is permissive (no extra restrictions), preserving today's desktop
-//! behavior bit-for-bit when callers don't supply a policy context.
+//! ## Why this resolver is NOT wired into the harness path
+//!
+//! `agime::agents::harness::run_harness_host` (the desktop chat entry point)
+//! exposes **no** permission / approval / capability resolver hook:
+//! `HarnessHostRequest` has no such field, and `HarnessHostDependencies` only
+//! carries `agent` / `event_sink` / `control_sink` / `persistence`. There is no
+//! seam where a desktop `resolve_capabilities(...)` decision could be enforced
+//! *before* a tool runs without forking core.
+//!
+//! Real per-tool permission enforcement on desktop is already handled by the
+//! Agent's **native** permission inspector: `Agent::reply` resolves
+//! `config.get_agime_mode().unwrap_or(AgimeMode::Auto)` and calls
+//! `update_permission_inspector_mode(...)`; `tool_execution.rs::
+//! handle_approval_tool_requests` then surfaces a `toolConfirmationRequest`
+//! for tools that need approval. That mode is driven by the global
+//! `AGIME_MODE` / `GOOSE_MODE` config key — global rather than per-session
+//! granularity, which is the correct model for a single-user desktop app.
+//!
+//! This module is therefore kept as a **faithful, tested mirror** of the
+//! runtime's capability shape (useful reference + ready if core ever grows a
+//! resolver hook), but it is deliberately left un-wired. Force-routing tool
+//! calls through `resolve_capabilities` here would be *fake* interception: it
+//! would compute an `ApprovalMode` that nothing in the core loop consults. The
+//! `#![allow(dead_code)]` below reflects that intentional state, not pending
+//! work. See [[project-desktop-harness-parity]] for the full rationale.
 //!
 //! SOURCE: crates/agime-runtime/src/capability_policy.rs at commit 961109f
 //! (desktop reimplementation, not a verbatim copy — see CLAUDE.md long-term
 //! maintenance strategy).
 
-#![cfg(feature = "desktop_harness_host")]
+// `ApprovalMode::from_str` is a parser, not a `std::str::FromStr` impl —
+// it returns `Option<Self>` and is named to mirror the team-server original.
+// Suppress `should_implement_trait` at file scope rather than per-call-site to
+// keep the helper aligned with the runtime version (CLAUDE.md long-term
+// maintenance strategy).
+#![allow(clippy::should_implement_trait)]
+#![allow(dead_code)]
+// Intentionally un-wired: core `run_harness_host` exposes no capability /
+// approval resolver hook, so nothing in the chat loop consults this resolver.
+// Real per-tool enforcement is the Agent's native `AgimeMode` inspector (global
+// `AGIME_MODE` key) — see the module docs above. These items are kept as a
+// tested mirror of the runtime contract, not as pending work.
 
 use std::collections::HashSet;
 
@@ -78,6 +110,7 @@ pub struct HostSessionPolicyContext {
 /// the reply path actually checks.
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeCapabilitySnapshot {
+    #[allow(dead_code)]
     pub session_source: String,
     pub approval_mode: ApprovalMode,
     pub allowed_extensions: Option<HashSet<String>>,

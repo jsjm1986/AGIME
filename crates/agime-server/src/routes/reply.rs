@@ -263,6 +263,41 @@ pub async fn reply(
             }
         };
 
+        // Phase 4: execution-slot admission control (desktop-harness-host
+        // only). Mirrors team-server `wait_for_execution_slot`. The desktop
+        // default is `max_slots = 1` per agent, matching today's
+        // single-turn-per-agent behavior; raise via
+        // `DesktopExecutionSlotProvider::with_max_slots` for power users.
+        // The `_slot_guard` releases the slot on every drop path (success,
+        // panic, cancellation), so the slot is always returned.
+        #[cfg(feature = "desktop_harness_host")]
+        let _slot_guard = {
+            use crate::host_admission::wait_for_execution_slot;
+            if let Err(e) =
+                wait_for_execution_slot(state.execution_slots.as_ref(), &session_id, &task_cancel)
+                    .await
+            {
+                tracing::warn!(
+                    "execution slot acquisition failed for {}: {}",
+                    session_id,
+                    e
+                );
+                let _ = stream_event(
+                    MessageEvent::Error {
+                        error: format!("Execution queue unavailable: {}", e),
+                    },
+                    &task_tx,
+                    &task_cancel,
+                )
+                .await;
+                return;
+            }
+            ExecutionSlotGuard {
+                provider: state.execution_slots.clone(),
+                agent_id: session_id.clone(),
+            }
+        };
+
         let _session = match SessionManager::get_session(&session_id, false).await {
             Ok(metadata) => metadata,
             Err(e) => {
@@ -291,12 +326,142 @@ pub async fn reply(
         // append the rendered boundary instruction to the agent's system
         // prompt. This mirrors the team-server harness behavior of letting
         // the model see the workspace root, run dir, and write-allowed roots.
-        if let Some(override_value) = state.session_override(&session_id).await {
+        //
+        // The same override entry also carries optional provider replacement
+        // and prompt-overlay text — apply them here, before `agent.reply()`,
+        // so the chat turn observes the override.
+        //
+        // Lifecycle:
+        // - `clear_host_override_extras` is called *unconditionally* so any
+        //   host-level overlays pushed by a prior turn (with a now-different
+        //   override) do not leak through. The session-static
+        //   `system_prompt_extras` (desktop_prompt, recipe overlay, hints)
+        //   live in a separate channel and are NOT touched here.
+        // - `consume_session_override_for_turn` takes a snapshot AND drains
+        //   the per-turn `turn_system_instruction` field, so it is
+        //   single-shot.
+        // - The provider is only re-applied if its `HostProviderConfig`
+        //   changed since the last time it was applied for this session
+        //   (see `AppState::record_applied_provider`), avoiding a
+        //   `SessionManager::update_session` write and a router-tool
+        //   selector rebuild on every chat turn.
+        agent.clear_host_override_extras().await;
+        if let Some(override_value) = state.consume_session_override_for_turn(&session_id).await {
+            if let Some(cfg) = override_value.provider_config.as_ref() {
+                if state.record_applied_provider(&session_id, cfg).await {
+                    match crate::host_provider::create_provider_for_config(cfg) {
+                        Ok(provider) => {
+                            if let Err(e) = agent.update_provider(provider, &session_id).await {
+                                tracing::warn!(
+                                    "session_override: failed to replace provider for {}: {}",
+                                    session_id,
+                                    e
+                                );
+                                // Roll back the fingerprint so the next turn
+                                // gets another chance to apply this config.
+                                state.clear_applied_provider_fingerprint(&session_id).await;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "session_override: failed to build provider config for {}: {}",
+                                session_id,
+                                e
+                            );
+                            state.clear_applied_provider_fingerprint(&session_id).await;
+                        }
+                    }
+                }
+            }
+
+            let runtime_overlay_owned = override_value.runtime_overlay_text.clone().or_else(|| {
+                override_value
+                    .capability_snapshot
+                    .as_ref()
+                    .map(crate::host_prompt::build_runtime_capability_snapshot_overlay)
+            });
+            let harness_overlay_owned = override_value
+                .harness_delegation_overlay_text
+                .clone()
+                .or_else(|| {
+                    override_value
+                        .harness_overlay
+                        .as_ref()
+                        .map(crate::host_prompt::build_harness_delegation_overlay_text)
+                });
+            let surface_overlay_owned = override_value
+                .surface_contract_overlay_text
+                .clone()
+                .or_else(|| {
+                    override_value
+                        .surface_contract
+                        .as_ref()
+                        .map(crate::host_prompt::build_surface_contract_overlay_text)
+                });
+
+            let overlay_input = crate::host_prompt::AgentPromptComposerInput {
+                extensions: &[],
+                custom_prompt: None,
+                session_extra_instructions: override_value.extra_instructions.as_deref(),
+                prompt_profile_overlay: override_value.prompt_profile_overlay.as_deref(),
+                turn_system_instruction: override_value.turn_system_instruction.as_deref(),
+                runtime_overlay_text: runtime_overlay_owned.as_deref(),
+                harness_delegation_overlay_text: harness_overlay_owned.as_deref(),
+                surface_contract_overlay_text: surface_overlay_owned.as_deref(),
+                model_name: "",
+            };
+            if let Some(text) = crate::host_prompt::compose_session_overlays_only(overlay_input) {
+                agent.extend_host_override_extras(text).await;
+            }
+
             if let Some(text) = crate::host_workspace::merge_workspace_execution_instruction(
                 None,
                 override_value.workspace_context.as_ref(),
             ) {
-                agent.extend_system_prompt(text).await;
+                agent.extend_host_override_extras(text).await;
+            }
+
+            // When the override carried an explicit workspace context, cache
+            // it on the session so the completion-mirror persist path can
+            // reuse the same `run_id` advertised in the prompt.
+            #[cfg(feature = "desktop_harness_host")]
+            if let Some(ws) = override_value.workspace_context.as_ref() {
+                let mut cache = state.workspace_execution_contexts.lock().await;
+                cache.insert(session_id.clone(), ws.clone());
+            }
+        }
+
+        #[cfg(feature = "desktop_harness_host")]
+        {
+            let needs_fallback = state
+                .session_override(&session_id)
+                .await
+                .map(|o| o.workspace_context.is_none())
+                .unwrap_or(true);
+            if needs_fallback {
+                let run_id = uuid::Uuid::new_v4().to_string();
+                match state
+                    .workspace_execution_context_for_session(&session_id, &run_id)
+                    .await
+                {
+                    Ok(ctx) => {
+                        if let Some(text) =
+                            crate::host_workspace::merge_workspace_execution_instruction(
+                                None,
+                                Some(&ctx),
+                            )
+                        {
+                            agent.extend_host_override_extras(text).await;
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!(
+                            "workspace context fallback skipped for session {}: {}",
+                            session_id,
+                            err
+                        );
+                    }
+                }
             }
         }
 
@@ -315,7 +480,7 @@ pub async fn reply(
             }
         };
 
-        let mut stream = match {
+        let stream_result = {
             #[cfg(feature = "desktop_harness_host")]
             {
                 let host = crate::desktop_harness_host::DesktopHarnessHost::new(state.clone());
@@ -328,22 +493,57 @@ pub async fn reply(
                 // the cancel token fires.
                 let mirror_tx = task_tx.clone();
                 let mirror_cancel = task_cancel.clone();
+                let mirror_state = state.clone();
+                let mirror_session_id = session_id.clone();
                 drop(tokio::spawn(async move {
                     while let Some(envelope) = control_rx.recv().await {
                         if mirror_cancel.is_cancelled() {
                             break;
                         }
+                        // Intercept completion-report events to persist
+                        // produced/accepted artifacts into the session
+                        // workspace manifest. Best-effort: any failure is
+                        // logged at debug level and never aborts the SSE
+                        // stream. Persistence is dispatched to a detached
+                        // task so blocking IO never delays the next mirror
+                        // frame.
+                        let pending_artifact_meta =
+                            if let agime::agents::HarnessControlMessage::Completion(
+                                agime::agents::CompletionControlEvent::StructuredPublished {
+                                    metadata: Some(meta),
+                                    ..
+                                },
+                            ) = &envelope.payload
+                            {
+                                Some(meta.clone())
+                            } else {
+                                None
+                            };
+
                         stream_event(
                             MessageEvent::HarnessControl { envelope },
                             &mirror_tx,
                             &mirror_cancel,
                         )
                         .await;
+
+                        if let Some(meta) = pending_artifact_meta {
+                            let persist_state = mirror_state.clone();
+                            let persist_session = mirror_session_id.clone();
+                            drop(tokio::spawn(async move {
+                                record_completion_report_artifacts(
+                                    &persist_state,
+                                    &persist_session,
+                                    &meta,
+                                )
+                                .await;
+                            }));
+                        }
                     }
                 }));
 
                 host.execute_chat_host_with_mirror(
-                    &agent,
+                    agent.clone(),
                     user_message.clone(),
                     session_config,
                     Some(task_cancel.clone()),
@@ -361,7 +561,9 @@ pub async fn reply(
                     )
                     .await
             }
-        } {
+        };
+
+        let mut stream = match stream_result {
             Ok(stream) => {
                 tracing::info!(
                     "[PERF] agent.reply() stream ready, elapsed: {:?}",
@@ -517,6 +719,98 @@ pub async fn reply(
         .await;
     }));
     Ok(SseResponse::new(stream))
+}
+
+/// RAII guard that releases the per-agent execution slot back to the desktop
+/// admission provider when the chat reply task finishes — including panics
+/// and cancellations. The release is intentionally fire-and-forget on a
+/// detached tokio task because `Drop` cannot be async.
+#[cfg(feature = "desktop_harness_host")]
+struct ExecutionSlotGuard {
+    provider: Arc<crate::host_admission::DesktopExecutionSlotProvider>,
+    agent_id: String,
+}
+
+#[cfg(feature = "desktop_harness_host")]
+impl Drop for ExecutionSlotGuard {
+    fn drop(&mut self) {
+        use crate::host_admission::ExecutionSlotProvider;
+        let provider = self.provider.clone();
+        let agent_id = std::mem::take(&mut self.agent_id);
+        tokio::spawn(async move {
+            if let Err(e) = provider.release_execution_slot(&agent_id).await {
+                tracing::warn!("execution slot release failed for {}: {}", agent_id, e);
+            }
+        });
+    }
+}
+
+#[cfg(feature = "desktop_harness_host")]
+async fn record_completion_report_artifacts(
+    state: &Arc<AppState>,
+    session_id: &str,
+    metadata: &serde_json::Value,
+) {
+    use crate::host_helpers::normalize_adapter_execution_host_completion_report;
+    use agime::agents::parse_execution_host_completion_report;
+
+    // The metadata Value may arrive in three shapes:
+    //   1. Value::String containing a JSON-encoded report (team-server style)
+    //   2. Value::Object — the report itself, structured in-band
+    //   3. Anything else — give up.
+    let report_opt = match metadata {
+        serde_json::Value::String(text) => parse_execution_host_completion_report(Some(text)),
+        serde_json::Value::Object(_) => {
+            serde_json::from_value::<agime::agents::ExecutionHostCompletionReport>(metadata.clone())
+                .ok()
+                .or_else(|| parse_execution_host_completion_report(Some(&metadata.to_string())))
+        }
+        _ => None,
+    };
+    let Some(report) = report_opt else {
+        tracing::debug!(
+            "completion metadata for session {} is not a parseable host report",
+            session_id
+        );
+        return;
+    };
+    let report = normalize_adapter_execution_host_completion_report(report, None, "chat");
+
+    if report.produced_artifacts.is_empty() && report.accepted_artifacts.is_empty() {
+        return;
+    }
+
+    let binding = match state.ensure_chat_workspace_binding(session_id).await {
+        Ok(b) => b,
+        Err(err) => {
+            tracing::debug!(
+                "skip artifact recording for {}: workspace binding error: {}",
+                session_id,
+                err
+            );
+            return;
+        }
+    };
+    let svc = state.workspace_service().await;
+    if let Err(err) = svc.record_completion_artifacts(
+        &binding,
+        &report.produced_artifacts,
+        &report.accepted_artifacts,
+    ) {
+        tracing::debug!(
+            "record_completion_artifacts failed for session {}: {}",
+            session_id,
+            err
+        );
+        return;
+    }
+    if let Err(err) = svc.reconcile_manifest_artifacts(&binding) {
+        tracing::debug!(
+            "reconcile_manifest_artifacts failed for session {}: {}",
+            session_id,
+            err
+        );
+    }
 }
 
 pub fn routes(state: Arc<AppState>) -> Router {

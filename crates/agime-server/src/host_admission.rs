@@ -22,7 +22,10 @@
 //! SOURCE: crates/agime-runtime/src/admission.rs +
 //! crates/agime-runtime/src/execution_admission.rs at commit 961109f.
 
-#![cfg(feature = "desktop_harness_host")]
+#![allow(dead_code)]
+// Phase-4 verbatim runtime mirror: the desktop reply path will exercise this
+// surface in Milestone B; until then `--all-targets` lint sees several items
+// as unused.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -85,6 +88,7 @@ impl DesktopExecutionSlotProvider {
 
     /// Override the per-agent slot ceiling. Existing entries keep their
     /// previous max; new agents pick this up.
+    #[allow(dead_code)]
     pub fn with_max_slots(default_max: u32) -> Self {
         Self::new(default_max)
     }

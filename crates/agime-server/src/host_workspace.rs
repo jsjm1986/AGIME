@@ -30,7 +30,11 @@
 
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum WorkspaceKind {
     #[default]
     Conversation,
@@ -38,14 +42,19 @@ pub enum WorkspaceKind {
     Skill,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub struct WorkspaceExecutionContext {
     pub workspace_root: String,
     pub run_id: String,
     pub run_dir: String,
+    #[serde(default)]
     pub allowed_read_roots: Vec<String>,
+    #[serde(default)]
     pub allowed_write_roots: Vec<String>,
+    #[serde(default)]
     pub artifact_dirs: Vec<String>,
+    #[serde(default)]
     pub workspace_kind: WorkspaceKind,
 }
 

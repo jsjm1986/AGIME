@@ -29,6 +29,7 @@ import {
   hasExtendedThinking,
 } from '../types/message';
 import { errorMessage } from '../utils/conversionUtils';
+import { harnessEnvelopeKind } from '../utils/harnessControl';
 
 export interface StreamState {
   messages: Message[];
@@ -311,6 +312,26 @@ class ChatStreamManager {
           case 'ModelChange':
           case 'Ping':
             break;
+          case 'HarnessControl': {
+            // The harness emits a structured control protocol alongside the
+            // message stream. Most frames are informational, but the runtime
+            // compaction event lets us flip into the Compacting state before
+            // the systemNotification marker message arrives.
+            const kind = harnessEnvelopeKind(event.envelope);
+            if (
+              kind?.channel === 'runtime' &&
+              kind.type === 'compaction_observed'
+            ) {
+              const currentState = this.streams.get(sessionId)!;
+              if (currentState.chatState !== ChatState.Idle) {
+                this.updateState(sessionId, {
+                  ...currentState,
+                  chatState: ChatState.Compacting,
+                });
+              }
+            }
+            break;
+          }
         }
       }
 

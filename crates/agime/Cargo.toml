@@ -81,13 +81,20 @@ sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono"
 # Force rustls to use ring backend instead of aws-lc-rs (which requires C compiler)
 rustls = { workspace = true }
 
-# For Bedrock provider
+# For Bedrock provider.
+# `default-features = false` drops the SDK's `default-https-client` feature,
+# which would otherwise enable `aws-smithy-http-client/rustls-aws-lc` and pull
+# in `aws-lc-rs` (a C-toolchain build dep) against the workspace's ring-only
+# rustls policy. The `rustls` feature here maps to `aws-smithy-runtime/tls-rustls`
+# (= legacy-rustls-ring), and the HTTP client is supplied by `aws-config`'s own
+# ring connector at `aws_config::defaults().load()`, so dropping the SDK default
+# client is safe.
 aws-config = { version = "1.5.16", features = ["behavior-version-latest"], optional = true }
 aws-smithy-types = { version = "1.2.13", optional = true }
-aws-sdk-bedrockruntime = { version = "1.106.0", optional = true }
+aws-sdk-bedrockruntime = { version = "1.106.0", default-features = false, features = ["rustls", "rt-tokio", "behavior-version-latest"], optional = true }
 
 # For SageMaker TGI provider
-aws-sdk-sagemakerruntime = { version = "1.62.0", optional = true }
+aws-sdk-sagemakerruntime = { version = "1.62.0", default-features = false, features = ["rustls", "rt-tokio", "behavior-version-latest"], optional = true }
 
 # For GCP Vertex AI provider auth
 jsonwebtoken = { version = "9.3.1", optional = true }

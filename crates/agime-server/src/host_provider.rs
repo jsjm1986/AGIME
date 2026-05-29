@@ -28,8 +28,11 @@ use agime::providers::base::Provider;
 use agime::providers::litellm::LiteLLMProvider;
 use agime::providers::openai::OpenAiProvider;
 use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum HostApiFormat {
     #[default]
     OpenAI,
@@ -38,7 +41,8 @@ pub enum HostApiFormat {
     Local,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum HostRuntimeOptimizationMode {
     #[default]
     Auto,
@@ -46,23 +50,39 @@ pub enum HostRuntimeOptimizationMode {
     Prefer,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub struct HostProviderConfig {
     pub name: String,
+    #[serde(default)]
     pub api_format: HostApiFormat,
+    #[serde(default)]
     pub api_url: Option<String>,
+    #[serde(default)]
     pub api_key: Option<String>,
+    #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
     pub temperature: Option<f32>,
+    #[serde(default)]
     pub max_tokens: Option<i32>,
+    #[serde(default)]
     pub context_limit: Option<usize>,
+    #[serde(default)]
     pub thinking_enabled: bool,
+    #[serde(default)]
     pub thinking_budget: Option<u32>,
+    #[serde(default)]
     pub reasoning_effort: Option<String>,
+    #[serde(default)]
     pub output_reserve_tokens: Option<usize>,
+    #[serde(default)]
     pub auto_compact_threshold: Option<f64>,
+    #[serde(default)]
     pub supports_multimodal: bool,
+    #[serde(default)]
     pub prompt_caching_mode: HostRuntimeOptimizationMode,
+    #[serde(default)]
     pub cache_edit_mode: HostRuntimeOptimizationMode,
 }
 

@@ -29,7 +29,10 @@ import {
   hasExtendedThinking,
 } from '../types/message';
 import { errorMessage } from '../utils/conversionUtils';
-import { harnessEnvelopeKind } from '../utils/harnessControl';
+import {
+  describeHarnessEnvelope,
+  harnessEnvelopeKind,
+} from '../utils/harnessControl';
 
 export interface StreamState {
   messages: Message[];
@@ -37,6 +40,10 @@ export interface StreamState {
   chatState: ChatState;
   tokenState: TokenState;
   notifications: NotificationEvent[];
+  // Short human-readable status line derived from the harness control
+  // protocol (swarm/worker/tool-transport progress). Undefined when idle or
+  // when the last frame wasn't a recognized control envelope.
+  harnessStatus?: string;
   error?: string;
 }
 
@@ -290,8 +297,20 @@ class ChatStreamManager {
             return;
           }
           case 'UpdateConversation': {
-            currentMessages = event.conversation;
+            // The backend only emits this after a compaction (HistoryReplaced),
+            // carrying the authoritative post-compaction history. Guard against a
+            // degenerate empty replacement blanking an in-flight conversation:
+            // keep the current messages if the replacement is empty but we have
+            // streamed content. A legitimate compaction always yields a non-empty
+            // summarized conversation.
             const currentState = this.streams.get(sessionId)!;
+            if (
+              event.conversation.length === 0 &&
+              currentState.messages.length > 0
+            ) {
+              break;
+            }
+            currentMessages = event.conversation;
             this.updateState(sessionId, {
               ...currentState,
               messages: currentMessages,
@@ -314,22 +333,31 @@ class ChatStreamManager {
             break;
           case 'HarnessControl': {
             // The harness emits a structured control protocol alongside the
-            // message stream. Most frames are informational, but the runtime
-            // compaction event lets us flip into the Compacting state before
-            // the systemNotification marker message arrives.
+            // message stream. Surface every recognized frame as a short status
+            // line so swarm/worker/tool-transport progress is visible, and flip
+            // into the Compacting state when the runtime reports a compaction
+            // before the systemNotification marker message arrives.
             const kind = harnessEnvelopeKind(event.envelope);
-            if (
+            const statusLine = describeHarnessEnvelope(event.envelope);
+            const currentState = this.streams.get(sessionId)!;
+            const isCompaction =
               kind?.channel === 'runtime' &&
-              kind.type === 'compaction_observed'
-            ) {
-              const currentState = this.streams.get(sessionId)!;
-              if (currentState.chatState !== ChatState.Idle) {
-                this.updateState(sessionId, {
-                  ...currentState,
-                  chatState: ChatState.Compacting,
-                });
-              }
-            }
+              kind.type === 'compaction_observed';
+            const nextChatState =
+              isCompaction && currentState.chatState !== ChatState.Idle
+                ? ChatState.Compacting
+                : currentState.chatState;
+            // A finished/interrupted session clears the transient status line.
+            const sessionEnded =
+              kind?.channel === 'session' &&
+              (kind.type === 'finished' || kind.type === 'interrupted');
+            this.updateState(sessionId, {
+              ...currentState,
+              chatState: nextChatState,
+              harnessStatus: sessionEnded
+                ? undefined
+                : statusLine ?? currentState.harnessStatus,
+            });
             break;
           }
         }

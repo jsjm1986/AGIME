@@ -52,6 +52,9 @@ interface UseChatStreamReturn {
   sessionLoadError?: string;
   tokenState: TokenState;
   notifications: Map<string, NotificationEvent[]>;
+  // Short human-readable harness control status line (swarm/worker/tool
+  // transport progress). Undefined when idle or no recognized control frame.
+  harnessStatus?: string;
   onMessageUpdate: (
     messageId: string,
     newContent: string,
@@ -391,6 +394,7 @@ export function useChatStream({
     setRecipeUserParams,
     tokenState: state.tokenState,
     notifications: notificationsMap,
+    harnessStatus: state.harnessStatus,
     onMessageUpdate,
   };
 }

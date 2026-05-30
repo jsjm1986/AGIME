@@ -512,6 +512,18 @@ Harness V4 的改进方向，正是针对这些问题：
 - 正式团队使用建议采用 MongoDB，以获得更完整的服务端能力与持续运行体验
 - 适合内网部署、专有云部署和面向企业的统一入口部署
 
+#### 一键部署（Docker Compose）
+
+服务器版独立发布 Docker 镜像，内置 MongoDB，一条命令即可拉起整套服务：
+
+```bash
+cd crates/agime-team-server
+cp .env.example .env          # 编辑 .env，设置 BOOTSTRAP_ADMIN_PASSWORD（必填）
+docker compose up -d          # 默认拉取 ghcr.io/jsjm1986/agime-team-server
+```
+
+启动后访问 `http://<host>:8080/admin` 进入管理台，`http://<host>:8080/health` 做健康检查。详细部署、升级与生产建议见 [团队服务端部署文档](crates/agime-team-server/README.md)。
+
 ### 通用模型兼容
 支持市面上几乎所有主流 AI 模型，包括：
 - **云端模型** - 通过 API 接入各大模型服务商

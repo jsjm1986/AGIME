@@ -1,8 +1,66 @@
 # AGIME Team Server
 
-独立团队协作服务端，二进制名为 `agime-team-server`。
+独立团队协作服务端，二进制名为 `agime-team-server`。它与桌面版 AGIME 相互独立、单独版本化发布（镜像 tag 形如 `team-vX.Y.Z`，当前 `1.0.0`）。
 
-## 快速开始
+## 部署（Docker Compose，推荐）
+
+面向生产/团队部署的最快路径。`docker-compose.yml` 已内置一个 `mongo:7` 服务，
+一条命令即可拉起「Team Server + MongoDB」整套环境，默认从 GHCR 拉取官方镜像
+`ghcr.io/jsjm1986/agime-team-server`，无需在本机编译。
+
+```bash
+# 1. 进入团队服务目录
+cd crates/agime-team-server
+
+# 2. 准备环境变量（BOOTSTRAP_ADMIN_PASSWORD 必填，否则拒绝启动）
+cp .env.example .env
+#   编辑 .env，至少设置一个强口令：
+#   BOOTSTRAP_ADMIN_PASSWORD=<your-strong-password>
+
+# 3. 拉起整套服务（Team Server + MongoDB）
+docker compose up -d
+
+# 4. 查看状态 / 日志
+docker compose ps
+docker compose logs -f team-server
+```
+
+启动后：
+
+- 健康检查：`http://<host>:8080/health`
+- Web 管理台：`http://<host>:8080/admin`
+- 用 `.env` 里的 `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` 登录
+
+升级到新版本：
+
+```bash
+docker compose pull        # 拉取最新镜像
+docker compose up -d        # 平滑重启，MongoDB 数据保留在 mongo-data 卷
+```
+
+> 默认从 GHCR 拉取已发布镜像。若想改为本机从源码构建，编辑 `docker-compose.yml`，
+> 注释掉 `team-server` 服务的 `image:` 行，并取消其下方 `build:` 块的注释。
+>
+> 也可直接指定镜像版本，例如 `ghcr.io/jsjm1986/agime-team-server:1.0.0`，
+> 而非 `:latest`，以获得可复现的部署。
+
+### 仅运行容器（已有外部 MongoDB）
+
+如果你已有独立的 MongoDB，不需要内置的那个，可直接跑容器：
+
+```bash
+docker run -d --name agime-team-server \
+  -p 8080:8080 \
+  -e DATABASE_TYPE=mongodb \
+  -e DATABASE_URL='mongodb://<your-mongo-host>:27017' \
+  -e DATABASE_NAME=agime_team \
+  -e BOOTSTRAP_ADMIN_USERNAME=admin \
+  -e BOOTSTRAP_ADMIN_PASSWORD='<your-strong-password>' \
+  -v agime-team-data:/data \
+  ghcr.io/jsjm1986/agime-team-server:latest
+```
+
+## 源码构建（开发 / 自定义）
 
 ```bash
 # 在仓库根目录执行
@@ -191,7 +249,9 @@ npm run build
 
 ## 生产部署建议
 
-- 使用 HTTPS 反向代理（Nginx/Traefik/Caddy）
-- `SECURE_COOKIES=true`（HTTPS 场景）
-- 配置 `CORS_ALLOWED_ORIGINS`
-- 仅暴露必要端口，限制数据库访问来源
+- **数据库**：正式团队使用 MongoDB（默认即是），以获得完整能力（Agent 路由、AI 触发、审计、Portal、数字分身等）；SQLite 仅适合单机、功能精简的轻量场景。
+- **管理员口令**：务必通过 `.env` 的 `BOOTSTRAP_ADMIN_PASSWORD` 设置强口令，切勿沿用内置默认值。compose 在未设置该变量时会拒绝启动。
+- **HTTPS**：前置 HTTPS 反向代理（Nginx/Traefik/Caddy），并设置 `SECURE_COOKIES=true`、`BASE_URL=https://<your-domain>`。
+- **跨域**：按需配置 `CORS_ALLOWED_ORIGINS` 白名单。
+- **网络与数据**：仅对外暴露必要端口；MongoDB 不要直接暴露公网；定期备份 `mongo-data` 卷。
+- **可复现部署**：镜像建议钉到具体版本（如 `:1.0.0`）而非 `:latest`。

@@ -1,0 +1,104 @@
+name: Publish Team Server Image
+
+# Independent release lane for the AGIME Team Server (the server-side,
+# MongoDB-backed deployment). Versioned separately from the desktop app:
+# desktop ships on `v*` tags, team-server ships on `team-v*` tags.
+on:
+  push:
+    tags:
+      - 'team-v*.*.*'
+      - 'team-v*.*.*-*'  # pre-releases like team-v1.0.0-rc1
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to tag the image with (e.g. 1.0.0). Defaults to the crate version.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/agime-team-server
+  TEAM_MCP_ENABLE_TASK_CALLS: "true"
+  MCP_TASK_TIMEOUT_SECS: "600"
+  TEAM_MCP_ENABLE_ELICITATION: "false"
+  TEAM_MCP_ELICITATION_DEFAULT_ACTION: "cancel"
+
+jobs:
+  docker-team-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # pin@v4
+
+      - name: Resolve version and image tags
+        id: ver
+        run: |
+          set -euo pipefail
+          REF="${GITHUB_REF_NAME}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.version }}" ]]; then
+            VERSION="${{ inputs.version }}"
+          elif [[ "$REF" == team-v* ]]; then
+            VERSION="${REF#team-v}"
+          else
+            # Fallback: read crate version from Cargo.toml
+            VERSION="$(grep -m1 '^version = ' crates/agime-team-server/Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Build the tag list. Always include the full version + sha.
+          TAGS="${IMAGE}:${VERSION}"
+          TAGS="${TAGS},${IMAGE}:sha-${GITHUB_SHA::7}"
+          # For non-prerelease semver (X.Y.Z), also push X.Y, X and latest.
+          if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            MAJOR="${BASH_REMATCH[1]}"; MINOR="${BASH_REMATCH[2]}"
+            TAGS="${TAGS},${IMAGE}:${MAJOR}.${MINOR},${IMAGE}:${MAJOR},${IMAGE}:latest"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=$VERSION" >&2
+          echo "Resolved tags=$TAGS" >&2
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # pin@v3.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # pin@v3.11.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # pin@v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute Docker cache scope
+        id: cache_scope
+        run: |
+          REF_SAFE="$(echo "${GITHUB_REF_NAME}" | sed -E 's/[^A-Za-z0-9._-]+/-/g')"
+          echo "scope=publish-team-server-${REF_SAFE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image (with cache)
+        id: build_cached
+        continue-on-error: true
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # pin@v6.18.0
+        with:
+          context: .
+          file: crates/agime-team-server/Dockerfile
+          push: true
+          tags: ${{ steps.ver.outputs.tags }}
+          cache-from: type=gha,scope=${{ steps.cache_scope.outputs.scope }}
+          cache-to: type=gha,scope=${{ steps.cache_scope.outputs.scope }},mode=max
+          platforms: linux/amd64,linux/arm64
+
+      - name: Build and push image (fallback no cache)
+        if: steps.build_cached.outcome == 'failure'
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # pin@v6.18.0
+        with:
+          context: .
+          file: crates/agime-team-server/Dockerfile
+          push: true
+          tags: ${{ steps.ver.outputs.tags }}
+          no-cache: true
+          platforms: linux/amd64,linux/arm64

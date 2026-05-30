@@ -1,18 +1,54 @@
 version: '3.8'
 
+# AGIME Team Server — production deployment.
+# Backend defaults to MongoDB (full feature set: agent routes, AI triggers,
+# avatar governance). A MongoDB service is bundled below so a single
+# `docker compose up -d` brings up the whole stack.
+#
+# Image is pulled from GHCR by default. To build locally instead, comment out
+# the `image:` line on the team-server service and uncomment the `build:` block.
+
 services:
+  mongo:
+    image: mongo:7
+    container_name: agime-team-mongo
+    volumes:
+      - mongo-data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   team-server:
-    build:
-      context: ../..
-      dockerfile: crates/agime-team-server/Dockerfile
+    image: ghcr.io/jsjm1986/agime-team-server:latest
+    # To build from source instead of pulling the published image, comment out
+    # the `image:` line above and uncomment the block below:
+    # build:
+    #   context: ../..
+    #   dockerfile: crates/agime-team-server/Dockerfile
     container_name: agime-team-server
+    depends_on:
+      mongo:
+        condition: service_healthy
     ports:
       - "${TEAM_SERVER_PORT:-8080}:8080"
     environment:
       - TEAM_SERVER_HOST=0.0.0.0
       - TEAM_SERVER_PORT=8080
-      - DATABASE_URL=sqlite:///data/team.db?mode=rwc
+      # MongoDB backend (production default).
+      - DATABASE_TYPE=mongodb
+      - DATABASE_URL=mongodb://mongo:27017
+      - DATABASE_NAME=agime_team
       - DATABASE_MAX_CONNECTIONS=10
+      # Bootstrap admin — refuses to start unless BOOTSTRAP_ADMIN_PASSWORD is set
+      # in .env. Use a strong value.
+      - BOOTSTRAP_ADMIN_USERNAME=${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
+      - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:?set BOOTSTRAP_ADMIN_PASSWORD in .env}
+      - REGISTRATION_MODE=${REGISTRATION_MODE:-open}
       - TEAM_MISSION_MIN_STEP_TIMEOUT_SECS=300
       - TEAM_MISSION_COMPLEX_STEP_TIMEOUT_SECS=900
       - TEAM_MISSION_MIN_GOAL_TIMEOUT_SECS=600
@@ -33,6 +69,8 @@ services:
 
 volumes:
   team-data:
+    driver: local
+  mongo-data:
     driver: local
 
 networks:

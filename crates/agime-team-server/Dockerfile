@@ -10,8 +10,8 @@ RUN npm ci
 COPY crates/agime-team-server/web-admin ./
 RUN npm run build
 
-# Stage 2: Build Rust backend (use latest for darling 0.23.0 compatibility)
-FROM rust:latest as builder
+# Stage 2: Build Rust backend (pinned to the workspace toolchain in rust-toolchain.toml)
+FROM rust:1.92-bookworm as builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -63,9 +63,16 @@ WORKDIR /app
 EXPOSE 8080
 
 # Environment variables
+# Default to the MongoDB backend (full feature set: agent routes, AI triggers,
+# avatar governance). DATABASE_URL must point at a reachable MongoDB; the
+# bundled docker-compose wires this to the `mongo` service. Override DATABASE_URL
+# (and optionally switch DATABASE_TYPE=sqlite for a feature-reduced single-node
+# deployment) at runtime as needed.
 ENV TEAM_SERVER_HOST=0.0.0.0
 ENV TEAM_SERVER_PORT=8080
-ENV DATABASE_URL=sqlite:///data/team.db?mode=rwc
+ENV DATABASE_TYPE=mongodb
+ENV DATABASE_URL=mongodb://mongo:27017
+ENV DATABASE_NAME=agime_team
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

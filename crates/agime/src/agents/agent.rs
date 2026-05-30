@@ -2727,7 +2727,9 @@ mod tests {
     #[test]
     fn screenshot_tools_match_by_suffix() {
         assert!(tool_requires_multimodal("developer__screen_capture"));
-        assert!(tool_requires_multimodal("computercontroller__screen_capture"));
+        assert!(tool_requires_multimodal(
+            "computercontroller__screen_capture"
+        ));
         assert!(!tool_requires_multimodal("developer__shell"));
         assert!(!tool_requires_multimodal("developer__list_windows"));
     }
@@ -2780,6 +2782,8 @@ mod tests {
         let tool_call = CallToolRequestParams {
             name: "developer__screen_capture".into(),
             arguments: Some(serde_json::Map::new()),
+            meta: None,
+            task: None,
         };
 
         let (_id, result) = agent

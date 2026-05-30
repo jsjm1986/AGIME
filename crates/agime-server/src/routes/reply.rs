@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use agime::agents::{AgentEvent, SessionConfig};
-use agime::conversation::message::{Message, MessageContent, TokenState};
+use agime::conversation::message::{Message, MessageContent, SystemNotificationType, TokenState};
 use agime::conversation::Conversation;
 use agime::session::SessionManager;
 use axum::{
@@ -71,6 +71,31 @@ fn track_tool_telemetry(content: &MessageContent, all_messages: &[Message]) {
         }
         _ => {}
     }
+}
+
+/// True when any message in the turn carries image content the model would be
+/// asked to read.
+fn conversation_has_image(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .any(|c| matches!(c, MessageContent::Image(_)))
+}
+
+/// User-visible inline notice emitted when a turn contains an image but the
+/// active model is not configured for multimodal input. The shared provider
+/// formatter silently down-converts the image to a text placeholder (so the
+/// LLM request stays well-formed), which historically left the user with no
+/// signal that their image was dropped. This surfaces that explicitly. Wording
+/// is aligned with `agime::providers::utils::multimodal_unsupported_message`.
+fn image_dropped_notice() -> String {
+    "注意：当前所选模型未开启多模态（图片）支持，本次发送的图片不会被模型读取，已自动转为文字占位符。\
+如需让模型理解图片，请切换到支持视觉（vision）的模型，或在「模型设置」中开启该模型的多模态支持。\n\n\
+Note: the selected model does not have multimodal (image) support enabled, so the image you \
+sent will not be read by the model and has been converted to a text placeholder. To let the \
+model understand images, switch to a vision-capable model or enable multimodal support for \
+this model in Model Settings."
+        .to_string()
 }
 
 #[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
@@ -584,6 +609,35 @@ pub async fn reply(
                 return;
             }
         };
+
+        // If this turn carries an image but the active model is not multimodal,
+        // the shared provider formatter will silently swap the image for a text
+        // placeholder. Emit a single user-visible inline notice so the drop is
+        // not invisible. This only adds an SSE event on the desktop reply path;
+        // it does not touch the shared formatter signatures.
+        if conversation_has_image(messages.messages()) {
+            let supports_multimodal = agent
+                .provider()
+                .await
+                .map(|p| p.get_model_config().supports_multimodal)
+                .unwrap_or(true);
+            if !supports_multimodal {
+                let notice = Message::assistant().with_system_notification(
+                    SystemNotificationType::InlineMessage,
+                    image_dropped_notice(),
+                );
+                let token_state = get_token_state(&session_id).await;
+                stream_event(
+                    MessageEvent::Message {
+                        message: notice,
+                        token_state,
+                    },
+                    &tx,
+                    &cancel_token,
+                )
+                .await;
+            }
+        }
 
         let mut all_messages = messages.clone();
         let mut first_message_sent = false;

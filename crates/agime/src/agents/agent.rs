@@ -71,6 +71,33 @@ const MAX_COMPACTION_ATTEMPTS: u32 = 3; // Maximum compaction attempts per reply
 pub const MANUAL_COMPACT_TRIGGERS: &[&str] =
     &["Please compact this conversation", "/compact", "/summarize"];
 
+/// Tool name suffixes that produce image (screenshot) output and therefore
+/// require a multimodal-capable model. Extensions prefix their tools as
+/// `{extension}__{tool}`, so we match on the suffix to stay robust against the
+/// owning extension's name (e.g. `developer__screen_capture`).
+const MULTIMODAL_REQUIRED_TOOL_SUFFIXES: &[&str] = &["__screen_capture"];
+
+/// Whether a tool call needs a multimodal model because it returns image
+/// content the model must actually see.
+fn tool_requires_multimodal(tool_name: &str) -> bool {
+    MULTIMODAL_REQUIRED_TOOL_SUFFIXES
+        .iter()
+        .any(|suffix| tool_name.ends_with(suffix))
+}
+
+/// Bilingual guidance returned when a screenshot tool is invoked under a
+/// non-multimodal model. Mirrors the provider-layer 400 fallback wording in
+/// `providers/utils.rs::multimodal_unsupported_message`.
+fn screen_capture_unsupported_message() -> String {
+    "当前所选模型不支持图片（多模态）输入，无法使用截图工具（screen_capture）。\
+截图返回的是图片内容，非视觉模型无法读取。请切换到支持视觉（vision）的模型，\
+或在「模型设置」中开启该模型的多模态支持后重试。\n\n\
+The selected model does not support image (multimodal) input, so the screenshot tool \
+(screen_capture) cannot be used — it returns an image the model cannot read. Switch to a \
+vision-capable model, or enable multimodal support for this model in Model Settings and retry."
+        .to_string()
+}
+
 /// Context needed for the reply function
 pub struct ReplyContext {
     pub conversation: Conversation,
@@ -1295,6 +1322,22 @@ impl Agent {
                 Ok(tool_result) => tool_result,
                 Err(e) => return (request_id, Err(e)),
             }
+        } else if tool_requires_multimodal(&tool_call.name)
+            && !self
+                .provider()
+                .await
+                .map(|p| p.get_model_config().supports_multimodal)
+                .unwrap_or(true)
+        {
+            // A screenshot tool produces image content a non-multimodal model
+            // cannot read. Intercept before forwarding to the (subprocess)
+            // extension so we never capture a useless screenshot, and return a
+            // clear bilingual error instead of an opaque downstream failure.
+            ToolCallResult::from(Err(ErrorData::new(
+                ErrorCode::INVALID_REQUEST,
+                screen_capture_unsupported_message(),
+                None,
+            )))
         } else {
             // Clone the result to ensure no references to extension_manager are returned
             let result = self
@@ -2541,6 +2584,9 @@ impl Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ModelConfig;
+    use crate::providers::base::{ProviderMetadata, ProviderUsage, Usage};
+    use crate::providers::errors::ProviderError;
     use crate::recipe::Response;
 
     #[tokio::test]
@@ -2675,6 +2721,100 @@ mod tests {
         assert!(tools.iter().all(|tool| tool.name != "subagent"));
         assert!(tools.iter().all(|tool| tool.name != "swarm"));
         assert!(tools.iter().any(|tool| tool.name == FINAL_OUTPUT_TOOL_NAME));
+        Ok(())
+    }
+
+    #[test]
+    fn screenshot_tools_match_by_suffix() {
+        assert!(tool_requires_multimodal("developer__screen_capture"));
+        assert!(tool_requires_multimodal("computercontroller__screen_capture"));
+        assert!(!tool_requires_multimodal("developer__shell"));
+        assert!(!tool_requires_multimodal("developer__list_windows"));
+    }
+
+    #[derive(Clone)]
+    struct MultimodalMockProvider {
+        supports_multimodal: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for MultimodalMockProvider {
+        fn metadata() -> ProviderMetadata {
+            ProviderMetadata::empty()
+        }
+
+        fn get_name(&self) -> &str {
+            "mock"
+        }
+
+        fn get_model_config(&self) -> ModelConfig {
+            ModelConfig::new("test-model")
+                .unwrap()
+                .with_supports_multimodal(self.supports_multimodal)
+        }
+
+        async fn complete_with_model(
+            &self,
+            _model_config: &ModelConfig,
+            _system: &str,
+            _messages: &[Message],
+            _tools: &[Tool],
+        ) -> Result<(Message, ProviderUsage), ProviderError> {
+            Ok((
+                Message::assistant().with_text("ok"),
+                ProviderUsage::new("mock".to_string(), Usage::default()),
+            ))
+        }
+    }
+
+    async fn dispatch_screen_capture(supports_multimodal: bool) -> Result<CallToolResult> {
+        let agent = Agent::new();
+        {
+            let mut provider = agent.provider.lock().await;
+            *provider = Some(Arc::new(MultimodalMockProvider {
+                supports_multimodal,
+            }));
+        }
+
+        let session = Session::default();
+        let tool_call = CallToolRequestParams {
+            name: "developer__screen_capture".into(),
+            arguments: Some(serde_json::Map::new()),
+        };
+
+        let (_id, result) = agent
+            .dispatch_tool_call(tool_call, "req-1".to_string(), None, &session)
+            .await;
+        let tool_result = result.expect("dispatch should yield a ToolCallResult");
+        Ok(tool_result.result.await?)
+    }
+
+    #[tokio::test]
+    async fn screen_capture_blocked_for_non_multimodal_model() -> Result<()> {
+        // supports_multimodal = false → the guard intercepts before the
+        // subprocess forward and returns a clear error instead of capturing.
+        let err = dispatch_screen_capture(false).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("screen_capture") || msg.contains("截图"),
+            "blocked error should mention the screenshot tool, got: {msg}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn screen_capture_allowed_for_multimodal_model() -> Result<()> {
+        // supports_multimodal = true → the guard does NOT fire, so dispatch
+        // falls through to the (subprocess) extension path. We only assert the
+        // request was NOT short-circuited by our bilingual guard message.
+        let outcome = dispatch_screen_capture(true).await;
+        if let Err(err) = outcome {
+            let msg = err.to_string();
+            assert!(
+                !msg.contains("无法使用截图工具") && !msg.contains("cannot be used"),
+                "multimodal model must not hit the multimodal guard, got: {msg}"
+            );
+        }
         Ok(())
     }
 }

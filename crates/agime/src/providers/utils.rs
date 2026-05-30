@@ -118,6 +118,46 @@ fn check_context_length_exceeded(text: &str) -> bool {
         .any(|phrase| text_lower.contains(phrase))
 }
 
+/// Detect whether a provider's 400 response indicates the model/endpoint cannot
+/// accept image (multimodal) input. OpenAI-compatible gateways that lack vision
+/// support reject the `image_url` content block while only accepting `text`,
+/// surfacing messages like `unknown variant image_url, expected text`.
+fn check_multimodal_unsupported(text: &str) -> bool {
+    let text_lower = text.to_lowercase();
+    // The most reliable signal: the gateway rejects the image_url variant and
+    // says it only expects text. Require both halves so we don't misclassify
+    // unrelated 400s that merely mention "image_url".
+    let rejects_image_variant = (text_lower.contains("unknown variant")
+        || text_lower.contains("invalid variant"))
+        && text_lower.contains("image_url")
+        && text_lower.contains("text");
+    let explicit_vision_phrases = [
+        "does not support image",
+        "image input is not supported",
+        "image input is not enabled",
+        "model does not support images",
+        "multimodal is not supported",
+        "vision is not supported",
+        "no image support",
+    ];
+    rejects_image_variant
+        || explicit_vision_phrases
+            .iter()
+            .any(|phrase| text_lower.contains(phrase))
+}
+
+/// User-facing guidance shown when a model/endpoint rejects image input.
+pub(crate) fn multimodal_unsupported_message() -> String {
+    "当前所选模型不支持图片（多模态）输入，因此本次包含截图/图片的请求被服务端拒绝。\
+请改用支持视觉（vision）的模型，或移除对话中的图片后重试；也可以将该模型的多模态能力设置关闭，\
+这样图片会被自动转为文字占位符而不再发送。\n\n\
+The selected model/endpoint does not accept image (multimodal) input, so this request \
+containing an image was rejected. Switch to a vision-capable model, or remove the image \
+and retry. Alternatively, disable multimodal support for this model so images are \
+converted to a text placeholder instead of being sent."
+        .to_string()
+}
+
 fn format_server_error_message(status_code: StatusCode, payload: Option<&Value>) -> String {
     match payload {
         Some(Value::Null) | None => format!(
@@ -160,6 +200,8 @@ pub fn map_http_error_to_provider_error(
             let payload_str = extract_message();
             if check_context_length_exceeded(&payload_str) {
                 ProviderError::ContextLengthExceeded(payload_str)
+            } else if check_multimodal_unsupported(&payload_str) {
+                ProviderError::RequestFailed(multimodal_unsupported_message())
             } else {
                 ProviderError::RequestFailed(format!("Bad request (400): {}", payload_str))
             }
@@ -303,6 +345,9 @@ pub async fn handle_response_google_compat(response: Response) -> Result<Value, 
                         return Err(ProviderError::ContextLengthExceeded(error_msg.to_string()));
                     }
                 }
+            }
+            if final_status == StatusCode::BAD_REQUEST && check_multimodal_unsupported(&error_msg) {
+                return Err(ProviderError::RequestFailed(multimodal_unsupported_message()));
             }
             tracing::debug!(
                 "{}", format!("Provider request failed with status: {}. Payload: {:?}", final_status, payload)
@@ -967,5 +1012,64 @@ mod tests {
             parse_google_retry_delay(&payload),
             Some(Duration::from_secs(42))
         );
+    }
+
+    #[test]
+    fn detects_multimodal_unsupported_from_image_url_variant() {
+        // This is the exact shape reported by OpenAI-compatible gateways without vision.
+        let msg = "Failed to deserialize the JSON body into the target type: \
+                   messages[6]: unknown variant `image_url`, expected `text` at line 1 column 57260";
+        assert!(check_multimodal_unsupported(msg));
+    }
+
+    #[test]
+    fn detects_multimodal_unsupported_from_explicit_phrases() {
+        assert!(check_multimodal_unsupported(
+            "This model does not support image input."
+        ));
+        assert!(check_multimodal_unsupported("Vision is not supported"));
+    }
+
+    #[test]
+    fn does_not_flag_unrelated_bad_requests_as_multimodal() {
+        assert!(!check_multimodal_unsupported(
+            "Invalid value for parameter 'temperature'"
+        ));
+        // Mentions image_url but is not the variant-rejection shape.
+        assert!(!check_multimodal_unsupported(
+            "The image_url you provided returned a 404"
+        ));
+    }
+
+    #[test]
+    fn maps_multimodal_bad_request_to_friendly_message() {
+        let payload = json!({
+            "error": {
+                "message": "Failed to deserialize the JSON body into the target type: \
+                            messages[6]: unknown variant `image_url`, expected `text`"
+            }
+        });
+        let err = map_http_error_to_provider_error(StatusCode::BAD_REQUEST, Some(payload));
+        match err {
+            ProviderError::RequestFailed(msg) => {
+                assert_eq!(msg, multimodal_unsupported_message());
+                // Friendly message must not leak the raw serde variant error.
+                assert!(!msg.contains("unknown variant"));
+            }
+            other => panic!("expected RequestFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_generic_bad_request_unchanged() {
+        let payload = json!({ "error": { "message": "Invalid temperature value" } });
+        let err = map_http_error_to_provider_error(StatusCode::BAD_REQUEST, Some(payload));
+        match err {
+            ProviderError::RequestFailed(msg) => {
+                assert!(msg.contains("Bad request (400)"));
+                assert!(msg.contains("Invalid temperature value"));
+            }
+            other => panic!("expected RequestFailed, got {other:?}"),
+        }
     }
 }

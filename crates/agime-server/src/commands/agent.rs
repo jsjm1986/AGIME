@@ -98,6 +98,19 @@ async fn shutdown_signal() {
 pub async fn run() -> Result<()> {
     crate::logging::setup_logging(Some("goosed"))?;
 
+    // Desktop default: enable the native swarm tool so explicit "swarm/并行"
+    // requests can actually delegate. `native_swarm_tool_enabled()` reads this
+    // env lazily, so it must be set before the first request/tool-list build.
+    // Set-if-unset preserves an explicit operator override. Team-server is a
+    // separate binary and never runs this code path.
+    #[cfg(feature = "desktop_harness_host")]
+    {
+        const NATIVE_SWARM_TOOL_ENV: &str = "AGIME_ENABLE_NATIVE_SWARM_TOOL";
+        if std::env::var(NATIVE_SWARM_TOOL_ENV).is_err() {
+            std::env::set_var(NATIVE_SWARM_TOOL_ENV, "1");
+        }
+    }
+
     let settings = configuration::Settings::new()?;
 
     if let Err(e) = initialize_pricing_cache().await {

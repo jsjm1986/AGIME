@@ -77,29 +77,50 @@ export function ThinkingMenuButton() {
     }
   }, []);
 
-  // Load model capabilities when currentModel changes
+  // Load model capabilities when currentModel changes.
+  //
+  // Robustness: a transient capabilities fetch failure (or a momentarily empty
+  // currentModel right after a window refresh) must NOT permanently grey out
+  // the thinking button. We retry once on failure and retain the last good
+  // capabilities rather than clearing them. The effect re-runs when
+  // currentModel resolves to a non-empty value, so the correct capabilities
+  // load as soon as the model is known.
   const loadCapabilities = useCallback(async () => {
     if (!currentModel) {
-      setCapabilities(null);
+      // Don't wipe a previously-loaded capabilities on a transient empty model;
+      // the effect will re-run once currentModel resolves.
       return;
     }
 
+    const fetchOnce = () => getModelCapabilities(currentModel);
+
+    let caps: CapabilitiesResponse;
     try {
-      const caps = await getModelCapabilities(currentModel);
-      setCapabilities(caps);
-
-      // Set default reasoning effort if available
-      if (caps.reasoning_supported && caps.reasoning_effort) {
-        setReasoningEffort(caps.reasoning_effort as EffortLevel);
+      caps = await fetchOnce();
+    } catch (firstErr) {
+      // One lightweight retry to ride out transient network/timing failures.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      try {
+        caps = await fetchOnce();
+      } catch (retryErr) {
+        console.error('Failed to load model capabilities (after retry):', retryErr);
+        // Keep the last good capabilities so the toggle stays usable; only the
+        // very first load with no prior success leaves it null (button greyed,
+        // which is the correct "unknown" state).
+        return;
       }
+    }
 
-      // Update local budget from capabilities if available
-      if (caps.thinking_budget) {
-        setLocalBudget(caps.thinking_budget);
-      }
-    } catch (err) {
-      console.error('Failed to load model capabilities:', err);
-      setCapabilities(null);
+    setCapabilities(caps);
+
+    // Set default reasoning effort if available
+    if (caps.reasoning_supported && caps.reasoning_effort) {
+      setReasoningEffort(caps.reasoning_effort as EffortLevel);
+    }
+
+    // Update local budget from capabilities if available
+    if (caps.thinking_budget) {
+      setLocalBudget(caps.thinking_budget);
     }
   }, [currentModel]);
 

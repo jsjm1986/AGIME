@@ -305,8 +305,10 @@ pub fn maybe_plan_swarm_upgrade(
 mod tests {
     use super::*;
     use crate::conversation::message::Message;
+    use serial_test::serial;
 
     #[test]
+    #[serial(swarm_planner_auto_env)]
     fn planner_upgrade_stays_idle_without_targets() {
         std::env::remove_var(super::super::coordinator::AGIME_ENABLE_SWARM_PLANNER_AUTO_ENV);
         let decision = maybe_plan_swarm_upgrade(
@@ -320,6 +322,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(swarm_planner_auto_env)]
     fn planner_upgrade_requires_stable_targets() {
         std::env::set_var(
             super::super::coordinator::AGIME_ENABLE_SWARM_PLANNER_AUTO_ENV,
@@ -352,6 +355,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(swarm_planner_auto_env)]
     fn planner_upgrade_respects_sticky_downgrade() {
         std::env::set_var(
             super::super::coordinator::AGIME_ENABLE_SWARM_PLANNER_AUTO_ENV,
@@ -377,6 +381,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(swarm_planner_auto_env)]
     fn planner_upgrade_does_not_reenter_after_swarm_call_in_same_run() {
         std::env::set_var(
             super::super::coordinator::AGIME_ENABLE_SWARM_PLANNER_AUTO_ENV,

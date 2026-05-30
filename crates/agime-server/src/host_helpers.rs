@@ -184,7 +184,7 @@ pub fn infer_coordinator_execution_mode(
         .collect::<HashSet<_>>()
         .len();
 
-    if explicit_swarm_request && native_swarm_tool_enabled() && stable_target_count >= 2 {
+    if explicit_swarm_request && native_swarm_tool_enabled() {
         CoordinatorExecutionMode::ExplicitSwarm
     } else if planner_auto_swarm_enabled() && stable_target_count >= 2 {
         CoordinatorExecutionMode::AutoSwarm
@@ -647,6 +647,68 @@ mod tests {
             delegation_mode_for_execution_mode(CoordinatorExecutionMode::AutoSwarm),
             DelegationMode::Swarm
         );
+    }
+
+    // `infer_coordinator_execution_mode` reads process-global swarm env vars, so
+    // mutate them under a shared lock to avoid races with other tests in the
+    // same process.
+    fn swarm_env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    #[test]
+    fn explicit_swarm_request_does_not_require_two_targets_when_enabled() {
+        let _guard = swarm_env_lock().lock().unwrap();
+        std::env::remove_var("AGIME_ENABLE_SWARM_PLANNER_AUTO");
+        std::env::set_var("AGIME_ENABLE_NATIVE_SWARM_TOOL", "true");
+        // Desktop host passes empty target_artifacts/result_contract, so the old
+        // `stable_target_count >= 2` gate forced SingleWorker. An explicit swarm
+        // request must now resolve to ExplicitSwarm regardless of target count.
+        let mode = infer_coordinator_execution_mode("请用 swarm 并行产出 A 和 B", &[], &[]);
+        assert_eq!(mode, CoordinatorExecutionMode::ExplicitSwarm);
+        std::env::remove_var("AGIME_ENABLE_NATIVE_SWARM_TOOL");
+    }
+
+    #[test]
+    fn explicit_swarm_request_stays_single_worker_when_tool_disabled() {
+        let _guard = swarm_env_lock().lock().unwrap();
+        std::env::remove_var("AGIME_ENABLE_SWARM_PLANNER_AUTO");
+        std::env::remove_var("AGIME_ENABLE_NATIVE_SWARM_TOOL");
+        let mode = infer_coordinator_execution_mode("use a swarm to do this in parallel", &[], &[]);
+        assert_eq!(mode, CoordinatorExecutionMode::SingleWorker);
+    }
+
+    #[test]
+    fn auto_swarm_still_requires_two_stable_targets() {
+        let _guard = swarm_env_lock().lock().unwrap();
+        std::env::set_var("AGIME_ENABLE_SWARM_PLANNER_AUTO", "true");
+        std::env::remove_var("AGIME_ENABLE_NATIVE_SWARM_TOOL");
+        // No explicit request, single target: auto-swarm gate keeps SingleWorker.
+        let single = infer_coordinator_execution_mode(
+            "produce docs/a.md",
+            &["docs/a.md".to_string()],
+            &["docs/a.md".to_string()],
+        );
+        assert_eq!(single, CoordinatorExecutionMode::SingleWorker);
+        // Two stable targets still upgrade to AutoSwarm.
+        let auto = infer_coordinator_execution_mode(
+            "produce docs/a.md and docs/b.md",
+            &["docs/a.md".to_string(), "docs/b.md".to_string()],
+            &["docs/a.md".to_string(), "docs/b.md".to_string()],
+        );
+        assert_eq!(auto, CoordinatorExecutionMode::AutoSwarm);
+        std::env::remove_var("AGIME_ENABLE_SWARM_PLANNER_AUTO");
+    }
+
+    #[test]
+    fn plain_chat_stays_single_worker_even_with_native_swarm_enabled() {
+        let _guard = swarm_env_lock().lock().unwrap();
+        std::env::remove_var("AGIME_ENABLE_SWARM_PLANNER_AUTO");
+        std::env::set_var("AGIME_ENABLE_NATIVE_SWARM_TOOL", "true");
+        let mode = infer_coordinator_execution_mode("hello, how are you?", &[], &[]);
+        assert_eq!(mode, CoordinatorExecutionMode::SingleWorker);
+        std::env::remove_var("AGIME_ENABLE_NATIVE_SWARM_TOOL");
     }
 
     #[test]

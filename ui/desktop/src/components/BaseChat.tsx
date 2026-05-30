@@ -106,6 +106,7 @@ function BaseChatContent({
     setRecipeUserParams,
     tokenState,
     notifications: toolCallNotifications,
+    harnessStatus,
     onMessageUpdate,
   } = useChatStream({
     sessionId,
@@ -397,9 +398,9 @@ function BaseChatContent({
               <LoadingAgime
                 chatState={chatState}
                 message={
-                  messages.length > 0
+                  (messages.length > 0
                     ? getThinkingMessage(messages[messages.length - 1])
-                    : undefined
+                    : undefined) ?? harnessStatus
                 }
               />
             </div>

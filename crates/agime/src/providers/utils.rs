@@ -139,6 +139,9 @@ fn check_multimodal_unsupported(text: &str) -> bool {
         "multimodal is not supported",
         "vision is not supported",
         "no image support",
+        "no endpoints found that support image",
+        "no endpoint found that supports image",
+        "endpoints found that support image input",
     ];
     rejects_image_variant
         || explicit_vision_phrases
@@ -193,7 +196,12 @@ pub fn map_http_error_to_provider_error(
             extract_message()
         )),
         StatusCode::NOT_FOUND => {
-            ProviderError::RequestFailed(format!("Resource not found (404): {}", extract_message()))
+            let payload_str = extract_message();
+            if check_multimodal_unsupported(&payload_str) {
+                ProviderError::RequestFailed(multimodal_unsupported_message())
+            } else {
+                ProviderError::RequestFailed(format!("Resource not found (404): {}", payload_str))
+            }
         }
         StatusCode::PAYLOAD_TOO_LARGE => ProviderError::ContextLengthExceeded(extract_message()),
         StatusCode::BAD_REQUEST => {
@@ -346,7 +354,9 @@ pub async fn handle_response_google_compat(response: Response) -> Result<Value, 
                     }
                 }
             }
-            if final_status == StatusCode::BAD_REQUEST && check_multimodal_unsupported(&error_msg) {
+            if matches!(final_status, StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND)
+                && check_multimodal_unsupported(&error_msg)
+            {
                 return Err(ProviderError::RequestFailed(multimodal_unsupported_message()));
             }
             tracing::debug!(
@@ -1068,6 +1078,44 @@ mod tests {
             ProviderError::RequestFailed(msg) => {
                 assert!(msg.contains("Bad request (400)"));
                 assert!(msg.contains("Invalid temperature value"));
+            }
+            other => panic!("expected RequestFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn detects_multimodal_unsupported_from_no_endpoints_phrase() {
+        // The exact shape returned by the mimo OpenAI-compatible gateway (404).
+        assert!(check_multimodal_unsupported(
+            "No endpoints found that support image input."
+        ));
+    }
+
+    #[test]
+    fn maps_multimodal_not_found_to_friendly_message() {
+        // Some gateways (e.g. mimo) surface the lack of vision support as a 404
+        // rather than a 400; the friendly mapping must still kick in.
+        let payload = json!({
+            "error": { "message": "No endpoints found that support image input." }
+        });
+        let err = map_http_error_to_provider_error(StatusCode::NOT_FOUND, Some(payload));
+        match err {
+            ProviderError::RequestFailed(msg) => {
+                assert_eq!(msg, multimodal_unsupported_message());
+                assert!(!msg.contains("404"));
+            }
+            other => panic!("expected RequestFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_generic_not_found_unchanged() {
+        let payload = json!({ "error": { "message": "Model foo does not exist" } });
+        let err = map_http_error_to_provider_error(StatusCode::NOT_FOUND, Some(payload));
+        match err {
+            ProviderError::RequestFailed(msg) => {
+                assert!(msg.contains("Resource not found (404)"));
+                assert!(msg.contains("Model foo does not exist"));
             }
             other => panic!("expected RequestFailed, got {other:?}"),
         }

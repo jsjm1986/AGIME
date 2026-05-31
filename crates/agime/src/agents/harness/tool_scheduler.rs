@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use rmcp::model::Tool;
 
 use crate::conversation::message::ToolRequest;
@@ -44,18 +42,17 @@ pub fn build_scheduled_tool_calls<F>(
 where
     F: FnMut(&str) -> bool,
 {
-    let tool_index: HashMap<String, Tool> = tools
+    let tool_index = tools
         .iter()
-        .cloned()
-        .map(|tool| (tool.name.to_string(), tool))
-        .collect();
+        .map(|tool| (tool.name.as_ref(), tool))
+        .collect::<std::collections::HashMap<_, _>>();
 
     requests
         .iter()
         .filter_map(|request| {
             let tool_call = request.tool_call.clone().ok()?;
             let name = tool_call.name.to_string();
-            let tool = tool_index.get(&name)?;
+            let tool = tool_index.get(name.as_str())?;
             Some(ScheduledToolCall {
                 request: request.clone(),
                 meta: infer_runtime_tool_meta(tool, request, is_frontend_tool(&name)),

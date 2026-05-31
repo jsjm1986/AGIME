@@ -1570,6 +1570,10 @@ impl Agent {
         self.extension_manager.get_extension_configs().await
     }
 
+    pub async fn shutdown_extensions(&self) {
+        self.extension_manager.shutdown().await;
+    }
+
     /// Handle a confirmation response for a tool request
     pub async fn handle_confirmation(
         &self,

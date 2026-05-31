@@ -788,46 +788,53 @@ fn get_agent_messages(
             retry_config: recipe.retry,
         };
 
-        let mut stream = crate::session_context::with_session_id(Some(session_id.clone()), async {
-            agent
-                .reply(user_message, session_config, cancellation_token)
+        let result = async {
+            let mut stream =
+                crate::session_context::with_session_id(Some(session_id.clone()), async {
+                    agent
+                        .reply(user_message, session_config, cancellation_token)
+                        .await
+                })
                 .await
-        })
-        .await
-        .map_err(|e| anyhow!("Failed to get reply from agent: {}", e))?;
-        while let Some(message_result) = stream.next().await {
-            match message_result {
-                Ok(AgentEvent::Message(msg)) => {
-                    let mut swallowed = false;
-                    for content in &msg.content {
-                        if maybe_handle_worker_permission_bridge(&agent, &task_config, content)
-                            .await?
-                        {
-                            swallowed = true;
+                .map_err(|e| anyhow!("Failed to get reply from agent: {}", e))?;
+            while let Some(message_result) = stream.next().await {
+                match message_result {
+                    Ok(AgentEvent::Message(msg)) => {
+                        let mut swallowed = false;
+                        for content in &msg.content {
+                            if maybe_handle_worker_permission_bridge(&agent, &task_config, content)
+                                .await?
+                            {
+                                swallowed = true;
+                            }
+                        }
+                        if !swallowed {
+                            conversation.push(msg);
                         }
                     }
-                    if !swallowed {
-                        conversation.push(msg);
+                    Ok(AgentEvent::ToolTransportRequest(event)) => {
+                        tracing::warn!(
+                            "Unexpected transport-level tool request in subagent stream: {} ({:?}, {:?})",
+                            event.request.id,
+                            event.transport,
+                            event.surface,
+                        );
+                    }
+                    Ok(AgentEvent::McpNotification(_)) | Ok(AgentEvent::ModelChange { .. }) => {}
+                    Ok(AgentEvent::HistoryReplaced(updated_conversation)) => {
+                        conversation = updated_conversation;
+                    }
+                    Err(e) => {
+                        tracing::error!("Error receiving message from subagent: {}", e);
+                        return Err(anyhow!("Error receiving message from subagent: {}", e));
                     }
                 }
-                Ok(AgentEvent::ToolTransportRequest(event)) => {
-                    tracing::warn!(
-                        "Unexpected transport-level tool request in subagent stream: {} ({:?}, {:?})",
-                        event.request.id,
-                        event.transport,
-                        event.surface,
-                    );
-                }
-                Ok(AgentEvent::McpNotification(_)) | Ok(AgentEvent::ModelChange { .. }) => {}
-                Ok(AgentEvent::HistoryReplaced(updated_conversation)) => {
-                    conversation = updated_conversation;
-                }
-                Err(e) => {
-                    tracing::error!("Error receiving message from subagent: {}", e);
-                    return Err(anyhow!("Error receiving message from subagent: {}", e));
-                }
             }
+            Ok::<(), anyhow::Error>(())
         }
+        .await;
+        agent.shutdown_extensions().await;
+        result?;
 
         let final_output = if has_response_schema {
             agent

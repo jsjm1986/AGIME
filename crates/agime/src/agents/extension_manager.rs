@@ -761,8 +761,25 @@ impl ExtensionManager {
     /// Get aggregated usage statistics
     pub async fn remove_extension(&self, name: &str) -> ExtensionResult<()> {
         let sanitized_name = normalize(name.to_string());
-        self.extensions.lock().await.remove(&sanitized_name);
+        let removed = self.extensions.lock().await.remove(&sanitized_name);
+        if let Some(extension) = removed {
+            extension.client.lock().await.shutdown().await;
+        }
         Ok(())
+    }
+
+    pub async fn shutdown(&self) {
+        let extensions = {
+            let mut guard = self.extensions.lock().await;
+            guard
+                .drain()
+                .map(|(_, extension)| extension)
+                .collect::<Vec<_>>()
+        };
+
+        for extension in extensions {
+            extension.client.lock().await.shutdown().await;
+        }
     }
 
     pub async fn get_extension_and_tool_counts(&self) -> (usize, usize) {

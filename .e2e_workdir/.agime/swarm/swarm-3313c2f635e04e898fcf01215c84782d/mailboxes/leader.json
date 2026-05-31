@@ -1,0 +1,153 @@
+[
+  {
+    "id": "summary-swarm_20260530_35_0_a8c6af22fa5848a59ad65e1f27a25867",
+    "from": "worker_1_HTTP定义",
+    "to": "leader",
+    "kind": "summary",
+    "text": "Scope: 提供HTTP协议的简洁中文定义。\n\nResult: HTTP是一种用于在互联网上传输超文本的应用层协议。\n\nArtifacts changed: E:/yw/agiatme/goose/.e2e_workdir/.agime/swarm/swarm-3313c2f635e04e898fcf01215c84782d/mailboxes/worker_1_HTTP定义.txt",
+    "summary": "HTTP定义",
+    "timestamp": "2026-05-30T11:22:15.634361300+00:00",
+    "read": false,
+    "protocol": {
+      "kind": "summary",
+      "threadId": "swarm_20260530_35_0_a8c6af22fa5848a59ad65e1f27a25867",
+      "targetArtifacts": [
+        "HTTP定义"
+      ],
+      "referencedTaskIds": [
+        "swarm_20260530_35_0_a8c6af22fa5848a59ad65e1f27a25867"
+      ],
+      "lineage": {
+        "logical_worker_id": "worker_1_HTTP定义",
+        "attempt_id": "swarm_20260530_35_0_a8c6af22fa5848a59ad65e1f27a25867",
+        "attempt_index": 0
+      }
+    },
+    "metadata": {
+      "attempt_index": "0",
+      "logical_worker_id": "worker_1_HTTP定义",
+      "followup_kind": "fresh",
+      "attempt_id": "swarm_20260530_35_0_a8c6af22fa5848a59ad65e1f27a25867"
+    }
+  },
+  {
+    "id": "peer-msg-381e9120c5fa408c9d870b000454fcde",
+    "from": "worker_2_TCP定义",
+    "to": "leader",
+    "kind": "peer_message",
+    "text": "已完成TCP定义任务。我提供了TCP协议的简洁中文定义作为结果。",
+    "summary": "已完成TCP定义任务。我提供了TCP协议的简洁中文定义作为结果。",
+    "timestamp": "2026-05-30T11:22:28.909826800+00:00",
+    "read": false,
+    "protocol": {
+      "kind": "peer_message",
+      "threadId": "peer-6d41ab0a99684a449a86fb80b7f39f93",
+      "targetArtifacts": [],
+      "referencedTaskIds": [],
+      "lineage": {
+        "logical_worker_id": "worker_2_TCP定义",
+        "attempt_id": "swarm_20260530_35_1_d4efb7cb291b49b29beaebb11d410425",
+        "attempt_index": 0
+      }
+    },
+    "metadata": {
+      "attempt_id": "swarm_20260530_35_1_d4efb7cb291b49b29beaebb11d410425",
+      "logical_worker_id": "worker_2_TCP定义",
+      "attempt_index": "0",
+      "followup_kind": "peer_message",
+      "recipient": "leader",
+      "thread_id": "peer-6d41ab0a99684a449a86fb80b7f39f93"
+    }
+  },
+  {
+    "id": "summary-swarm_20260530_35_1_d4efb7cb291b49b29beaebb11d410425",
+    "from": "worker_2_TCP定义",
+    "to": "leader",
+    "kind": "summary",
+    "text": "Scope: 提供TCP协议的简洁中文定义。\nResult: TCP（传输控制协议）是一种面向连接的、可靠的、基于字节流的传输层通信协议，通过三次握手建立连接，确保数据按序、无差错地传输。",
+    "summary": "TCP定义",
+    "timestamp": "2026-05-30T11:22:37.900665900+00:00",
+    "read": false,
+    "protocol": {
+      "kind": "summary",
+      "threadId": "swarm_20260530_35_1_d4efb7cb291b49b29beaebb11d410425",
+      "targetArtifacts": [
+        "TCP定义"
+      ],
+      "referencedTaskIds": [
+        "swarm_20260530_35_1_d4efb7cb291b49b29beaebb11d410425"
+      ],
+      "lineage": {
+        "logical_worker_id": "worker_2_TCP定义",
+        "attempt_id": "swarm_20260530_35_1_d4efb7cb291b49b29beaebb11d410425",
+        "attempt_index": 0
+      }
+    },
+    "metadata": {
+      "attempt_index": "0",
+      "followup_kind": "fresh",
+      "logical_worker_id": "worker_2_TCP定义",
+      "attempt_id": "swarm_20260530_35_1_d4efb7cb291b49b29beaebb11d410425"
+    }
+  },
+  {
+    "id": "peer-msg-5a67466b6ca74aac93ec686e109877ca",
+    "from": "worker_3_DNS定义",
+    "to": "leader",
+    "kind": "peer_message",
+    "text": "Scope: 为DNS（域名系统）提供一句中文定义。\nResult: DNS（域名系统）是互联网的域名解析系统，负责将人类可读的域名转换为机器可读的IP地址。",
+    "summary": "DNS定义完成",
+    "timestamp": "2026-05-30T11:22:53.325414500+00:00",
+    "read": false,
+    "protocol": {
+      "kind": "peer_message",
+      "threadId": "peer-9864b83f72024fdfaef1a37bd4919d5d",
+      "targetArtifacts": [],
+      "referencedTaskIds": [],
+      "lineage": {
+        "logical_worker_id": "worker_3_DNS定义",
+        "attempt_id": "swarm_20260530_35_2_2f5d60dd54ee4f489947e8a036c85fe6",
+        "attempt_index": 0
+      }
+    },
+    "metadata": {
+      "thread_id": "peer-9864b83f72024fdfaef1a37bd4919d5d",
+      "recipient": "leader",
+      "followup_kind": "peer_message",
+      "logical_worker_id": "worker_3_DNS定义",
+      "attempt_index": "0",
+      "attempt_id": "swarm_20260530_35_2_2f5d60dd54ee4f489947e8a036c85fe6"
+    }
+  },
+  {
+    "id": "summary-swarm_20260530_35_2_2f5d60dd54ee4f489947e8a036c85fe6",
+    "from": "worker_3_DNS定义",
+    "to": "leader",
+    "kind": "summary",
+    "text": "Scope: 为DNS（域名系统）提供一句中文定义。\nResult: DNS（域名系统）是互联网的域名解析系统，负责将人类可读的域名转换为机器可读的IP地址。",
+    "summary": "DNS定义",
+    "timestamp": "2026-05-30T11:23:05.130725600+00:00",
+    "read": false,
+    "protocol": {
+      "kind": "summary",
+      "threadId": "swarm_20260530_35_2_2f5d60dd54ee4f489947e8a036c85fe6",
+      "targetArtifacts": [
+        "DNS定义"
+      ],
+      "referencedTaskIds": [
+        "swarm_20260530_35_2_2f5d60dd54ee4f489947e8a036c85fe6"
+      ],
+      "lineage": {
+        "logical_worker_id": "worker_3_DNS定义",
+        "attempt_id": "swarm_20260530_35_2_2f5d60dd54ee4f489947e8a036c85fe6",
+        "attempt_index": 0
+      }
+    },
+    "metadata": {
+      "attempt_id": "swarm_20260530_35_2_2f5d60dd54ee4f489947e8a036c85fe6",
+      "followup_kind": "fresh",
+      "attempt_index": "0",
+      "logical_worker_id": "worker_3_DNS定义"
+    }
+  }
+]

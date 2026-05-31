@@ -131,6 +131,8 @@ pub trait McpClientTrait: Send + Sync {
 
     fn get_info(&self) -> Option<&InitializeResult>;
 
+    async fn shutdown(&self) {}
+
     async fn get_moim(&self) -> Option<String> {
         None
     }
@@ -830,6 +832,19 @@ impl McpClient {
 
         await_response(handle, self.timeout, &cancel_token).await
     }
+
+    async fn close_running_service(&self) {
+        let mut client = self.client.lock().await;
+        match tokio::time::timeout(Duration::from_secs(2), client.close()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!("MCP client graceful close failed: {}", error);
+            }
+            Err(_) => {
+                tracing::warn!("MCP client graceful close timed out");
+            }
+        }
+    }
 }
 
 async fn await_response(
@@ -875,6 +890,10 @@ async fn send_cancel_message(
 impl McpClientTrait for McpClient {
     fn get_info(&self) -> Option<&InitializeResult> {
         self.server_info.as_ref()
+    }
+
+    async fn shutdown(&self) {
+        self.close_running_service().await;
     }
 
     async fn list_resources(

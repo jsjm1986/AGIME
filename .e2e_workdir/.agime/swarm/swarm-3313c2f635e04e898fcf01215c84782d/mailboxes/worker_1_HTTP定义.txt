@@ -1,0 +1,5 @@
+Scope: 提供HTTP协议的简洁中文定义。
+
+Result: HTTP是一种用于在互联网上传输超文本的应用层协议。
+
+Artifacts changed: E:/yw/agiatme/goose/.e2e_workdir/.agime/swarm/swarm-3313c2f635e04e898fcf01215c84782d/mailboxes/worker_1_HTTP定义.txt

@@ -1,0 +1,153 @@
+[
+  {
+    "id": "peer-msg-e882db0a71924451a574603d648bc57e",
+    "from": "worker_3_DNS",
+    "to": "leader",
+    "kind": "peer_message",
+    "text": "DNS answer complete: DNS（Domain Name System）是互联网的\"电话簿\"，将人类可读的域名解析为机器可识别的IP地址，使得用户无需记忆数字即可访问网站和服务。",
+    "summary": "DNS one-sentence answer delivered",
+    "timestamp": "2026-05-30T11:48:11.569455900+00:00",
+    "read": false,
+    "protocol": {
+      "kind": "peer_message",
+      "threadId": "peer-e96df7c7ae564f27932a99bb03220f58",
+      "targetArtifacts": [],
+      "referencedTaskIds": [],
+      "lineage": {
+        "logical_worker_id": "worker_3_DNS",
+        "attempt_id": "swarm_20260530_54_2_e0ef38aa7a1d4f1aa90f86ff602d60ef",
+        "attempt_index": 0
+      }
+    },
+    "metadata": {
+      "logical_worker_id": "worker_3_DNS",
+      "followup_kind": "peer_message",
+      "attempt_index": "0",
+      "attempt_id": "swarm_20260530_54_2_e0ef38aa7a1d4f1aa90f86ff602d60ef",
+      "recipient": "leader",
+      "thread_id": "peer-e96df7c7ae564f27932a99bb03220f58"
+    }
+  },
+  {
+    "id": "summary-swarm_20260530_54_2_e0ef38aa7a1d4f1aa90f86ff602d60ef",
+    "from": "worker_3_DNS",
+    "to": "leader",
+    "kind": "summary",
+    "text": "",
+    "summary": "DNS",
+    "timestamp": "2026-05-30T11:48:16.495918200+00:00",
+    "read": false,
+    "protocol": {
+      "kind": "summary",
+      "threadId": "swarm_20260530_54_2_e0ef38aa7a1d4f1aa90f86ff602d60ef",
+      "targetArtifacts": [
+        "DNS"
+      ],
+      "referencedTaskIds": [
+        "swarm_20260530_54_2_e0ef38aa7a1d4f1aa90f86ff602d60ef"
+      ],
+      "lineage": {
+        "logical_worker_id": "worker_3_DNS",
+        "attempt_id": "swarm_20260530_54_2_e0ef38aa7a1d4f1aa90f86ff602d60ef",
+        "attempt_index": 0
+      }
+    },
+    "metadata": {
+      "attempt_index": "0",
+      "attempt_id": "swarm_20260530_54_2_e0ef38aa7a1d4f1aa90f86ff602d60ef",
+      "followup_kind": "fresh",
+      "logical_worker_id": "worker_3_DNS"
+    }
+  },
+  {
+    "id": "peer-msg-0555005668734ba3a55a360eb5bca3b9",
+    "from": "worker_1_HTTP",
+    "to": "leader",
+    "kind": "peer_message",
+    "text": "HTTP is an application-layer protocol that follows a request-response model where clients (like web browsers) send requests to servers, which then return responses containing resources such as HTML pages, images, or data.",
+    "summary": "One-sentence answer about HTTP for network basics question",
+    "timestamp": "2026-05-30T11:48:29.013264800+00:00",
+    "read": false,
+    "protocol": {
+      "kind": "peer_message",
+      "threadId": "peer-ed0090b3433b4602b3e4ebf870ca632a",
+      "targetArtifacts": [],
+      "referencedTaskIds": [],
+      "lineage": {
+        "logical_worker_id": "worker_1_HTTP",
+        "attempt_id": "swarm_20260530_54_0_0dcf4caa80244e539659b720af6a81ee",
+        "attempt_index": 0
+      }
+    },
+    "metadata": {
+      "logical_worker_id": "worker_1_HTTP",
+      "recipient": "leader",
+      "followup_kind": "peer_message",
+      "attempt_id": "swarm_20260530_54_0_0dcf4caa80244e539659b720af6a81ee",
+      "attempt_index": "0",
+      "thread_id": "peer-ed0090b3433b4602b3e4ebf870ca632a"
+    }
+  },
+  {
+    "id": "summary-swarm_20260530_54_0_0dcf4caa80244e539659b720af6a81ee",
+    "from": "worker_1_HTTP",
+    "to": "leader",
+    "kind": "summary",
+    "text": "",
+    "summary": "HTTP",
+    "timestamp": "2026-05-30T11:48:38.612469600+00:00",
+    "read": false,
+    "protocol": {
+      "kind": "summary",
+      "threadId": "swarm_20260530_54_0_0dcf4caa80244e539659b720af6a81ee",
+      "targetArtifacts": [
+        "HTTP"
+      ],
+      "referencedTaskIds": [
+        "swarm_20260530_54_0_0dcf4caa80244e539659b720af6a81ee"
+      ],
+      "lineage": {
+        "logical_worker_id": "worker_1_HTTP",
+        "attempt_id": "swarm_20260530_54_0_0dcf4caa80244e539659b720af6a81ee",
+        "attempt_index": 0
+      }
+    },
+    "metadata": {
+      "attempt_index": "0",
+      "attempt_id": "swarm_20260530_54_0_0dcf4caa80244e539659b720af6a81ee",
+      "logical_worker_id": "worker_1_HTTP",
+      "followup_kind": "fresh"
+    }
+  },
+  {
+    "id": "summary-swarm_20260530_54_1_d04de2868b8e4439974912211f13f3fb",
+    "from": "worker_2_TCP",
+    "to": "leader",
+    "kind": "summary",
+    "text": "",
+    "summary": "TCP",
+    "timestamp": "2026-05-30T11:52:49.622205900+00:00",
+    "read": false,
+    "protocol": {
+      "kind": "summary",
+      "threadId": "swarm_20260530_54_1_d04de2868b8e4439974912211f13f3fb",
+      "targetArtifacts": [
+        "TCP"
+      ],
+      "referencedTaskIds": [
+        "swarm_20260530_54_1_d04de2868b8e4439974912211f13f3fb"
+      ],
+      "lineage": {
+        "logical_worker_id": "worker_2_TCP",
+        "attempt_id": "swarm_20260530_54_1_d04de2868b8e4439974912211f13f3fb",
+        "attempt_index": 0
+      }
+    },
+    "metadata": {
+      "attempt_id": "swarm_20260530_54_1_d04de2868b8e4439974912211f13f3fb",
+      "followup_kind": "fresh",
+      "logical_worker_id": "worker_2_TCP",
+      "attempt_index": "0"
+    }
+  }
+]

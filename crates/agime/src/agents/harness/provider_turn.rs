@@ -1062,7 +1062,13 @@ impl Agent {
             messages_to_add.push(message);
         }
 
+        tracing::info!(
+            frontend_request_count = frontend_requests.len(),
+            remaining_request_count = remaining_requests.len(),
+            "process_provider_success_result: building tool response plan"
+        );
         let tool_response_plan = ToolResponsePlan::new(&frontend_requests, &remaining_requests);
+        tracing::info!("process_provider_success_result: tool response plan ready");
         let frontend_transport = self
             .process_frontend_tool_requests(
                 &frontend_requests,
@@ -1078,6 +1084,11 @@ impl Agent {
                 ),
             )
             .await?;
+        tracing::info!(
+            pending_frontend_count = frontend_transport.pending_request_ids.len(),
+            frontend_event_count = frontend_transport.events.len(),
+            "process_provider_success_result: frontend transport ready"
+        );
         let pending_frontend_request_ids = frontend_transport.pending_request_ids.clone();
         let frontend_request_transports = frontend_transport.request_transports.clone();
         events.extend(frontend_transport.events);

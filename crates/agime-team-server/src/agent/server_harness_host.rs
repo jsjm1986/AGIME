@@ -2129,6 +2129,18 @@ impl ServerHarnessEventSink {
         agent: &Agent,
         request: &agime::conversation::message::ToolRequest,
     ) -> Result<()> {
+        let tool_name = request
+            .tool_call
+            .as_ref()
+            .ok()
+            .map(|call| call.name.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        tracing::info!(
+            runtime_session_id = %runtime_session_id,
+            request_id = %request.id,
+            tool_name,
+            "server-local tool request received"
+        );
         self.execute_direct_tool_request(
             logical_session_id,
             runtime_session_id,

@@ -251,8 +251,10 @@ impl DesktopHarnessHost {
             persistence,
         };
 
-        let parallelism_budget =
-            budget_from_env("AGIME_DESKTOP_PARALLELISM_BUDGET", DEFAULT_PARALLELISM_BUDGET);
+        let parallelism_budget = budget_from_env(
+            "AGIME_DESKTOP_PARALLELISM_BUDGET",
+            DEFAULT_PARALLELISM_BUDGET,
+        );
         let swarm_budget = budget_from_env("AGIME_DESKTOP_SWARM_BUDGET", DEFAULT_SWARM_BUDGET);
         let system_prompt_extras = delegation_guidance_extras(
             delegation_guidance_enabled(),
@@ -335,9 +337,9 @@ fn collect_text(message: &Message) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        delegation_guidance_extras, resolve_budget, DELEGATION_GUIDANCE_RESTRAINT,
-        DELEGATION_GUIDANCE_SUBAGENT, DELEGATION_GUIDANCE_SWARM, DEFAULT_PARALLELISM_BUDGET,
-        DEFAULT_SWARM_BUDGET,
+        delegation_guidance_extras, resolve_budget, DEFAULT_PARALLELISM_BUDGET,
+        DEFAULT_SWARM_BUDGET, DELEGATION_GUIDANCE_RESTRAINT, DELEGATION_GUIDANCE_SUBAGENT,
+        DELEGATION_GUIDANCE_SWARM,
     };
 
     #[test]

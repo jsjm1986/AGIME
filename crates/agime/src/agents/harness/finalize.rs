@@ -22,6 +22,8 @@ use super::{
 impl Agent {
     const POST_TOOL_CONVERSATION_FOLLOW_UP: &str = "Tool execution for this turn has completed. Now answer the user directly in natural language using the completed tool results. Do not call more tools unless another tool is strictly required to answer.";
     const EXECUTE_STRUCTURED_COMPLETION_FOLLOW_UP: &str = "Execution output for this turn is present, but the runtime completion contract is still missing. Call the `final_output` tool now with the structured terminal completion report for this execute surface. Do not start a new tool chain.";
+    const CONVERSATION_PREAMBLE_NUDGE: &str = "You described the next step but did not actually perform it — you ended the turn without calling the tool you said you would use. Do not stop here. Continue now and actually call that tool. 你刚才只描述了下一步却没有执行，不要停下，现在就继续并真正调用你说要用的工具。";
+    const MAX_CONSECUTIVE_PREAMBLE_NUDGES: u32 = 2;
 
     fn has_user_visible_assistant_text(messages: &Conversation) -> bool {
         messages.messages().iter().any(|message| {
@@ -144,6 +146,51 @@ impl Agent {
         Message::user()
             .with_text(Self::EXECUTE_STRUCTURED_COMPLETION_FOLLOW_UP)
             .with_metadata(MessageMetadata::agent_only())
+    }
+
+    fn build_conversation_preamble_nudge_message() -> Message {
+        Message::user()
+            .with_text(Self::CONVERSATION_PREAMBLE_NUDGE)
+            .with_metadata(MessageMetadata::agent_only())
+    }
+
+    /// Whether the just-ended Conversation turn's terminal text is an unfinished
+    /// preamble (announced a next action, never called the tool). Reads the last
+    /// terminal user-visible assistant text from the in-progress conversation.
+    fn conversation_turn_ended_with_preamble(visible_conversation: &Conversation) -> bool {
+        super::completion::latest_terminal_user_visible_assistant_text(visible_conversation)
+            .as_deref()
+            .map(super::completion::summary_indicates_unfinished_preamble)
+            .unwrap_or(false)
+    }
+
+    /// Pure decision for injecting a preamble-continuation nudge. Kept free of
+    /// env/IO so it is deterministically unit-testable; the caller passes
+    /// `enabled` (the desktop env gate `preamble_nudge_enabled()`).
+    ///
+    /// Fires only when: the desktop gate is on, this was a Conversation-surface
+    /// turn that called no tools and ended on an unfinished preamble, there is
+    /// no delegated work or blocking signal in flight, and we have not already
+    /// nudged `MAX_CONSECUTIVE_PREAMBLE_NUDGES` times in a row (the loop guard —
+    /// once the cap is hit we let the turn complete normally so the user regains
+    /// control instead of spinning invisibly).
+    #[allow(clippy::too_many_arguments)]
+    fn conversation_preamble_nudge_required(
+        enabled: bool,
+        policy: CompletionSurfacePolicy,
+        no_tools_called: bool,
+        is_preamble: bool,
+        active_child_tasks: bool,
+        has_blocking_signals: bool,
+        consecutive_nudges: u32,
+    ) -> bool {
+        enabled
+            && matches!(policy, CompletionSurfacePolicy::Conversation)
+            && no_tools_called
+            && is_preamble
+            && !active_child_tasks
+            && !has_blocking_signals
+            && consecutive_nudges < Self::MAX_CONSECUTIVE_PREAMBLE_NUDGES
     }
 
     fn should_accept_bounded_child_terminal_assistant_text(
@@ -311,6 +358,7 @@ impl Agent {
         task_runtime: &TaskRuntime,
         coordinator_signals: &SharedCoordinatorSignalStore,
         transition_trace: &SharedTransitionTrace,
+        consecutive_preamble_nudges: &mut u32,
     ) -> Result<TurnFinalization> {
         let mut events = Vec::new();
         let mut exit_chat = false;
@@ -456,6 +504,15 @@ impl Agent {
                 && Self::has_final_document_analysis_text_after_last_tool_response(messages_to_add)
                 && !active_child_tasks
                 && !has_blocking_signals;
+        let conversation_preamble_nudge_required = Self::conversation_preamble_nudge_required(
+            super::preamble_nudge_enabled(),
+            completion_surface_policy,
+            no_tools_called,
+            Self::conversation_turn_ended_with_preamble(&visible_conversation),
+            active_child_tasks,
+            has_blocking_signals,
+            *consecutive_preamble_nudges,
+        );
         let coordinator_should_complete = match completion_surface_policy {
             CompletionSurfacePolicy::Execute => {
                 if matches!(current_mode, HarnessMode::Execute) {
@@ -499,6 +556,7 @@ impl Agent {
                 (has_terminal_user_visible_assistant_text || bounded_child_tool_result_is_terminal)
                     && !active_child_tasks
                     && !has_blocking_signals
+                    && !conversation_preamble_nudge_required
             }
         };
         let needs_post_tool_conversation_reply = matches!(
@@ -544,6 +602,26 @@ impl Agent {
                 std::collections::BTreeMap::new(),
             )
             .await;
+        }
+        if conversation_preamble_nudge_required {
+            let follow_up = Self::build_conversation_preamble_nudge_message();
+            messages_to_add.push(follow_up.clone());
+            events.push(AgentEvent::Message(follow_up));
+            *consecutive_preamble_nudges += 1;
+            record_transition(
+                transition_trace,
+                turns_taken,
+                current_mode,
+                TransitionKind::PostTurnAdjudication,
+                "conversation_preamble_nudge_required",
+                std::collections::BTreeMap::new(),
+            )
+            .await;
+        } else if matches!(
+            completion_surface_policy,
+            CompletionSurfacePolicy::Conversation
+        ) {
+            *consecutive_preamble_nudges = 0;
         }
         if coordinator_should_complete {
             record_transition(
@@ -873,6 +951,133 @@ mod tests {
         assert!(message
             .as_concat_text()
             .contains("Call the `final_output` tool now"));
+    }
+
+    #[test]
+    fn preamble_nudge_message_is_agent_only() {
+        let message = Agent::build_conversation_preamble_nudge_message();
+        assert_eq!(message.role, rmcp::model::Role::User);
+        assert_eq!(message.metadata, MessageMetadata::agent_only());
+        assert!(message
+            .as_concat_text()
+            .contains("did not actually perform"));
+    }
+
+    #[test]
+    fn preamble_nudge_required_fires_on_conversation_preamble() {
+        assert!(Agent::conversation_preamble_nudge_required(
+            true,
+            CompletionSurfacePolicy::Conversation,
+            true,  // no_tools_called
+            true,  // is_preamble
+            false, // active_child_tasks
+            false, // has_blocking_signals
+            0,     // consecutive_nudges
+        ));
+    }
+
+    #[test]
+    fn preamble_nudge_required_respects_disabled_gate() {
+        // Desktop env off (team-server case) => never fires.
+        assert!(!Agent::conversation_preamble_nudge_required(
+            false,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            true,
+            false,
+            false,
+            0,
+        ));
+    }
+
+    #[test]
+    fn preamble_nudge_required_only_on_conversation_surface() {
+        for policy in [
+            CompletionSurfacePolicy::Execute,
+            CompletionSurfacePolicy::SystemDocumentAnalysis,
+        ] {
+            assert!(!Agent::conversation_preamble_nudge_required(
+                true, policy, true, true, false, false, 0,
+            ));
+        }
+    }
+
+    #[test]
+    fn preamble_nudge_required_needs_no_tools_and_preamble() {
+        // A turn that called tools is not a stranded preamble.
+        assert!(!Agent::conversation_preamble_nudge_required(
+            true,
+            CompletionSurfacePolicy::Conversation,
+            false, // no_tools_called = false
+            true,
+            false,
+            false,
+            0,
+        ));
+        // Terminal text that is not a preamble is a real final answer.
+        assert!(!Agent::conversation_preamble_nudge_required(
+            true,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            false, // is_preamble = false
+            false,
+            false,
+            0,
+        ));
+    }
+
+    #[test]
+    fn preamble_nudge_required_suppressed_by_delegation_or_blocking() {
+        assert!(!Agent::conversation_preamble_nudge_required(
+            true,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            true,
+            true, // active_child_tasks
+            false,
+            0,
+        ));
+        assert!(!Agent::conversation_preamble_nudge_required(
+            true,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            true,
+            false,
+            true, // has_blocking_signals
+            0,
+        ));
+    }
+
+    #[test]
+    fn preamble_nudge_required_caps_consecutive_streak() {
+        // 0 and 1 still fire; at the cap (2) it stops so the user regains control.
+        assert!(Agent::conversation_preamble_nudge_required(
+            true,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            true,
+            false,
+            false,
+            0,
+        ));
+        assert!(Agent::conversation_preamble_nudge_required(
+            true,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            true,
+            false,
+            false,
+            1,
+        ));
+        assert!(!Agent::conversation_preamble_nudge_required(
+            true,
+            CompletionSurfacePolicy::Conversation,
+            true,
+            true,
+            false,
+            false,
+            Agent::MAX_CONSECUTIVE_PREAMBLE_NUDGES,
+        ));
     }
 
     #[test]

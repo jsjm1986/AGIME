@@ -507,6 +507,78 @@ fn summary_indicates_future_intent(summary: &str) -> bool {
     false
 }
 
+/// Whether a Conversation-surface assistant reply is an *unfinished preamble*:
+/// the model announced a next action ("let me find the injection points:") but
+/// did not actually call the tool, so treating the turn as complete strands the
+/// user. Deliberately NOT `summary_indicates_future_intent` — that one matches
+/// bare "让我"/"我会"/"下一步" anywhere and would misfire on legitimate final
+/// replies ("我会一直在这里帮你"), causing a nudge loop.
+///
+/// Two gates, both required, to stay conservative (a false negative just stops
+/// early as today; a false positive risks looping, so we err toward not firing):
+/// 1. **Structural**: the last non-empty line must end with a colon `:` / `：`,
+///    the textual shape of "about to do the thing". Real final answers rarely
+///    end on a colon.
+/// 2. **Intent phrase**: the text contains a forward-looking action phrase.
+///    `let me know` / `让我知道` are explicitly excluded (they solicit the user,
+///    they don't announce the model's own next step).
+pub fn summary_indicates_unfinished_preamble(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Gate 1: last non-empty line ends with a colon (half- or full-width).
+    let last_line = trimmed
+        .lines()
+        .rev()
+        .map(str::trim_end)
+        .find(|line| !line.trim().is_empty());
+    let ends_with_colon = last_line
+        .map(|line| line.ends_with(':') || line.ends_with('：'))
+        .unwrap_or(false);
+    if !ends_with_colon {
+        return false;
+    }
+
+    let normalized = trimmed.to_ascii_lowercase();
+
+    // Gate 2a: explicit exclusions — soliciting the user is not a preamble.
+    if normalized.contains("let me know") || normalized.contains("让我知道") {
+        return false;
+    }
+
+    // Gate 2b: forward-looking action phrase announcing the model's own step.
+    const PREAMBLE_PHRASES: &[&str] = &[
+        "now i need to",
+        "now i'll",
+        "now i will",
+        "now let me",
+        "let me",
+        "i need to",
+        "i'll",
+        "i will",
+        "i am going to",
+        "i'm going to",
+        "i’m going to",
+        "next, i",
+        "next i",
+        "next step",
+        "现在我",
+        "现在让我",
+        "接下来",
+        "下一步",
+        "我需要",
+        "我现在",
+        "让我",
+        "我将",
+        "我会先",
+    ];
+    PREAMBLE_PHRASES
+        .iter()
+        .any(|phrase| normalized.contains(phrase))
+}
+
 pub fn normalize_execution_host_completion_report(
     mut report: ExecutionHostCompletionReport,
     signal_summary: Option<&CoordinatorSignalSummary>,
@@ -1627,5 +1699,72 @@ mod tests {
         assert_eq!(report.validation_status.as_deref(), Some("passed"));
         assert_eq!(report.content_accessed, Some(true));
         assert_eq!(report.analysis_complete, Some(true));
+    }
+
+    #[test]
+    fn unfinished_preamble_detects_english_announcement_with_colon() {
+        // The exact shape from the reported screenshot.
+        assert!(summary_indicates_unfinished_preamble(
+            "Now I need to inject the new agent imports and API routes into the existing app.py. Let me find the exact injection points:"
+        ));
+        assert!(summary_indicates_unfinished_preamble(
+            "Let me find the injection points:"
+        ));
+        assert!(summary_indicates_unfinished_preamble(
+            "I'll update the config next:"
+        ));
+    }
+
+    #[test]
+    fn unfinished_preamble_detects_chinese_announcement_with_colon() {
+        assert!(summary_indicates_unfinished_preamble(
+            "接下来我需要修改这几个文件："
+        ));
+        assert!(summary_indicates_unfinished_preamble("现在我来定位注入点:"));
+        assert!(summary_indicates_unfinished_preamble(
+            "下一步，我将编辑路由："
+        ));
+    }
+
+    #[test]
+    fn unfinished_preamble_requires_trailing_colon() {
+        // Intent phrase present but the reply is a real final answer with no
+        // trailing colon — must NOT fire (otherwise we loop forever).
+        assert!(!summary_indicates_unfinished_preamble(
+            "我会一直在这里帮你，有需要随时说。"
+        ));
+        assert!(!summary_indicates_unfinished_preamble(
+            "I'll be here if you need anything else."
+        ));
+        // A bulleted list whose last non-empty line is not a colon line.
+        assert!(!summary_indicates_unfinished_preamble(
+            "Here are the steps:\n- read file\n- edit it"
+        ));
+    }
+
+    #[test]
+    fn unfinished_preamble_excludes_solicitations() {
+        // "let me know" / "让我知道" end on a colon but solicit the user; not a
+        // preamble of the model's own next action.
+        assert!(!summary_indicates_unfinished_preamble(
+            "Let me know which of these you'd prefer:"
+        ));
+        assert!(!summary_indicates_unfinished_preamble("让我知道你的选择："));
+    }
+
+    #[test]
+    fn unfinished_preamble_requires_intent_phrase() {
+        // Trailing colon but no forward-looking intent phrase — a heading, not a
+        // preamble — must NOT fire.
+        assert!(!summary_indicates_unfinished_preamble(
+            "Summary of changes:"
+        ));
+        assert!(!summary_indicates_unfinished_preamble("修改摘要："));
+    }
+
+    #[test]
+    fn unfinished_preamble_ignores_empty() {
+        assert!(!summary_indicates_unfinished_preamble(""));
+        assert!(!summary_indicates_unfinished_preamble("   \n  "));
     }
 }

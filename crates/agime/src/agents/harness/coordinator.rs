@@ -6,6 +6,7 @@ pub const AGIME_ENABLE_NATIVE_SWARM_TOOL_ENV: &str = "AGIME_ENABLE_NATIVE_SWARM_
 pub const AGIME_ENABLE_SWARM_PLANNER_AUTO_ENV: &str = "AGIME_ENABLE_SWARM_PLANNER_AUTO";
 pub const AGIME_ENABLE_LEADER_PERMISSION_BRIDGE_ENV: &str = "AGIME_ENABLE_LEADER_PERMISSION_BRIDGE";
 pub const AGIME_ENABLE_SWARM_SCRATCHPAD_ENV: &str = "AGIME_ENABLE_SWARM_SCRATCHPAD";
+pub const AGIME_PREAMBLE_NUDGE_ENV: &str = "AGIME_PREAMBLE_NUDGE";
 
 fn env_truthy(key: &str) -> bool {
     env::var(key)
@@ -32,6 +33,15 @@ pub fn leader_permission_bridge_enabled() -> bool {
 
 pub fn swarm_scratchpad_enabled() -> bool {
     env_truthy(AGIME_ENABLE_SWARM_SCRATCHPAD_ENV)
+}
+
+/// Whether the desktop "preamble nudge" is active: when the model announces a
+/// next action on the Conversation surface but does not call the tool, the
+/// harness injects an agent-only continuation prompt instead of ending the
+/// turn. Desktop (`agime-server` with the `desktop_harness_host` feature) sets
+/// this env on startup; team-server never does, so its behavior is unchanged.
+pub fn preamble_nudge_enabled() -> bool {
+    env_truthy(AGIME_PREAMBLE_NUDGE_ENV)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

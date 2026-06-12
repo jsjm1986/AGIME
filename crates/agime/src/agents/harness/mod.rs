@@ -77,8 +77,8 @@ pub use control_types::{
 };
 pub use coordinator::{
     leader_permission_bridge_enabled, native_swarm_tool_enabled, planner_auto_swarm_enabled,
-    sanitize_worker_name, swarm_scratchpad_enabled, worker_name_for_target, CoordinatorRole,
-    SwarmExecutionRequest, SwarmExecutionResult, WorkerIdentity,
+    preamble_nudge_enabled, sanitize_worker_name, swarm_scratchpad_enabled, worker_name_for_target,
+    CoordinatorRole, SwarmExecutionRequest, SwarmExecutionResult, WorkerIdentity,
 };
 pub use coordinator_runtime::execute_swarm_request;
 pub use delegation::{

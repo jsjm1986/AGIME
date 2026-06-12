@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, ExternalLink, RefreshCw } from 'lucide-react';
+import { Bot, ExternalLink, Image, RefreshCw } from 'lucide-react';
 
 import {
   Dialog,
@@ -11,16 +11,35 @@ import {
   DialogTitle,
 } from '../../../ui/dialog';
 import { Button } from '../../../ui/button';
+import { Switch } from '../../../ui/switch';
 import { QUICKSTART_GUIDE_URL } from '../../providers/modal/constants';
 import { Input } from '../../../ui/input';
 import { Select } from '../../../ui/Select';
 import { useConfig } from '../../../ConfigContext';
-import { useModelAndProvider } from '../../../ModelAndProviderContext';
+import { useModelAndProvider, MODEL_MULTIMODAL_KEY } from '../../../ModelAndProviderContext';
 import type { View } from '../../../../utils/navigationUtils';
 import Model, { getProviderMetadata, fetchModelsForProviders } from '../modelInterface';
 import { getPredefinedModelsFromEnv, shouldShowPredefinedModels } from '../predefinedModelsUtils';
 import { ProviderType } from '../../../../api';
 import { clearProviderModelsCache } from '../../../../utils/providerModelsCache';
+
+// Mirrors the backend default in ModelConfig::parse_supports_multimodal: an
+// unset/unknown value means multimodal is enabled.
+function interpretMultimodalEntry(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return true;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    return !['0', 'false', 'no', 'off'].includes(value.trim().toLowerCase());
+  }
+  return true;
+}
 
 const PREFERRED_MODEL_PATTERNS = [
   /claude-sonnet-4/i,
@@ -101,6 +120,44 @@ export const SwitchModelModal = ({
   const [loadingModels, setLoadingModels] = useState<boolean>(false);
   const [refreshingModels, setRefreshingModels] = useState<boolean>(false);
   const [userClearedModel, setUserClearedModel] = useState(false);
+  // Per-model "supports images (multimodal)" flag, backfilled from the saved
+  // AGIME_MODEL_MULTIMODAL map for the currently selected model.
+  const [supportsMultimodal, setSupportsMultimodal] = useState<boolean>(true);
+  const [multimodalMap, setMultimodalMap] = useState<Record<string, unknown>>({});
+
+  // The model name currently in focus across both selection modes.
+  const effectiveModelName = usePredefinedModels ? selectedPredefinedModel?.name : model;
+
+  // Load the saved per-model multimodal map once on mount.
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const stored = (await read(MODEL_MULTIMODAL_KEY, false)) as Record<
+          string,
+          unknown
+        > | null;
+        if (!isMounted) return;
+        if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+          setMultimodalMap(stored);
+        }
+      } catch (error) {
+        console.error('Failed to read per-model multimodal map', error);
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, [read]);
+
+  // Backfill the toggle from the map whenever the focused model changes.
+  useEffect(() => {
+    if (effectiveModelName && Object.prototype.hasOwnProperty.call(multimodalMap, effectiveModelName)) {
+      setSupportsMultimodal(interpretMultimodalEntry(multimodalMap[effectiveModelName]));
+    } else {
+      setSupportsMultimodal(true);
+    }
+  }, [effectiveModelName, multimodalMap]);
 
   // Refs for translations used in async effects (avoids re-triggering effects on language change)
   const translationsRef = useRef({
@@ -161,6 +218,10 @@ export const SwitchModelModal = ({
         const providerDisplayName = providerMetaData.display_name;
         modelObj = { name: model, provider: provider, subtext: providerDisplayName } as Model;
       }
+
+      // Carry the user's per-model multimodal choice so changeModel persists it
+      // into the AGIME_MODEL_MULTIMODAL map keyed by this model's name.
+      modelObj = { ...modelObj, supportsMultimodal };
 
       await changeModel(sessionId, modelObj);
       if (onModelSelected) {
@@ -654,6 +715,27 @@ export const SwitchModelModal = ({
             </div>
           )}
         </div>
+
+        {effectiveModelName && (
+          <div className="flex items-center justify-between rounded-lg border border-borderSubtle px-3 py-3">
+            <div className="flex items-start gap-2 pr-3">
+              <Image size={16} className="mt-[2px] text-textSubtle shrink-0" />
+              <div className="flex flex-col">
+                <span className="text-sm font-medium text-textStandard">
+                  {t('models.multimodal.perModelLabel')}
+                </span>
+                <span className="text-xs text-textSubtle">
+                  {t('models.multimodal.perModelHelp')}
+                </span>
+              </div>
+            </div>
+            <Switch
+              checked={supportsMultimodal}
+              onCheckedChange={setSupportsMultimodal}
+              aria-label={t('models.multimodal.perModelLabel')}
+            />
+          </div>
+        )}
 
         <DialogFooter className="pt-4 flex-col sm:flex-row gap-3">
           <a

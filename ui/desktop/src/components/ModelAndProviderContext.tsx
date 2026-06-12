@@ -19,6 +19,11 @@ export const UNKNOWN_PROVIDER_MSG = 'Unknown provider in config -- please inspec
 const CHANGE_MODEL_TOAST_TITLE = 'Model changed';
 const SWITCH_MODEL_SUCCESS_MSG = 'Successfully switched models';
 
+// config.yaml key holding the per-model multimodal map: { "<model_name>": bool }.
+// The backend (ModelConfig::parse_supports_multimodal) reads this same key,
+// keyed by model name, to decide whether image content is sent to the model.
+export const MODEL_MULTIMODAL_KEY = 'AGIME_MODEL_MULTIMODAL';
+
 interface ModelAndProviderContextType {
   currentModel: string | null;
   currentProvider: string | null;
@@ -40,49 +45,73 @@ const ModelAndProviderContext = createContext<ModelAndProviderContextType | unde
 export const ModelAndProviderProvider: React.FC<ModelAndProviderProviderProps> = ({ children }) => {
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [currentProvider, setCurrentProvider] = useState<string | null>(null);
-  const { read, getProviders } = useConfig();
+  const { read, upsert, getProviders } = useConfig();
 
-  const changeModel = useCallback(async (sessionId: string | null, model: Model) => {
-    const modelName = model.name;
-    const providerName = model.provider;
-    let phase = 'agent';
+  const changeModel = useCallback(
+    async (sessionId: string | null, model: Model) => {
+      const modelName = model.name;
+      const providerName = model.provider;
+      let phase = 'agent';
 
-    try {
-      if (sessionId) {
-        await updateAgentProvider({
+      try {
+        // Persist this model's multimodal capability into the per-model map
+        // (keyed by model name) so the backend honors it when building the
+        // ModelConfig for this model. Read-modify-write to preserve other
+        // models' entries. A failure here must not block the model switch.
+        if (typeof model.supportsMultimodal === 'boolean') {
+          try {
+            const existing = (await read(MODEL_MULTIMODAL_KEY, false)) as Record<
+              string,
+              unknown
+            > | null;
+            const map =
+              existing && typeof existing === 'object' && !Array.isArray(existing)
+                ? { ...existing }
+                : {};
+            map[modelName] = model.supportsMultimodal;
+            await upsert(MODEL_MULTIMODAL_KEY, map, false);
+          } catch (mmError) {
+            console.error('Failed to persist per-model multimodal flag', mmError);
+          }
+        }
+
+        if (sessionId) {
+          await updateAgentProvider({
+            body: {
+              session_id: sessionId,
+              provider: providerName,
+              model: modelName,
+            },
+          });
+        }
+
+        phase = 'config';
+        await setConfigProvider({
           body: {
-            session_id: sessionId,
             provider: providerName,
             model: modelName,
           },
+          throwOnError: true,
+        });
+
+        setCurrentProvider(providerName);
+        setCurrentModel(modelName);
+
+        toastSuccess({
+          title: CHANGE_MODEL_TOAST_TITLE,
+          msg: `${SWITCH_MODEL_SUCCESS_MSG} -- using ${model.alias ?? modelName} from ${model.subtext ?? providerName}`,
+        });
+      } catch (error) {
+        console.error(`Failed to change model at ${phase} step -- ${modelName} ${providerName}`);
+        toastError({
+          title: `${providerName}/${modelName} failed`,
+          msg: `${error}`,
+          traceback: error instanceof Error ? error.message : String(error),
         });
       }
-
-      phase = 'config';
-      await setConfigProvider({
-        body: {
-          provider: providerName,
-          model: modelName,
-        },
-        throwOnError: true,
-      });
-
-      setCurrentProvider(providerName);
-      setCurrentModel(modelName);
-
-      toastSuccess({
-        title: CHANGE_MODEL_TOAST_TITLE,
-        msg: `${SWITCH_MODEL_SUCCESS_MSG} -- using ${model.alias ?? modelName} from ${model.subtext ?? providerName}`,
-      });
-    } catch (error) {
-      console.error(`Failed to change model at ${phase} step -- ${modelName} ${providerName}`);
-      toastError({
-        title: `${providerName}/${modelName} failed`,
-        msg: `${error}`,
-        traceback: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }, []);
+    },
+    [read, upsert]
+  );
 
   const getFallbackModelAndProvider = useCallback(async () => {
     const provider = getConfigCompat('DEFAULT_PROVIDER') as string;

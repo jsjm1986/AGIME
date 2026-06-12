@@ -117,6 +117,7 @@ impl ModelConfig {
         let temperature = Self::parse_temperature()?;
         let toolshim = Self::parse_toolshim()?;
         let toolshim_model = Self::parse_toolshim_model()?;
+        let supports_multimodal = Self::parse_supports_multimodal(&model_name)?;
 
         Ok(Self {
             model_name,
@@ -128,7 +129,7 @@ impl ModelConfig {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
-            supports_multimodal: Self::parse_supports_multimodal()?,
+            supports_multimodal,
             prompt_caching_mode: PromptCachingMode::Auto,
             cache_edit_mode: CacheEditMode::Auto,
             toolshim,
@@ -223,17 +224,55 @@ impl ModelConfig {
     }
 
     /// Whether the model/endpoint should be sent image (multimodal) content.
-    /// Defaults to `true`. The value is read with the standard dual-prefix
-    /// precedence (`AGIME_MULTIMODAL` env, then `GOOSE_MULTIMODAL` env, then the
-    /// `AGIME_MULTIMODAL` key in `config.yaml`) so the desktop UI toggle — which
-    /// persists to `config.yaml` — is honored on the registry chat path. Set it
-    /// to a falsey value to force images to be down-converted to text
-    /// placeholders, which avoids 400 rejections from endpoints that only
-    /// accept text.
-    fn parse_supports_multimodal() -> Result<bool, ConfigError> {
-        match crate::config::Config::global().get_param::<serde_json::Value>("MULTIMODAL") {
-            Ok(value) => Self::interpret_multimodal_value(&value),
-            Err(_) => Ok(true),
+    /// Defaults to `true`.
+    ///
+    /// Resolution precedence:
+    /// 1. **Per-model map** `AGIME_MODEL_MULTIMODAL` — a JSON/YAML object
+    ///    `{ "<model_name>": <bool> }` written by the desktop UI when the user
+    ///    ticks "this model supports images". If the map holds a *valid* entry
+    ///    for `model_name`, it wins. A malformed entry is ignored (we never
+    ///    hard-fail `ModelConfig::new` over one bad entry — that would break the
+    ///    chat) and resolution falls through.
+    /// 2. **Legacy global** `AGIME_MULTIMODAL` (env, then `GOOSE_MULTIMODAL`,
+    ///    then `config.yaml`). Preserves backward compatibility for users who
+    ///    only ever set the old global toggle. A garbage global value still
+    ///    errors, matching prior behavior.
+    /// 3. **Default** `true`.
+    fn parse_supports_multimodal(model_name: &str) -> Result<bool, ConfigError> {
+        let config = crate::config::Config::global();
+
+        let per_model_entry = config
+            .get_param::<std::collections::HashMap<String, serde_json::Value>>("MODEL_MULTIMODAL")
+            .ok()
+            .and_then(|map| map.get(model_name).cloned());
+
+        let global_value = config.get_param::<serde_json::Value>("MULTIMODAL").ok();
+
+        Self::resolve_supports_multimodal(per_model_entry.as_ref(), global_value.as_ref())
+    }
+
+    /// Pure resolution of the multimodal flag given the optional per-model map
+    /// entry and the optional legacy global value. Kept side-effect free so it
+    /// is deterministically unit-testable without touching the global config.
+    ///
+    /// A malformed *per-model* entry falls back to the global/default rather
+    /// than erroring (one bad entry must not break model construction), whereas
+    /// a malformed *global* value still errors to preserve existing behavior.
+    fn resolve_supports_multimodal(
+        per_model_entry: Option<&serde_json::Value>,
+        global_value: Option<&serde_json::Value>,
+    ) -> Result<bool, ConfigError> {
+        // 1. Per-model entry wins when present and valid; malformed → fall through.
+        if let Some(entry) = per_model_entry {
+            if let Ok(flag) = Self::interpret_multimodal_value(entry) {
+                return Ok(flag);
+            }
+        }
+
+        // 2. Legacy global flag (errors on garbage). 3. Default true.
+        match global_value {
+            Some(value) => Self::interpret_multimodal_value(value),
+            None => Ok(true),
         }
     }
 
@@ -381,7 +420,7 @@ mod tests {
     #[serial]
     fn supports_multimodal_defaults_to_true_when_unset() {
         clear_multimodal_env();
-        assert!(ModelConfig::parse_supports_multimodal().unwrap());
+        assert!(ModelConfig::parse_supports_multimodal("test-model").unwrap());
         let config = ModelConfig::new("test-model").unwrap();
         assert!(config.supports_multimodal);
     }
@@ -393,7 +432,7 @@ mod tests {
             clear_multimodal_env();
             env::set_var(AGIME_KEY, val);
             assert!(
-                !ModelConfig::parse_supports_multimodal().unwrap(),
+                !ModelConfig::parse_supports_multimodal("test-model").unwrap(),
                 "value {val:?} should disable multimodal"
             );
         }
@@ -407,7 +446,7 @@ mod tests {
             clear_multimodal_env();
             env::set_var(AGIME_KEY, val);
             assert!(
-                ModelConfig::parse_supports_multimodal().unwrap(),
+                ModelConfig::parse_supports_multimodal("test-model").unwrap(),
                 "value {val:?} should enable multimodal"
             );
         }
@@ -419,7 +458,7 @@ mod tests {
     fn supports_multimodal_rejects_garbage_values() {
         clear_multimodal_env();
         env::set_var(AGIME_KEY, "maybe");
-        let err = ModelConfig::parse_supports_multimodal().unwrap_err();
+        let err = ModelConfig::parse_supports_multimodal("test-model").unwrap_err();
         assert!(matches!(err, ConfigError::InvalidValue(name, _, _) if name == "MULTIMODAL"));
         clear_multimodal_env();
     }
@@ -429,7 +468,7 @@ mod tests {
     fn supports_multimodal_honors_goose_legacy_prefix() {
         clear_multimodal_env();
         env::set_var(GOOSE_KEY, "false");
-        assert!(!ModelConfig::parse_supports_multimodal().unwrap());
+        assert!(!ModelConfig::parse_supports_multimodal("test-model").unwrap());
         let config = ModelConfig::new("test-model").unwrap();
         assert!(!config.supports_multimodal);
         clear_multimodal_env();
@@ -474,5 +513,63 @@ mod tests {
         assert!(ModelConfig::interpret_multimodal_value(&serde_json::json!("maybe")).is_err());
         assert!(ModelConfig::interpret_multimodal_value(&serde_json::json!(["a"])).is_err());
         assert!(ModelConfig::interpret_multimodal_value(&serde_json::json!({"k": "v"})).is_err());
+    }
+
+    // Per-model resolution: the desktop persists an `AGIME_MODEL_MULTIMODAL`
+    // object keyed by model name. These exercise the pure resolver directly so
+    // they are deterministic and don't depend on the global config file.
+
+    #[test]
+    fn per_model_entry_hit_true() {
+        let entry = serde_json::json!(true);
+        assert!(ModelConfig::resolve_supports_multimodal(Some(&entry), None).unwrap());
+    }
+
+    #[test]
+    fn per_model_entry_hit_false_overrides_global_true() {
+        let entry = serde_json::json!(false);
+        let global = serde_json::json!(true);
+        // Per-model entry wins over the global value.
+        assert!(!ModelConfig::resolve_supports_multimodal(Some(&entry), Some(&global)).unwrap());
+    }
+
+    #[test]
+    fn per_model_absent_falls_back_to_global_false() {
+        let global = serde_json::json!(false);
+        assert!(!ModelConfig::resolve_supports_multimodal(None, Some(&global)).unwrap());
+    }
+
+    #[test]
+    fn per_model_absent_no_global_defaults_true() {
+        assert!(ModelConfig::resolve_supports_multimodal(None, None).unwrap());
+    }
+
+    #[test]
+    fn per_model_malformed_entry_falls_back_to_default() {
+        // A garbage per-model entry must not break model construction.
+        let entry = serde_json::json!("maybe");
+        assert!(ModelConfig::resolve_supports_multimodal(Some(&entry), None).unwrap());
+    }
+
+    #[test]
+    fn per_model_malformed_entry_falls_back_to_global() {
+        let entry = serde_json::json!(["nonsense"]);
+        let global = serde_json::json!(false);
+        assert!(!ModelConfig::resolve_supports_multimodal(Some(&entry), Some(&global)).unwrap());
+    }
+
+    #[test]
+    fn legacy_global_only_still_honored() {
+        // Backward compat: old users with only the global value set.
+        let global = serde_json::json!("off");
+        assert!(!ModelConfig::resolve_supports_multimodal(None, Some(&global)).unwrap());
+    }
+
+    #[test]
+    fn malformed_global_still_errors_when_no_per_model() {
+        // A garbage *global* value still errors, matching prior behavior.
+        let global = serde_json::json!("maybe");
+        let err = ModelConfig::resolve_supports_multimodal(None, Some(&global)).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidValue(name, _, _) if name == "MULTIMODAL"));
     }
 }

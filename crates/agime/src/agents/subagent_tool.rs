@@ -243,16 +243,31 @@ pub fn create_subagent_tool(sub_recipes: &[SubRecipe]) -> Tool {
 }
 
 fn build_tool_description(sub_recipes: &[SubRecipe]) -> String {
-    let mut desc = String::from(
-        "Delegate a task to a subagent that runs independently with its own context.\n\n\
-         Modes:\n\
-         1. Ad-hoc: Provide `instructions` for a custom task\n\
-         2. Predefined: Provide `subrecipe` name to run a predefined task\n\
-         3. Augmented: Provide both `subrecipe` and `instructions` to add context\n\n\
-         The subagent has access to the same tools as you by default. \
-         Use `extensions` to limit which extensions the subagent can use.\n\n\
-         This tool launches one bounded helper subagent. For true multi-target parallel execution, use `swarm` instead.",
-    );
+    // Only advertise the `subrecipe` modes when predefined subrecipes actually
+    // exist. In a plain desktop chat the sub_recipes map is empty, and offering
+    // a "Predefined: provide `subrecipe` name" mode invites the model to invent
+    // a subrecipe name (e.g. a task title), which then fails with
+    // "Unknown subrecipe ... Available:" and strands the turn.
+    let mut desc = if sub_recipes.is_empty() {
+        String::from(
+            "Delegate a task to a subagent that runs independently with its own context.\n\n\
+             Provide `instructions` describing the task for the subagent to perform.\n\n\
+             The subagent has access to the same tools as you by default. \
+             Use `extensions` to limit which extensions the subagent can use.\n\n\
+             This tool launches one bounded helper subagent. For true multi-target parallel execution, use `swarm` instead.",
+        )
+    } else {
+        String::from(
+            "Delegate a task to a subagent that runs independently with its own context.\n\n\
+             Modes:\n\
+             1. Ad-hoc: Provide `instructions` for a custom task\n\
+             2. Predefined: Provide `subrecipe` name to run a predefined task\n\
+             3. Augmented: Provide both `subrecipe` and `instructions` to add context\n\n\
+             The subagent has access to the same tools as you by default. \
+             Use `extensions` to limit which extensions the subagent can use.\n\n\
+             This tool launches one bounded helper subagent. For true multi-target parallel execution, use `swarm` instead.",
+        )
+    };
 
     if !sub_recipes.is_empty() {
         desc.push_str("\n\nAvailable subrecipes:");
@@ -479,7 +494,27 @@ fn build_recipe(
     sub_recipes: &HashMap<String, SubRecipe>,
 ) -> Result<Recipe> {
     let mut recipe = if let Some(subrecipe_name) = &params.subrecipe {
-        build_subrecipe(subrecipe_name, params, sub_recipes)?
+        match build_subrecipe(subrecipe_name, params, sub_recipes) {
+            Ok(recipe) => recipe,
+            // The model named a subrecipe that doesn't exist (common in plain
+            // chat where no subrecipes are registered). If it also supplied
+            // instructions, gracefully fall back to an ad-hoc task instead of
+            // failing the whole delegation. Otherwise surface an actionable
+            // error telling it to use `instructions`.
+            Err(e) if params.instructions.is_some() => {
+                tracing::warn!(
+                    "subagent: unknown subrecipe '{}', falling back to ad-hoc instructions: {}",
+                    subrecipe_name,
+                    e
+                );
+                build_adhoc_recipe(params)?
+            }
+            Err(e) => {
+                return Err(anyhow!(
+                    "{e}. To run an ad-hoc task instead, omit `subrecipe` and provide `instructions`."
+                ));
+            }
+        }
     } else {
         build_adhoc_recipe(params)?
     };
@@ -689,12 +724,13 @@ mod tests {
     fn test_create_tool_without_subrecipes() {
         let tool = create_subagent_tool(&[]);
         assert_eq!(tool.name, "subagent");
-        assert!(tool.description.as_ref().unwrap().contains("Ad-hoc"));
-        assert!(!tool
-            .description
-            .as_ref()
-            .unwrap()
-            .contains("Available subrecipes"));
+        let desc = tool.description.as_ref().unwrap();
+        // With no subrecipes, the description must NOT advertise the
+        // `subrecipe` modes, or the model invents a subrecipe name and fails.
+        assert!(desc.contains("instructions"));
+        assert!(!desc.contains("Available subrecipes"));
+        assert!(!desc.contains("Predefined"));
+        assert!(!desc.contains("subrecipe` name"));
     }
 
     #[test]
@@ -714,6 +750,48 @@ mod tests {
             .unwrap()
             .contains("Available subrecipes"));
         assert!(tool.description.as_ref().unwrap().contains("test_recipe"));
+        // When subrecipes exist, the Predefined mode SHOULD be advertised.
+        assert!(tool.description.as_ref().unwrap().contains("Predefined"));
+    }
+
+    #[test]
+    fn build_recipe_falls_back_to_adhoc_when_subrecipe_unknown_but_instructions_given() {
+        // Model named a nonexistent subrecipe (e.g. a task title) but also gave
+        // instructions — we should gracefully run it as an ad-hoc task instead
+        // of failing the whole delegation.
+        let params = SubagentParams {
+            instructions: Some("Analyze the project structure and report findings.".to_string()),
+            subrecipe: Some("analyze_project_structure".to_string()),
+            parameters: None,
+            extensions: None,
+            settings: None,
+            summary: true,
+        };
+        let empty: HashMap<String, SubRecipe> = HashMap::new();
+
+        let recipe = build_recipe(&params, &empty).expect("should fall back to ad-hoc");
+        let instructions = recipe.instructions.unwrap_or_default();
+        assert!(instructions.contains("Analyze the project structure"));
+    }
+
+    #[test]
+    fn build_recipe_errors_actionably_when_subrecipe_unknown_and_no_instructions() {
+        // Nonexistent subrecipe AND no instructions: surface an actionable error
+        // that points the model at the ad-hoc path.
+        let params = SubagentParams {
+            instructions: None,
+            subrecipe: Some("analyze_project_structure".to_string()),
+            parameters: None,
+            extensions: None,
+            settings: None,
+            summary: true,
+        };
+        let empty: HashMap<String, SubRecipe> = HashMap::new();
+
+        let err = build_recipe(&params, &empty).expect_err("should error without instructions");
+        let msg = err.to_string();
+        assert!(msg.contains("Unknown subrecipe"));
+        assert!(msg.contains("instructions"));
     }
 
     #[test]

@@ -109,6 +109,23 @@ pub async fn run() -> Result<()> {
         if std::env::var(NATIVE_SWARM_TOOL_ENV).is_err() {
             std::env::set_var(NATIVE_SWARM_TOOL_ENV, "1");
         }
+
+        // Desktop-only: when the model announces a next action on the
+        // Conversation surface but doesn't call the tool, nudge it to continue
+        // instead of ending the turn. team-server is a separate binary without
+        // this feature, so its chat behavior is unchanged.
+        const PREAMBLE_NUDGE_ENV: &str = "AGIME_PREAMBLE_NUDGE";
+        if std::env::var(PREAMBLE_NUDGE_ENV).is_err() {
+            std::env::set_var(PREAMBLE_NUDGE_ENV, "1");
+        }
+
+        // Desktop-only: raise the per-reply recovery-compaction cap so long
+        // turns aren't aborted after only 3 context overflows. team-server
+        // keeps the core default (3).
+        const MAX_COMPACTION_ATTEMPTS_ENV: &str = "AGIME_MAX_COMPACTION_ATTEMPTS";
+        if std::env::var(MAX_COMPACTION_ATTEMPTS_ENV).is_err() {
+            std::env::set_var(MAX_COMPACTION_ATTEMPTS_ENV, "6");
+        }
     }
 
     let settings = configuration::Settings::new()?;

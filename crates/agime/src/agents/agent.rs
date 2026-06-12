@@ -67,7 +67,21 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, instrument, warn};
 
 const DEFAULT_MAX_TURNS: u32 = 1000;
-const MAX_COMPACTION_ATTEMPTS: u32 = 3; // Maximum compaction attempts per reply to prevent infinite loops
+const MAX_COMPACTION_ATTEMPTS: u32 = 3; // Default max compaction attempts per reply to prevent infinite loops.
+const MAX_COMPACTION_ATTEMPTS_ENV: &str = "AGIME_MAX_COMPACTION_ATTEMPTS";
+
+/// Per-reply recovery-compaction cap. Defaults to [`MAX_COMPACTION_ATTEMPTS`];
+/// the desktop process raises it via `AGIME_MAX_COMPACTION_ATTEMPTS` so long
+/// turns are not aborted after only 3 context overflows. team-server never sets
+/// the env, so it keeps the default. A missing, unparseable, or `< 1` value
+/// falls back to the default — a typo can't silently disable the safeguard.
+fn resolved_max_compaction_attempts() -> u32 {
+    std::env::var(MAX_COMPACTION_ATTEMPTS_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|&value| value >= 1)
+        .unwrap_or(MAX_COMPACTION_ATTEMPTS)
+}
 pub const MANUAL_COMPACT_TRIGGERS: &[&str] =
     &["Please compact this conversation", "/compact", "/summarize"];
 
@@ -1888,7 +1902,8 @@ impl Agent {
             let _ = reply_span.enter();
             let mut turns_taken = harness_state.turns_taken;
             let mut runtime_compaction_count = harness_state.runtime_compaction_count; // Tracks runtime recovery compaction attempts within this reply.
-            let max_compaction_attempts = MAX_COMPACTION_ATTEMPTS;
+            let mut consecutive_preamble_nudges = harness_state.consecutive_preamble_nudges; // Loop guard for desktop preamble-continuation nudges.
+            let max_compaction_attempts = resolved_max_compaction_attempts();
             let max_turns = harness_context.max_turns;
             let mut current_mode = harness_state.mode;
             let mut delegation_state = harness_state.delegation.clone();
@@ -2220,6 +2235,7 @@ impl Agent {
                     harness_context.task_runtime.as_ref(),
                     &harness_context.coordinator_signals,
                     &harness_context.transition_trace,
+                    &mut consecutive_preamble_nudges,
                 )
                 .await?;
                 let latest_transition_trace: crate::agents::harness::TransitionTrace =
@@ -2592,6 +2608,36 @@ mod tests {
     use crate::providers::base::{ProviderMetadata, ProviderUsage, Usage};
     use crate::providers::errors::ProviderError;
     use crate::recipe::Response;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn resolved_max_compaction_attempts_defaults_when_unset() {
+        std::env::remove_var(MAX_COMPACTION_ATTEMPTS_ENV);
+        assert_eq!(resolved_max_compaction_attempts(), MAX_COMPACTION_ATTEMPTS);
+    }
+
+    #[test]
+    #[serial]
+    fn resolved_max_compaction_attempts_honors_valid_override() {
+        std::env::set_var(MAX_COMPACTION_ATTEMPTS_ENV, "6");
+        assert_eq!(resolved_max_compaction_attempts(), 6);
+        std::env::remove_var(MAX_COMPACTION_ATTEMPTS_ENV);
+    }
+
+    #[test]
+    #[serial]
+    fn resolved_max_compaction_attempts_falls_back_on_garbage() {
+        for value in ["0", "abc", "-1", ""] {
+            std::env::set_var(MAX_COMPACTION_ATTEMPTS_ENV, value);
+            assert_eq!(
+                resolved_max_compaction_attempts(),
+                MAX_COMPACTION_ATTEMPTS,
+                "value {value:?} should fall back to default"
+            );
+        }
+        std::env::remove_var(MAX_COMPACTION_ATTEMPTS_ENV);
+    }
 
     #[tokio::test]
     #[ignore = "baseline failure on main; tracked for cleanup"]

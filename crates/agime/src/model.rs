@@ -529,9 +529,7 @@ mod tests {
         let entry = serde_json::json!(false);
         let global = serde_json::json!(true);
         // Per-model entry wins over the global value.
-        assert!(
-            !ModelConfig::resolve_supports_multimodal(Some(&entry), Some(&global)).unwrap()
-        );
+        assert!(!ModelConfig::resolve_supports_multimodal(Some(&entry), Some(&global)).unwrap());
     }
 
     #[test]
@@ -556,9 +554,7 @@ mod tests {
     fn per_model_malformed_entry_falls_back_to_global() {
         let entry = serde_json::json!(["nonsense"]);
         let global = serde_json::json!(false);
-        assert!(
-            !ModelConfig::resolve_supports_multimodal(Some(&entry), Some(&global)).unwrap()
-        );
+        assert!(!ModelConfig::resolve_supports_multimodal(Some(&entry), Some(&global)).unwrap());
     }
 
     #[test]

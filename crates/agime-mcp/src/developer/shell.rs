@@ -147,6 +147,21 @@ pub fn configure_shell_command(
             .env(
                 "EDITOR",
                 "cmd /c echo Interactive editor not available. 1>&2 && exit 1",
+            )
+            // Make credential/auth prompts fail fast instead of hanging. Without
+            // these, `git push` to an authenticated remote can invoke Git
+            // Credential Manager, which pops its own GUI window — a separate
+            // process that ignores `stdin=null`/`GIT_TERMINAL_PROMPT` — and the
+            // shell child never exits until the 1-hour hard timeout (the desktop
+            // "push completed but spinner keeps turning" symptom). Forcing
+            // non-interactive auth returns a readable error immediately. Cached
+            // valid credentials still work; only the would-prompt path changes.
+            .env("GCM_INTERACTIVE", "Never")
+            .env("GIT_ASKPASS", "cmd /c exit 1")
+            .env("SSH_ASKPASS_REQUIRE", "never")
+            .env(
+                "GIT_SSH_COMMAND",
+                "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
             );
     }
 

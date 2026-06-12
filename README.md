@@ -497,6 +497,13 @@ Harness V4 的改进方向，正是针对这些问题：
 7. 管理层通过审计、日志和事件记录持续优化协作方式。  
 
 ---
+## AGIME web ui
+<img width="1920" height="1009" alt="e580041a-2969-4478-9cfe-e2ef464a5764" src="https://github.com/user-attachments/assets/0a2e4de2-39d7-4763-9747-0e667efb1741" />
+<img width="1920" height="1009" alt="1c4f7f23-2020-441b-ba95-acbc50ba5ed9" src="https://github.com/user-attachments/assets/5017444e-4930-469e-b5b5-df23cd0c607c" />
+<img width="1920" height="1009" alt="c05f7708-3a6f-4f9b-9ea9-135a7d56e17c" src="https://github.com/user-attachments/assets/e8299fbd-c7ca-4bda-8e50-6f59ec2a0046" />
+<img width="1920" height="1009" alt="f3356dfa-e584-413f-b445-a42ab35ff6f8" src="https://github.com/user-attachments/assets/c10468ed-a33e-4b25-8d06-9c348a0e1510" />
+
+
 ## AGIME team server web ui
 演示地址：http://117.72.54.28:9999/
 <img width="1912" height="954" alt="08c1fe24-7806-47dc-974c-495d6615d6cc" src="https://github.com/user-attachments/assets/a26ff387-9aec-44ed-b54f-a9101237b0ac" />

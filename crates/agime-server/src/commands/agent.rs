@@ -126,6 +126,17 @@ pub async fn run() -> Result<()> {
         if std::env::var(MAX_COMPACTION_ATTEMPTS_ENV).is_err() {
             std::env::set_var(MAX_COMPACTION_ATTEMPTS_ENV, "6");
         }
+
+        // Desktop-only: append a delegation guidance overlay to the system
+        // prompt so the model actually uses its subagent/swarm tools in
+        // conversation. The core prompt doesn't teach delegation and even
+        // discourages claiming it, so without this overlay a desktop model
+        // almost never delegates. Set `0` to revert. team-server is a separate
+        // binary and never runs this code path.
+        const DELEGATION_GUIDANCE_ENV: &str = "AGIME_DESKTOP_DELEGATION_GUIDANCE";
+        if std::env::var(DELEGATION_GUIDANCE_ENV).is_err() {
+            std::env::set_var(DELEGATION_GUIDANCE_ENV, "1");
+        }
     }
 
     let settings = configuration::Settings::new()?;

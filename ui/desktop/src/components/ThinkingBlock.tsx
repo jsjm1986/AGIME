@@ -70,6 +70,76 @@ export function getCachedThinkingContent(messageId: string): string | undefined 
   return thinkingContentCache.get(messageId);
 }
 
+// A "token fragment" line: non-empty after trimming, contains no internal
+// whitespace, and is short. Streamed thinking deltas are raw model tokens
+// (e.g. "The", " issue", "sc", "_api", ".py"), so each looks like this.
+const MAX_FRAGMENT_LEN = 12;
+
+function isTokenFragment(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.length > 0 && trimmed.length <= MAX_FRAGMENT_LEN && !/\s/.test(trimmed);
+}
+
+/**
+ * Some streaming/round-trip paths emit thinking content with a newline between
+ * almost every model token, so a one-sentence thought renders as a tall vertical
+ * stack (e.g. "71 chars · 153 lines"). Detect that pathological shape and rejoin
+ * the fragments. Normal prose (lines with spaces, reasonable length) can't meet
+ * all three thresholds, so it passes through untouched.
+ */
+function isTokenFragmented(content: string): boolean {
+  const nonEmpty = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (nonEmpty.length < 12) {
+    return false;
+  }
+  const fragments = nonEmpty.filter(isTokenFragment);
+  const fragmentRatio = fragments.length / nonEmpty.length;
+  const avgLen = nonEmpty.reduce((sum, l) => sum + l.trim().length, 0) / nonEmpty.length;
+  return fragmentRatio >= 0.7 && avgLen <= 8;
+}
+
+/**
+ * Reconstruct fragmented thinking: concatenate consecutive token-fragment lines
+ * using their ORIGINAL text (BPE tokens carry their own leading space, so
+ * "The" + " issue" + " is" → "The issue is"), discarding the artifact blank
+ * lines that separate tokens. Any non-fragment line (long text that survived
+ * intact) flushes the current run and is kept on its own line.
+ *
+ * Paragraph structure inside fragmented thinking is not recoverable — in the
+ * common case every token is separated by a blank line, indistinguishable from
+ * a real break — so we favor readable flowing text over guessing structure.
+ */
+export function normalizeThinkingContent(content: string): string {
+  if (!isTokenFragmented(content)) {
+    return content;
+  }
+
+  const out: string[] = [];
+  let buffer = '';
+
+  const flush = () => {
+    if (buffer.length > 0) {
+      out.push(buffer);
+      buffer = '';
+    }
+  };
+
+  for (const line of content.split(/\r?\n/)) {
+    if (line.trim().length === 0) {
+      continue; // artifact separator between tokens
+    }
+    if (isTokenFragment(line)) {
+      buffer += line;
+    } else {
+      flush();
+      out.push(line);
+    }
+  }
+  flush();
+
+  return out.join('\n');
+}
+
 /**
  * Estimate token count for thinking content
  * Uses approximate ratios:
@@ -146,6 +216,10 @@ export default function ThinkingBlock({
     return messageId || generateContentHash(content);
   }, [messageId, content]);
 
+  // Repair pathologically fragmented thinking (one token per line) before
+  // display, stats, and copy so all three reflect the readable form.
+  const displayContent = useMemo(() => normalizeThinkingContent(content), [content]);
+
   // Auto-expand when streaming for real-time visibility
   const [isExpanded, setIsExpanded] = useState(isStartExpanded || isStreaming);
   const [isCopied, setIsCopied] = useState(false);
@@ -205,7 +279,7 @@ export default function ThinkingBlock({
   }, [cacheKey, isStreaming, duration]);
 
   // Calculate content statistics
-  const stats = useMemo(() => calculateStats(content), [content]);
+  const stats = useMemo(() => calculateStats(displayContent), [displayContent]);
 
   // Toggle expand/collapse
   const handleToggle = useCallback(() => {
@@ -221,11 +295,11 @@ export default function ThinkingBlock({
       try {
         // Try modern Clipboard API first
         if (navigator.clipboard && window.isSecureContext) {
-          await navigator.clipboard.writeText(content);
+          await navigator.clipboard.writeText(displayContent);
         } else {
           // Fallback for non-secure contexts (rare in Electron, but safe)
           const textArea = document.createElement('textarea');
-          textArea.value = content;
+          textArea.value = displayContent;
           textArea.style.position = 'fixed';
           textArea.style.left = '-999999px';
           textArea.style.top = '-999999px';
@@ -241,10 +315,10 @@ export default function ThinkingBlock({
         console.error('Failed to copy thinking content:', err);
       }
     },
-    [content]
+    [displayContent]
   );
 
-  if (!content.trim()) {
+  if (!displayContent.trim()) {
     return null;
   }
 
@@ -340,7 +414,7 @@ export default function ThinkingBlock({
         {/* Markdown content */}
         <div className="px-3 py-3 border-t border-blue-500/10">
           <MarkdownContent
-            content={content}
+            content={displayContent}
             className="prose-sm max-w-none text-text-muted leading-relaxed"
           />
         </div>

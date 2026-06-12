@@ -7,6 +7,7 @@ export default interface Model {
   lastUsed?: string;
   alias?: string; // optional model display name
   subtext?: string; // goes below model name if not the provider
+  supportsMultimodal?: boolean; // whether this model accepts image (multimodal) input
 }
 
 export function createModelStruct(

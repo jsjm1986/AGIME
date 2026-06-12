@@ -68,11 +68,8 @@
       "warning": "This will clear your selected model and provider settings. If no defaults are available, you'll be taken to the welcome screen to set them up again."
     },
     "multimodal": {
-      "title": "Image (multimodal) input",
-      "description": "When on, screenshots and images are sent to the model. Turn off for models without vision support — images become text placeholders so requests don't fail.",
-      "appliedToSession": "Applied to the current chat right away.",
-      "savedForNextChat": "Saved. Takes effect on your next chat.",
-      "updateFailed": "Failed to update multimodal setting"
+      "perModelLabel": "This model supports image (multimodal) input",
+      "perModelHelp": "Turn on for vision-capable models. When off, images and screenshots are replaced with text placeholders so requests don't fail, and the screenshot tool is disabled for this model."
     }
   },
   "provider": {

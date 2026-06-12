@@ -8,36 +8,15 @@ import {
   UNKNOWN_PROVIDER_TITLE,
   useModelAndProvider,
 } from '../../ModelAndProviderContext';
-import { useChatContext } from '../../../contexts/ChatContext';
-import { updateAgentProvider } from '../../../api';
 import { toastError, toastSuccess } from '../../../toasts';
 
 import { SettingsCard } from '../common';
-import { Switch } from '../../ui/switch';
 import ResetProviderSection from '../reset_provider/ResetProviderSection';
-import { Cpu, Image, RefreshCw, Zap } from 'lucide-react';
+import { Cpu, RefreshCw, Zap } from 'lucide-react';
 import { QuickSetupModal, type QuickSetupConfig } from '../quick-setup';
 
 interface ModelsSectionProps {
   setView: (view: View) => void;
-}
-
-function interpretMultimodalValue(value: unknown): boolean {
-  // Unset (config.yaml has no AGIME_MULTIMODAL key) means enabled by default,
-  // mirroring the Rust default in ModelConfig::parse_supports_multimodal.
-  if (value === null || value === undefined) {
-    return true;
-  }
-  if (typeof value === 'boolean') {
-    return value;
-  }
-  if (typeof value === 'number') {
-    return value !== 0;
-  }
-  if (typeof value === 'string') {
-    return !['0', 'false', 'no', 'off'].includes(value.trim().toLowerCase());
-  }
-  return true;
 }
 
 export default function ModelsSection({ setView }: ModelsSectionProps) {
@@ -46,10 +25,7 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
   const [displayModelName, setDisplayModelName] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [showQuickSetup, setShowQuickSetup] = useState<boolean>(false);
-  const [multimodalEnabled, setMultimodalEnabled] = useState<boolean>(true);
-  const [multimodalSaving, setMultimodalSaving] = useState<boolean>(false);
-  const { read, upsert, getProviders } = useConfig();
-  const chatContext = useChatContext();
+  const { read, getProviders } = useConfig();
   const {
     getCurrentModelDisplayName,
     getCurrentProviderDisplayName,
@@ -65,14 +41,6 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
       // Get display name (alias if available, otherwise model name)
       const modelDisplayName = await getCurrentModelDisplayName();
       setDisplayModelName(modelDisplayName);
-
-      try {
-        const multimodalValue = await read('AGIME_MULTIMODAL', false);
-        setMultimodalEnabled(interpretMultimodalValue(multimodalValue));
-      } catch (error) {
-        console.error('Error reading AGIME_MULTIMODAL:', error);
-        setMultimodalEnabled(true);
-      }
 
       // Get provider display name (subtext if available from predefined models, otherwise provider metadata)
       const providerDisplayName = await getCurrentProviderDisplayName();
@@ -133,51 +101,6 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
     });
   }, [loadModelData, refreshCurrentModelAndProvider, t]);
 
-  const handleMultimodalToggle = useCallback(
-    async (checked: boolean) => {
-      const previous = multimodalEnabled;
-      setMultimodalEnabled(checked);
-      setMultimodalSaving(true);
-      try {
-        await upsert('AGIME_MULTIMODAL', checked, false);
-
-        // Rebuild the live session's provider so the change takes effect on the
-        // current chat without restarting. Falls back to next-chat if there is
-        // no active session yet (e.g. opened from a fresh Hub).
-        const sessionId = chatContext?.activeSessionId;
-        if (sessionId && currentProvider && currentModel) {
-          await updateAgentProvider({
-            body: {
-              session_id: sessionId,
-              provider: currentProvider,
-              model: currentModel,
-            },
-            throwOnError: true,
-          });
-          toastSuccess({
-            title: t('models.multimodal.title'),
-            msg: t('models.multimodal.appliedToSession'),
-          });
-        } else {
-          toastSuccess({
-            title: t('models.multimodal.title'),
-            msg: t('models.multimodal.savedForNextChat'),
-          });
-        }
-      } catch (error) {
-        setMultimodalEnabled(previous);
-        toastError({
-          title: t('models.multimodal.title'),
-          msg: t('models.multimodal.updateFailed'),
-          traceback: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        setMultimodalSaving(false);
-      }
-    },
-    [multimodalEnabled, upsert, chatContext, currentProvider, currentModel, t]
-  );
-
   return (
     <div className="space-y-6">
       {/* Quick Setup Card */}
@@ -202,25 +125,6 @@ export default function ModelsSection({ setView }: ModelsSectionProps) {
         description={isLoading ? '' : (provider ?? undefined)}
       >
         <ModelSettingsButtons setView={setView} />
-      </SettingsCard>
-
-      {/* Multimodal (image) input toggle */}
-      <SettingsCard
-        icon={<Image className="h-5 w-5" />}
-        title={t('models.multimodal.title')}
-        description={t('models.multimodal.description')}
-        headerClassName="pb-4"
-        contentClassName="hidden"
-        headerAction={
-          <Switch
-            checked={multimodalEnabled}
-            disabled={multimodalSaving}
-            onCheckedChange={handleMultimodalToggle}
-            aria-label={t('models.multimodal.title')}
-          />
-        }
-      >
-        {null}
       </SettingsCard>
 
       {/* Reset Provider Card */}

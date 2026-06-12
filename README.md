@@ -516,6 +516,7 @@ Harness V4 的改进方向，正是针对这些问题：
 <img width="1912" height="954" alt="82a33302-678a-4754-93de-f88f686f18c9" src="https://github.com/user-attachments/assets/c32db167-dd22-4649-be21-a1639bd56391" />
 <img width="1912" height="954" alt="f7afb5fe-8140-4663-98dc-195ea04ebd32" src="https://github.com/user-attachments/assets/9a637351-1034-4749-94f6-f79816a34c58" />
 <img width="1912" height="954" alt="47026b66-5118-481d-9132-5a7d65791c0e" src="https://github.com/user-attachments/assets/951764be-6d52-44cb-a96b-a2533917a301" />
+<img width="1912" height="954" alt="image" src="https://github.com/user-attachments/assets/96b996b7-35f9-495a-bca5-8363189c075f" />
 <img width="597" height="860" alt="1a8254e7-3556-44d9-b1fc-9c0fc4395d8f" src="https://github.com/user-attachments/assets/9be1fcc7-42d6-4a8b-99ef-973bf5acf32c" />
 <img width="596" height="701" alt="503a0637-6cda-4d0d-b900-0945484bc401" src="https://github.com/user-attachments/assets/84980e63-46da-45d3-8dac-5d00e5404696" />
 <img width="598" height="852" alt="2f50f367-4739-4889-910b-b396bdcb6111" src="https://github.com/user-attachments/assets/987ddbf5-ae80-4022-8b6d-29f33bd789fe" />

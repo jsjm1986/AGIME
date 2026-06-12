@@ -21,7 +21,7 @@ use crate::providers::formats::gcpvertexai::{
 use crate::providers::formats::gcpvertexai::GcpLocation::Iowa;
 use crate::providers::gcpauth::GcpAuth;
 use crate::providers::retry::RetryConfig;
-use crate::providers::utils::RequestLog;
+use crate::providers::utils::{map_http_error_to_provider_error, RequestLog};
 use rmcp::model::Tool;
 
 /// Base URL for GCP Vertex AI documentation
@@ -383,9 +383,10 @@ impl GcpVertexAIProvider {
                             tracing::debug!(
                                 "Request failed. Status: {status}, Response: {response_json:?}"
                             );
-                            Err(ProviderError::RequestFailed(format!(
-                                "Request failed with status {status}: {response_json:?}"
-                            )))
+                            Err(map_http_error_to_provider_error(
+                                status,
+                                Some(response_json),
+                            ))
                         }
                     };
                 }

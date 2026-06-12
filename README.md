@@ -523,6 +523,9 @@ Harness V4 的改进方向，正是针对这些问题：
 <img width="596" height="701" alt="503a0637-6cda-4d0d-b900-0945484bc401" src="https://github.com/user-attachments/assets/84980e63-46da-45d3-8dac-5d00e5404696" />
 <img width="598" height="852" alt="2f50f367-4739-4889-910b-b396bdcb6111" src="https://github.com/user-attachments/assets/987ddbf5-ae80-4022-8b6d-29f33bd789fe" />
 <img width="596" height="438" alt="52254480-1829-4d70-a1e8-421e17579470" src="https://github.com/user-attachments/assets/5b31d54f-99e4-4d7b-aa2b-6ca08603e580" />
+<img width="1268" height="2675" alt="5f8d073720ad144d552334d2df84eff0" src="https://github.com/user-attachments/assets/fd55db04-9a99-4dde-b511-77e5b4de4d0d" />
+<img width="1264" height="2675" alt="ee6c18f56d36b62b52326d1fdcb47ba3" src="https://github.com/user-attachments/assets/dcae7444-7c31-4a68-b159-91378f75f310" />
+
 
 
 ---

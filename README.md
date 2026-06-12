@@ -497,7 +497,18 @@ Harness V4 的改进方向，正是针对这些问题：
 7. 管理层通过审计、日志和事件记录持续优化协作方式。  
 
 ---
+## AGIME team server web ui
+<img width="1912" height="954" alt="08c1fe24-7806-47dc-974c-495d6615d6cc" src="https://github.com/user-attachments/assets/a26ff387-9aec-44ed-b54f-a9101237b0ac" />
+<img width="1912" height="954" alt="1430797a-a1c6-4b6a-8272-32f1e8f6da08" src="https://github.com/user-attachments/assets/eeb392bb-9341-4152-a7fe-30264ba15949" />
+<img width="1912" height="954" alt="8ce2e20b-27b7-4109-8bcb-497725d467ad" src="https://github.com/user-attachments/assets/aa3d4725-2681-43e7-97be-718be52d5f7f" />
+<img width="1912" height="954" alt="ebbb71a2-9727-4017-a283-bf7f89060810" src="https://github.com/user-attachments/assets/1773e632-178e-473e-8b80-750c2a83ccdd" />
+<img width="1912" height="954" alt="a324c42d-f4e4-4363-a240-28f980094f32" src="https://github.com/user-attachments/assets/0542a852-0ee1-4869-a46e-61a3941ce258" />
+<img width="1912" height="954" alt="2c8451c3-219d-4385-886f-804ae7face6e" src="https://github.com/user-attachments/assets/4221eb83-09f8-4d4b-806b-a7b334e9f6da" />
+<img width="1912" height="954" alt="d257e248-64b9-412f-a88f-3d7cc472a6b1" src="https://github.com/user-attachments/assets/bdc18211-4011-4b4a-b526-201740a2028c" />
+<img width="1912" height="954" alt="82a33302-678a-4754-93de-f88f686f18c9" src="https://github.com/user-attachments/assets/c32db167-dd22-4649-be21-a1639bd56391" />
 
+
+---
 ## 🏗️ 技术架构
 
 ### 本地优先

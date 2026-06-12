@@ -498,6 +498,7 @@ Harness V4 的改进方向，正是针对这些问题：
 
 ---
 ## AGIME team server web ui
+###演示地址：http://117.72.54.28:9999/
 <img width="1912" height="954" alt="08c1fe24-7806-47dc-974c-495d6615d6cc" src="https://github.com/user-attachments/assets/a26ff387-9aec-44ed-b54f-a9101237b0ac" />
 <img width="1912" height="954" alt="1430797a-a1c6-4b6a-8272-32f1e8f6da08" src="https://github.com/user-attachments/assets/eeb392bb-9341-4152-a7fe-30264ba15949" />
 <img width="1912" height="954" alt="8ce2e20b-27b7-4109-8bcb-497725d467ad" src="https://github.com/user-attachments/assets/aa3d4725-2681-43e7-97be-718be52d5f7f" />
@@ -506,6 +507,12 @@ Harness V4 的改进方向，正是针对这些问题：
 <img width="1912" height="954" alt="2c8451c3-219d-4385-886f-804ae7face6e" src="https://github.com/user-attachments/assets/4221eb83-09f8-4d4b-806b-a7b334e9f6da" />
 <img width="1912" height="954" alt="d257e248-64b9-412f-a88f-3d7cc472a6b1" src="https://github.com/user-attachments/assets/bdc18211-4011-4b4a-b526-201740a2028c" />
 <img width="1912" height="954" alt="82a33302-678a-4754-93de-f88f686f18c9" src="https://github.com/user-attachments/assets/c32db167-dd22-4649-be21-a1639bd56391" />
+<img width="1912" height="954" alt="f7afb5fe-8140-4663-98dc-195ea04ebd32" src="https://github.com/user-attachments/assets/9a637351-1034-4749-94f6-f79816a34c58" />
+<img width="1912" height="954" alt="47026b66-5118-481d-9132-5a7d65791c0e" src="https://github.com/user-attachments/assets/951764be-6d52-44cb-a96b-a2533917a301" />
+<img width="597" height="860" alt="1a8254e7-3556-44d9-b1fc-9c0fc4395d8f" src="https://github.com/user-attachments/assets/9be1fcc7-42d6-4a8b-99ef-973bf5acf32c" />
+<img width="596" height="701" alt="503a0637-6cda-4d0d-b900-0945484bc401" src="https://github.com/user-attachments/assets/84980e63-46da-45d3-8dac-5d00e5404696" />
+<img width="598" height="852" alt="2f50f367-4739-4889-910b-b396bdcb6111" src="https://github.com/user-attachments/assets/987ddbf5-ae80-4022-8b6d-29f33bd789fe" />
+<img width="596" height="438" alt="52254480-1829-4d70-a1e8-421e17579470" src="https://github.com/user-attachments/assets/5b31d54f-99e4-4d7b-aa2b-6ca08603e580" />
 
 
 ---

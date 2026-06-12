@@ -43,7 +43,7 @@
 use std::sync::Arc;
 
 use agime::agents::harness::host::{run_harness_host, HarnessHostDependencies, HarnessHostRequest};
-use agime::agents::harness::{CompletionSurfacePolicy, HarnessMode};
+use agime::agents::harness::{native_swarm_tool_enabled, CompletionSurfacePolicy, HarnessMode};
 use agime::agents::{Agent, AgentEvent, HarnessControlEnvelope, SessionConfig};
 use agime::conversation::message::Message;
 use agime::session::{SessionManager, SessionType};
@@ -101,6 +101,73 @@ fn resolve_budget(raw: Option<&str>, default: u32) -> Option<u32> {
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .unwrap_or(default);
     (value > 0).then_some(value)
+}
+
+/// Env flag (set-if-unset to `1` for desktop in `commands/agent.rs`) that
+/// controls whether the delegation guidance overlay is appended. `0` reverts
+/// to the pre-overlay behavior without a rebuild.
+const DELEGATION_GUIDANCE_ENV: &str = "AGIME_DESKTOP_DELEGATION_GUIDANCE";
+
+/// Desktop-only delegation guidance, appended to the system prompt via
+/// `system_prompt_extras`. The core `system.md` does not teach delegation and
+/// explicitly tells the model not to claim a delegation power unless a runtime
+/// overlay makes it available — so without this overlay a desktop model in
+/// Conversation mode almost never spawns a subagent/swarm even though the
+/// tools are registered and (in non-Chat permission modes) executable.
+///
+/// Wording is deliberately conditional with an explicit negative to avoid
+/// over-delegation on trivial turns, and uses "when available" so it stays
+/// truthful when the subagent tool is stripped (non-Auto mode / gemini models).
+const DELEGATION_GUIDANCE_SUBAGENT: &str = "When a `subagent` tool is available and the task is genuinely multi-step or decomposable into independent pieces, prefer delegating those pieces to subagents rather than doing everything inline. 当任务确属多步或可拆分为独立子任务时，优先用 subagent 委派，而不是全部内联处理。";
+
+const DELEGATION_GUIDANCE_SWARM: &str = "When a `swarm` tool is available and the work splits into two or more independent targets that can run in parallel, use it to fan out one worker per target. 当工作可拆成两个及以上可并行的独立目标时，用 swarm 为每个目标分派一个 worker。";
+
+const DELEGATION_GUIDANCE_RESTRAINT: &str = "For simple, single-step, or quick-answer requests, do NOT delegate — handle them directly. 对简单、单步或可直接回答的请求，不要委派，直接处理。";
+
+/// Build the delegation guidance `system_prompt_extras` for the desktop turn.
+/// Pure (env flag passed in) so it can be unit-tested without touching process
+/// environment. Returns at most one combined instruction string.
+///
+/// - `guidance_on == false` (env `=0`) → no overlay.
+/// - both budgets `None` (delegation fully disabled) → no overlay; never
+///   advertise a capability that won't run.
+/// - otherwise: include the subagent sentence when `parallelism_budget` is set,
+///   the swarm sentence when `swarm_budget` is set AND native swarm is enabled,
+///   always followed by the restraint sentence.
+fn delegation_guidance_extras(
+    guidance_on: bool,
+    parallelism_budget: Option<u32>,
+    swarm_budget: Option<u32>,
+    swarm_tool_enabled: bool,
+) -> Vec<String> {
+    if !guidance_on {
+        return Vec::new();
+    }
+    let subagent_on = parallelism_budget.is_some();
+    let swarm_on = swarm_budget.is_some() && swarm_tool_enabled;
+    if !subagent_on && !swarm_on {
+        return Vec::new();
+    }
+
+    let mut parts: Vec<&str> = Vec::new();
+    if subagent_on {
+        parts.push(DELEGATION_GUIDANCE_SUBAGENT);
+    }
+    if swarm_on {
+        parts.push(DELEGATION_GUIDANCE_SWARM);
+    }
+    parts.push(DELEGATION_GUIDANCE_RESTRAINT);
+    vec![parts.join("\n\n")]
+}
+
+/// Read the delegation-guidance flag from the environment. Defaults to enabled
+/// (mirrors the desktop set-if-unset in `commands/agent.rs`); only an explicit
+/// falsey value disables it.
+fn delegation_guidance_enabled() -> bool {
+    match std::env::var(DELEGATION_GUIDANCE_ENV) {
+        Ok(value) => !matches!(value.trim(), "0" | "false" | "off" | "no"),
+        Err(_) => true,
+    }
 }
 
 pub struct DesktopHarnessHost {
@@ -184,6 +251,18 @@ impl DesktopHarnessHost {
             persistence,
         };
 
+        let parallelism_budget = budget_from_env(
+            "AGIME_DESKTOP_PARALLELISM_BUDGET",
+            DEFAULT_PARALLELISM_BUDGET,
+        );
+        let swarm_budget = budget_from_env("AGIME_DESKTOP_SWARM_BUDGET", DEFAULT_SWARM_BUDGET);
+        let system_prompt_extras = delegation_guidance_extras(
+            delegation_guidance_enabled(),
+            parallelism_budget,
+            swarm_budget,
+            native_swarm_tool_enabled(),
+        );
+
         let request = HarnessHostRequest {
             logical_session_id: logical_session_id.clone(),
             working_dir,
@@ -203,17 +282,14 @@ impl DesktopHarnessHost {
             result_contract,
             server_local_tool_names,
             required_tool_prefixes,
-            parallelism_budget: budget_from_env(
-                "AGIME_DESKTOP_PARALLELISM_BUDGET",
-                DEFAULT_PARALLELISM_BUDGET,
-            ),
-            swarm_budget: budget_from_env("AGIME_DESKTOP_SWARM_BUDGET", DEFAULT_SWARM_BUDGET),
+            parallelism_budget,
+            swarm_budget,
             validation_mode: false,
             worker_extensions: Vec::new(),
             initial_context_runtime_state: None,
             task_runtime: Some(task_runtime),
             system_prompt_override: None,
-            system_prompt_extras: Vec::new(),
+            system_prompt_extras,
             extensions: Vec::new(),
             final_output: None,
             cancel_token,
@@ -260,7 +336,11 @@ fn collect_text(message: &Message) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_budget, DEFAULT_PARALLELISM_BUDGET, DEFAULT_SWARM_BUDGET};
+    use super::{
+        delegation_guidance_extras, resolve_budget, DEFAULT_PARALLELISM_BUDGET,
+        DEFAULT_SWARM_BUDGET, DELEGATION_GUIDANCE_RESTRAINT, DELEGATION_GUIDANCE_SUBAGENT,
+        DELEGATION_GUIDANCE_SWARM,
+    };
 
     #[test]
     fn resolve_budget_uses_default_when_unset() {
@@ -287,5 +367,44 @@ mod tests {
             Some(2)
         );
         assert_eq!(resolve_budget(Some(""), DEFAULT_SWARM_BUDGET), Some(2));
+    }
+
+    #[test]
+    fn guidance_present_with_budgets_and_flag_on() {
+        let extras = delegation_guidance_extras(true, Some(2), Some(2), true);
+        assert_eq!(extras.len(), 1);
+        let text = &extras[0];
+        assert!(text.contains(DELEGATION_GUIDANCE_SUBAGENT));
+        assert!(text.contains(DELEGATION_GUIDANCE_SWARM));
+        assert!(text.contains(DELEGATION_GUIDANCE_RESTRAINT));
+    }
+
+    #[test]
+    fn guidance_empty_when_flag_off() {
+        assert!(delegation_guidance_extras(false, Some(2), Some(2), true).is_empty());
+    }
+
+    #[test]
+    fn guidance_subagent_only_when_swarm_disabled() {
+        // Swarm tool disabled (env off) → no swarm sentence even with a budget.
+        let extras = delegation_guidance_extras(true, Some(2), Some(2), false);
+        assert_eq!(extras.len(), 1);
+        let text = &extras[0];
+        assert!(text.contains(DELEGATION_GUIDANCE_SUBAGENT));
+        assert!(!text.contains(DELEGATION_GUIDANCE_SWARM));
+        assert!(text.contains(DELEGATION_GUIDANCE_RESTRAINT));
+    }
+
+    #[test]
+    fn guidance_subagent_only_when_swarm_budget_none() {
+        let extras = delegation_guidance_extras(true, Some(2), None, true);
+        assert_eq!(extras.len(), 1);
+        assert!(!extras[0].contains(DELEGATION_GUIDANCE_SWARM));
+    }
+
+    #[test]
+    fn guidance_empty_when_all_budgets_disabled() {
+        // Delegation fully off → advertise nothing.
+        assert!(delegation_guidance_extras(true, None, None, true).is_empty());
     }
 }

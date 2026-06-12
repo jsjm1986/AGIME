@@ -117,6 +117,7 @@ impl ModelConfig {
         let temperature = Self::parse_temperature()?;
         let toolshim = Self::parse_toolshim()?;
         let toolshim_model = Self::parse_toolshim_model()?;
+        let supports_multimodal = Self::parse_supports_multimodal(&model_name)?;
 
         Ok(Self {
             model_name,
@@ -128,7 +129,7 @@ impl ModelConfig {
             reasoning_effort: None,
             output_reserve_tokens: None,
             auto_compact_threshold: None,
-            supports_multimodal: Self::parse_supports_multimodal(&model_name)?,
+            supports_multimodal,
             prompt_caching_mode: PromptCachingMode::Auto,
             cache_edit_mode: CacheEditMode::Auto,
             toolshim,

@@ -9,7 +9,7 @@
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "2.9.1"
+    "version": "2.9.2"
   },
   "paths": {
     "/action-required/tool-confirmation": {

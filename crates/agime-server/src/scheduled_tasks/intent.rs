@@ -503,7 +503,7 @@ fn parse_schedule_from_text(
             if let Some(caps) = re.captures(text) {
                 if let Some(m) = caps.get(1) {
                     if let Ok(day) = m.as_str().parse::<u32>() {
-                        if day >= 1 && day <= 31 {
+                        if (1..=31).contains(&day) {
                             let (hour, minute) = extract_time(text).unwrap_or((9, 0));
                             let cron = format!("0 {} {} * *", hour, day);
                             return (

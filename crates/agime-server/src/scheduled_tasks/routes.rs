@@ -709,7 +709,8 @@ pub fn start_scheduler(service: Arc<ScheduledTaskService>, timezone: String) {
 mod tests {
     use super::*;
     use crate::scheduled_tasks::models::{
-        ScheduledTaskDeliveryPlanKind, ScheduledTaskPayloadKind, ScheduledTaskSourceScope,
+        ScheduledTaskExecutionContract, ScheduledTaskOutputMode, ScheduledTaskProfile,
+        ScheduledTaskPublishBehavior, ScheduledTaskSourceScope, ScheduledTaskStatus,
     };
 
     #[test]

@@ -3,9 +3,9 @@
 
 use crate::scheduled_tasks::models::{
     infer_delivery_plan, infer_execution_contract, infer_payload_kind, infer_session_binding,
-    infer_task_profile_from_prompt, ScheduledTaskDeliveryTier, ScheduledTaskParseResult,
-    ScheduledTaskScheduleConfig, ScheduledTaskScheduleMode, ScheduledTaskScheduleSpec,
-    ScheduledTaskScheduleSpecKind, ScheduledTaskSessionBinding,
+    infer_task_profile_from_prompt, ScheduledTaskDeliveryTier, ScheduledTaskKind,
+    ScheduledTaskParseResult, ScheduledTaskScheduleConfig, ScheduledTaskScheduleMode,
+    ScheduledTaskScheduleSpec, ScheduledTaskScheduleSpecKind,
 };
 use chrono::Utc;
 

@@ -83,7 +83,7 @@ impl From<ScheduledTaskScheduleSpecKind> for ScheduledTaskKind {
 // Time parsing
 // ---------------------------------------------------------------------------
 
-fn parse_hhmm(text: &str) -> Option<(u32, u32)> {
+fn _parse_hhmm(text: &str) -> Option<(u32, u32)> {
     let text = text.trim();
     for pattern in &["HH:MM", "H:MM", "HHMM", "HMM"] {
         let digit_count = pattern.chars().filter(|&c| c == 'H').count();

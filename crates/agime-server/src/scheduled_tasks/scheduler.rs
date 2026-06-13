@@ -52,7 +52,7 @@ pub fn compute_next_fire_at(task: &ScheduledTaskDoc, timezone: &str) -> Option<D
 // Self-evaluation
 // ---------------------------------------------------------------------------
 
-fn grade_from_score(score: i32) -> ScheduledTaskSelfEvaluationGrade {
+fn _grade_from_score(score: i32) -> ScheduledTaskSelfEvaluationGrade {
     match score {
         90..=100 => ScheduledTaskSelfEvaluationGrade::Excellent,
         75..=89 => ScheduledTaskSelfEvaluationGrade::Good,
@@ -115,7 +115,6 @@ fn classify_run_completion(
 
 const DEFAULT_LEASE_SECS: i64 = 120;
 const DEFAULT_TICK_INTERVAL_SECS: u64 = 5;
-const DEFAULT_GRACE_SECS: i64 = 5;
 const SELF_EVALUATION_THRESHOLD: i32 = 75;
 const MAX_IMPROVEMENT_LOOPS: i32 = 3;
 
@@ -361,7 +360,7 @@ async fn retry_with_feedback(
 pub async fn trigger_run_now(
     service: Arc<ScheduledTaskService>,
     task: ScheduledTaskDoc,
-    timezone: String,
+    _timezone: String,
 ) -> Result<ScheduledTaskRunDoc> {
     let task_id = task.task_id.clone();
     let run_id = Uuid::new_v4().to_string();

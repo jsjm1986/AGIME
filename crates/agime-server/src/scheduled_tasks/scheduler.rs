@@ -36,16 +36,17 @@ pub fn compute_next_fire_at(
                 Some(e) => e,
                 None => return None,
             };
-            let cron = match Cron::new(cron_expr) {
+            let tz: chrono_tz::Tz = match timezone.parse() {
+                Ok(tz) => tz,
+                Err(_) => return None,
+            };
+            let cron = match Cron::new(cron_expr).parse() {
                 Ok(c) => c,
                 Err(_) => return None,
             };
-            cron.get_next_run_time_from(
-                &now.to_rfc3339(),
-                croner::Timezone::TimezoneString(timezone.to_string()),
-            )
-            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-            .map(|dt| dt.with_timezone(&Utc))
+            let localized_now = now.with_timezone(&tz);
+            cron.find_next_occurrence(&localized_now, false)
+                .map(|next| next.with_timezone(&Utc))
         }
     }
 }

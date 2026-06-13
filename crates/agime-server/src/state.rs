@@ -167,6 +167,7 @@ impl AppState {
                 ))
             },
         }))
+    }
     pub async fn set_recipe_file_hash_map(&self, hash_map: HashMap<String, PathBuf>) {
         let mut map = self.recipe_file_hash_map.lock().await;
         *map = hash_map;

@@ -17,6 +17,9 @@ pub mod upload;
 pub mod utils;
 pub mod web_ui;
 
+#[cfg(feature = "desktop_harness_host")]
+pub use crate::scheduled_tasks::routes;
+
 #[cfg(feature = "team")]
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -49,7 +52,9 @@ pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Rout
         .merge(mcp_ui_proxy::routes(secret_key));
 
     #[cfg(feature = "desktop_harness_host")]
-    let router = router.merge(tasks::routes(state.clone()));
+    let router = router
+        .merge(tasks::routes(state.clone()))
+        .merge(routes::router(state.scheduled_task_service()));
 
     router
 }

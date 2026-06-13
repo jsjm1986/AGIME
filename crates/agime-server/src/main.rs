@@ -43,6 +43,8 @@ mod host_workspace_types;
 mod logging;
 mod openapi;
 mod routes;
+#[cfg(feature = "desktop_harness_host")]
+mod scheduled_tasks;
 mod state;
 #[cfg(feature = "team")]
 mod team;

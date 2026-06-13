@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { FileText, Home, Puzzle, History, MessageCirclePlus, Sparkles, Github, Globe, Users } from 'lucide-react';
+import { FileText, Home, Puzzle, History, MessageCirclePlus, Sparkles, Github, Globe, Users, Clock } from 'lucide-react';
 import { AgimeLogo } from '../icons/Agime';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -89,6 +89,13 @@ const menuItemsConfig: NavigationEntry[] = [
     labelKey: 'recipes',
     tooltipKey: 'tooltips.recipes',
     icon: FileText,
+  },
+  {
+    type: 'item',
+    path: '/scheduled-tasks',
+    labelKey: 'scheduledTasks',
+    tooltipKey: 'tooltips.scheduledTasks',
+    icon: Clock,
   },
   {
     type: 'item',

@@ -132,6 +132,7 @@ impl ScheduledTaskService {
     }
 
     /// Release a task's lease.
+    #[allow(dead_code)]
     pub fn release_task(&self, task_id: &str, _lease_owner: &str) -> Result<()> {
         let path = self.tasks_dir.join(format!("{task_id}.json"));
         if !path.exists() {
@@ -157,6 +158,7 @@ impl ScheduledTaskService {
     }
 
     /// Get a single run by ID.
+    #[allow(dead_code)]
     pub fn get_run(&self, run_id: &str) -> Result<Option<ScheduledTaskRunDoc>> {
         let path = self.runs_dir.join(format!("{run_id}.json"));
         if !path.exists() {
@@ -277,6 +279,7 @@ impl ScheduledTaskService {
 }
 
 /// Task result from LLM execution.
+#[allow(dead_code)]
 pub struct TaskRunResult {
     pub summary: Option<String>,
     pub error: Option<String>,

@@ -21,7 +21,7 @@ use crate::scheduled_tasks::models::{
     infer_task_profile_from_prompt, normalize_execution_contract, reconcile_task_contract,
     CreateScheduledTaskFromParseRequest, CreateScheduledTaskRequest,
     ParseScheduledTaskRequest, ScheduledTaskDeliveryTier, ScheduledTaskDetailResponse,
-    ScheduledTaskDoc, ScheduledTaskExecutionContract,
+    ScheduledTaskDoc, ScheduledTaskExecutionContract, ScheduledTaskProfile,
     ScheduledTaskRunResponse, ScheduledTaskScheduleConfig,
     ScheduledTaskScheduleMode, ScheduledTaskSessionBinding,
     ScheduledTaskStatus, ScheduledTaskSummaryResponse, UpdateScheduledTaskRequest,

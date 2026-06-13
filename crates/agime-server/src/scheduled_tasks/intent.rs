@@ -11,8 +11,8 @@ use crate::scheduled_tasks::models::{
     ScheduledTaskScheduleSpec, ScheduledTaskScheduleSpecKind, ScheduledTaskSessionBinding,
     ScheduledTaskSourcePolicy, ScheduledTaskSourceScope,
 };
-use chrono::{DateTime, Utc};
-use std::str::FromStr;
+use chrono::Utc;
+use croner::Cron;
 
 // ---------------------------------------------------------------------------
 // Public API

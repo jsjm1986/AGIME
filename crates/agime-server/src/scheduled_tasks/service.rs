@@ -7,11 +7,8 @@
 //! Uses atomic writes (temp file + rename) following the `host_task_store.rs` pattern.
 
 use crate::scheduled_tasks::models::{
-    ScheduledTaskDeliveryTier, ScheduledTaskDoc, ScheduledTaskExecutionContract, ScheduledTaskKind,
-    ScheduledTaskListView, ScheduledTaskPayloadKind, ScheduledTaskProfile,
-    ScheduledTaskPublishBehavior, ScheduledTaskRunDoc, ScheduledTaskRunOutcomeReason,
-    ScheduledTaskRunStatus, ScheduledTaskScheduleConfig, ScheduledTaskScheduleSpec,
-    ScheduledTaskScheduleSpecKind, ScheduledTaskSessionBinding, ScheduledTaskStatus,
+    ScheduledTaskDoc, ScheduledTaskRunDoc, ScheduledTaskRunOutcomeReason,
+    ScheduledTaskRunStatus, ScheduledTaskStatus,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};

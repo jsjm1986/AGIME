@@ -8,33 +8,28 @@ use anyhow::Result;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::Utc;
 use croner::Cron;
-use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::scheduled_tasks::intent::parse_scheduled_task_text;
 use crate::scheduled_tasks::models::{
-    human_schedule_for_task, infer_delivery_plan, infer_payload_kind, infer_session_binding,
+    infer_delivery_plan, infer_payload_kind, infer_session_binding,
     infer_task_profile_from_prompt, normalize_execution_contract, reconcile_task_contract,
-    schedule_config_for_task, CreateScheduledTaskFromParseRequest, CreateScheduledTaskRequest,
+    CreateScheduledTaskFromParseRequest, CreateScheduledTaskRequest,
     ParseScheduledTaskRequest, ScheduledTaskDeliveryTier, ScheduledTaskDetailResponse,
-    ScheduledTaskDoc, ScheduledTaskExecutionContract, ScheduledTaskListView,
-    ScheduledTaskOutputMode, ScheduledTaskProfile, ScheduledTaskPublishBehavior,
-    ScheduledTaskRunDoc, ScheduledTaskRunResponse, ScheduledTaskScheduleConfig,
-    ScheduledTaskScheduleMode, ScheduledTaskSessionBinding, ScheduledTaskSourceScope,
+    ScheduledTaskDoc, ScheduledTaskExecutionContract,
+    ScheduledTaskRunResponse, ScheduledTaskScheduleConfig,
+    ScheduledTaskScheduleMode, ScheduledTaskSessionBinding,
     ScheduledTaskStatus, ScheduledTaskSummaryResponse, UpdateScheduledTaskRequest,
 };
 use crate::scheduled_tasks::scheduler::{
     compute_next_fire_at, spawn_scheduler_loop, trigger_run_now,
 };
 use crate::scheduled_tasks::service::ScheduledTaskService;
-
-#[cfg(feature = "desktop_harness_host")]
-use crate::state::AppState;
 
 type ScheduledTaskState = Arc<ScheduledTaskService>;
 

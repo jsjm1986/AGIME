@@ -4,18 +4,17 @@
 //! and spawns async task runs. Self-evaluation loop retries on score < 75.
 
 use crate::scheduled_tasks::models::{
-    infer_task_profile_from_prompt, ScheduledTaskDoc, ScheduledTaskExecutionContract,
-    ScheduledTaskKind, ScheduledTaskPayloadKind, ScheduledTaskProfile, ScheduledTaskRunDoc,
-    ScheduledTaskRunOutcomeReason, ScheduledTaskRunStatus, ScheduledTaskScheduleSpecKind,
+    ScheduledTaskDoc, ScheduledTaskExecutionContract,
+    ScheduledTaskKind, ScheduledTaskRunDoc,
+    ScheduledTaskRunOutcomeReason, ScheduledTaskRunStatus,
     ScheduledTaskSelfEvaluation, ScheduledTaskSelfEvaluationGrade,
 };
-use crate::scheduled_tasks::service::{ScheduledTaskService, TaskRunResult};
+use crate::scheduled_tasks::service::ScheduledTaskService;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use croner::Cron;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------

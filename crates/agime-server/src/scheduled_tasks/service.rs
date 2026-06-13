@@ -7,8 +7,8 @@
 //! Uses atomic writes (temp file + rename) following the `host_task_store.rs` pattern.
 
 use crate::scheduled_tasks::models::{
-    ScheduledTaskDoc, ScheduledTaskRunDoc, ScheduledTaskRunOutcomeReason,
-    ScheduledTaskRunStatus, ScheduledTaskStatus,
+    ScheduledTaskDoc, ScheduledTaskRunDoc, ScheduledTaskRunOutcomeReason, ScheduledTaskRunStatus,
+    ScheduledTaskStatus,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};

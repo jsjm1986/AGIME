@@ -4,10 +4,9 @@
 //! and spawns async task runs. Self-evaluation loop retries on score < 75.
 
 use crate::scheduled_tasks::models::{
-    ScheduledTaskDoc, ScheduledTaskExecutionContract,
-    ScheduledTaskKind, ScheduledTaskRunDoc,
-    ScheduledTaskRunOutcomeReason, ScheduledTaskRunStatus,
-    ScheduledTaskSelfEvaluation, ScheduledTaskSelfEvaluationGrade,
+    ScheduledTaskDoc, ScheduledTaskExecutionContract, ScheduledTaskKind, ScheduledTaskRunDoc,
+    ScheduledTaskRunOutcomeReason, ScheduledTaskRunStatus, ScheduledTaskSelfEvaluation,
+    ScheduledTaskSelfEvaluationGrade,
 };
 use crate::scheduled_tasks::service::ScheduledTaskService;
 use anyhow::Result;

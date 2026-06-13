@@ -49,7 +49,11 @@ pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Rout
         .merge(mcp_ui_proxy::routes(secret_key));
 
     #[cfg(feature = "desktop_harness_host")]
-    let router = router.merge(tasks::routes(state.clone()));
+    let router = router
+        .merge(tasks::routes(state.clone()))
+        .merge(crate::scheduled_tasks::routes::router(
+            state.scheduled_task_service.clone(),
+        ));
 
     router
 }

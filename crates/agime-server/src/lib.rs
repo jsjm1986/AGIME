@@ -43,6 +43,9 @@ pub mod openapi;
 pub mod routes;
 pub mod state;
 
+#[cfg(feature = "desktop_harness_host")]
+pub mod scheduled_tasks;
+
 #[cfg(feature = "team")]
 pub mod team;
 

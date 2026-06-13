@@ -121,6 +121,12 @@ pub struct AppState {
     /// `/tasks` routes. Lazy-init on first access via [`AppState::task_manager`].
     #[cfg(feature = "desktop_harness_host")]
     pub(crate) task_manager: Arc<Mutex<Option<Arc<crate::host_task_manager::DesktopTaskManager>>>>,
+    /// JSON-file backed service for **scheduled tasks** (natural language
+    /// parsed cron / one-shot jobs). Lives under
+    /// `data_dir()/scheduled_tasks/` and `data_dir()/scheduled_task_runs/`.
+    /// Initialised once at startup by [`AppState::scheduled_task_service`].
+    #[cfg(feature = "desktop_harness_host")]
+    pub(crate) scheduled_task_service: Arc<crate::scheduled_tasks::service::ScheduledTaskService>,
 }
 
 impl AppState {
@@ -150,8 +156,17 @@ impl AppState {
             task_runtime: Arc::new(Mutex::new(None)),
             #[cfg(feature = "desktop_harness_host")]
             task_manager: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "desktop_harness_host")]
+            scheduled_task_service: {
+                let data_dir = agime::config::paths::Paths::data_dir();
+                let tasks_dir = data_dir.join("scheduled_tasks");
+                let runs_dir = data_dir.join("scheduled_task_runs");
+                Arc::new(crate::scheduled_tasks::service::ScheduledTaskService::new(
+                    tasks_dir,
+                    runs_dir,
+                ))
+            },
         }))
-    }
     pub async fn set_recipe_file_hash_map(&self, hash_map: HashMap<String, PathBuf>) {
         let mut map = self.recipe_file_hash_map.lock().await;
         *map = hash_map;

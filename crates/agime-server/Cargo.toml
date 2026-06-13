@@ -54,6 +54,7 @@ mime_guess = { version = "2", optional = true }
 async-trait = "0.1.89"
 croner = "2.1"
 chrono-tz = "0.10"
+regex = "1.11"
 
 [target.'cfg(windows)'.dependencies]
 winreg = { version = "0.55.0" }

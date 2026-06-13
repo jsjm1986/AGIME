@@ -28,7 +28,9 @@ use crate::scheduled_tasks::models::{
     ScheduledTaskScheduleMode, ScheduledTaskSessionBinding, ScheduledTaskSourceScope,
     ScheduledTaskStatus, ScheduledTaskSummaryResponse, UpdateScheduledTaskRequest,
 };
-use crate::scheduled_tasks::scheduler::{compute_next_fire_at, spawn_scheduler_loop, trigger_run_now};
+use crate::scheduled_tasks::scheduler::{
+    compute_next_fire_at, spawn_scheduler_loop, trigger_run_now,
+};
 use crate::scheduled_tasks::service::ScheduledTaskService;
 
 #[cfg(feature = "desktop_harness_host")]
@@ -40,6 +42,20 @@ fn bad_request(message: impl ToString) -> (StatusCode, Json<serde_json::Value>) 
     (
         StatusCode::BAD_REQUEST,
         Json(serde_json::json!({ "error": message.to_string() })),
+    )
+}
+
+fn internal_error(_: anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": "internal error" })),
+    )
+}
+
+fn not_found() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "not found" })),
     )
 }
 
@@ -58,9 +74,7 @@ fn clamp_positive(value: Option<u32>, fallback: u32) -> u32 {
     value.filter(|item| *item > 0).unwrap_or(fallback)
 }
 
-fn normalize_daily_time(
-    value: &str,
-) -> Result<(u32, u32), (StatusCode, Json<serde_json::Value>)> {
+fn normalize_daily_time(value: &str) -> Result<(u32, u32), (StatusCode, Json<serde_json::Value>)> {
     let trimmed = value.trim();
     let parts = trimmed.split(':').collect::<Vec<_>>();
     if parts.len() != 2 {
@@ -184,12 +198,11 @@ fn validate_schedule_candidate(
             let cron_expr = trim_to_none(task.cron_expression.clone())
                 .ok_or_else(|| bad_request("cron_expression is required for cron tasks"))?;
             // Validate cron expression
-            if Cron::new(&cron_expr).is_err() {
+            if Cron::new(&cron_expr).parse().is_err() {
                 return Err(bad_request("invalid cron expression"));
             }
-            let next_fire_at =
-                compute_next_fire_at(task, &task.timezone)
-                    .ok_or_else(|| bad_request("could not compute next fire time"))?;
+            let next_fire_at = compute_next_fire_at(task, &task.timezone)
+                .ok_or_else(|| bad_request("could not compute next fire time"))?;
             Ok(Some(next_fire_at))
         }
     }
@@ -256,10 +269,8 @@ fn build_task_doc(
 
 async fn list_tasks(
     State(service): State<ScheduledTaskState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let tasks = service
-        .list_tasks()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let tasks = service.list_tasks().map_err(internal_error)?;
     let summaries: Vec<ScheduledTaskSummaryResponse> = tasks
         .iter()
         .map(ScheduledTaskSummaryResponse::from_doc)
@@ -275,8 +286,8 @@ async fn parse_task(
         trim_to_none(request.timezone.clone()).unwrap_or_else(|| "Asia/Shanghai".to_string());
     let preview = parse_scheduled_task_text(
         request.text.trim(),
-        Some(&timezone),
-        trim_to_none(request.agent_id.clone()),
+        Some(timezone.as_str()),
+        trim_to_none(request.agent_id.clone()).as_deref(),
     );
     Ok(Json(serde_json::json!({ "preview": preview })))
 }
@@ -288,7 +299,8 @@ async fn create_task(
     if request.title.trim().is_empty() || request.prompt.trim().is_empty() {
         return Err(bad_request("title and prompt are required"));
     }
-    let timezone = trim_to_none(request.timezone.clone()).unwrap_or_else(|| "Asia/Shanghai".to_string());
+    let timezone =
+        trim_to_none(request.timezone.clone()).unwrap_or_else(|| "Asia/Shanghai".to_string());
     let task_profile = request
         .task_profile
         .unwrap_or_else(|| infer_task_profile_from_prompt(request.prompt.trim()));
@@ -306,7 +318,7 @@ async fn create_task(
         None,
     )?;
     let mut candidate = build_task_doc(
-        request,
+        &request,
         timezone,
         task_profile,
         execution_contract,
@@ -316,14 +328,12 @@ async fn create_task(
     );
     let next_fire_at = validate_schedule_candidate(&candidate)?;
     candidate.next_fire_at = next_fire_at;
-    let task = service
-        .create_task(candidate)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "failed to persist task" })),
-            )
-        })?;
+    let task = service.create_task(candidate).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "failed to persist task" })),
+        )
+    })?;
     let response = ScheduledTaskDetailResponse {
         summary: ScheduledTaskSummaryResponse::from_doc(&task),
         prompt: task.prompt.clone(),
@@ -412,14 +422,12 @@ async fn create_task_from_parse(
 async fn get_task(
     State(service): State<ScheduledTaskState>,
     Path(task_id): Path<String>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let task = service
         .get_task(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let runs = service
-        .list_runs(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal_error)?
+        .ok_or_else(not_found)?;
+    let runs = service.list_runs(&task_id).map_err(internal_error)?;
     let run_responses: Vec<ScheduledTaskRunResponse> = runs
         .iter()
         .map(ScheduledTaskRunResponse::from_doc)
@@ -439,8 +447,8 @@ async fn update_task(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let mut existing = service
         .get_task(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(internal_error)?
+        .ok_or_else(not_found)?;
     if let Some(title) = trim_to_none(request.title.clone()) {
         existing.title = title;
     }
@@ -489,22 +497,24 @@ async fn update_task(
             .task_profile
             .unwrap_or_else(|| infer_task_profile_from_prompt(existing.prompt.trim()));
         existing.task_profile = task_profile;
+        let execution_contract = if let Some(ref ec) = request.execution_contract {
+            ec.clone()
+        } else {
+            existing.execution_contract.clone()
+        };
         let execution_contract = normalize_execution_contract(
             &existing.task_id,
             existing.prompt.trim(),
             task_profile,
-            request
-                .execution_contract
-                .clone()
-                .unwrap_or_else(|| existing.execution_contract.clone()),
+            Some(execution_contract),
         );
         existing.execution_contract = execution_contract;
         let payload_kind = request
             .payload_kind
             .unwrap_or_else(|| infer_payload_kind(task_profile, &existing.execution_contract));
-        let session_binding = request
-            .session_binding
-            .unwrap_or_else(|| infer_session_binding(existing.prompt.trim(), existing.delivery_tier));
+        let session_binding = request.session_binding.unwrap_or_else(|| {
+            infer_session_binding(existing.prompt.trim(), existing.delivery_tier)
+        });
         let delivery_plan = request
             .delivery_plan
             .unwrap_or_else(|| infer_delivery_plan(&existing.execution_contract));
@@ -517,10 +527,8 @@ async fn update_task(
     existing.updated_at = Utc::now();
     service
         .update_task(&task_id, &existing)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let runs = service
-        .list_runs(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal_error)?;
+    let runs = service.list_runs(&task_id).map_err(internal_error)?;
     let response = ScheduledTaskDetailResponse {
         summary: ScheduledTaskSummaryResponse::from_doc(&existing),
         prompt: existing.prompt.clone(),
@@ -538,15 +546,15 @@ async fn publish_task(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let mut task = service
         .get_task(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(internal_error)?
+        .ok_or_else(not_found)?;
     let next_fire_at = validate_schedule_candidate(&task)?;
     task.status = ScheduledTaskStatus::Active;
     task.next_fire_at = next_fire_at;
     task.updated_at = Utc::now();
     service
         .update_task(&task_id, &task)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal_error)?;
     let response = ScheduledTaskDetailResponse {
         summary: ScheduledTaskSummaryResponse::from_doc(&task),
         prompt: task.prompt.clone(),
@@ -558,18 +566,18 @@ async fn publish_task(
 async fn pause_task(
     State(service): State<ScheduledTaskState>,
     Path(task_id): Path<String>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let mut task = service
         .get_task(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(internal_error)?
+        .ok_or_else(not_found)?;
     task.status = ScheduledTaskStatus::Paused;
     task.lease_owner = None;
     task.lease_expires_at = None;
     task.updated_at = Utc::now();
     service
         .update_task(&task_id, &task)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal_error)?;
     let response = ScheduledTaskDetailResponse {
         summary: ScheduledTaskSummaryResponse::from_doc(&task),
         prompt: task.prompt.clone(),
@@ -584,8 +592,8 @@ async fn resume_task(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let task = service
         .get_task(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(internal_error)?
+        .ok_or_else(not_found)?;
     let next_fire_at = match task.task_kind {
         crate::scheduled_tasks::models::ScheduledTaskKind::OneShot => {
             let fire_at = task.one_shot_at.ok_or_else(|| {
@@ -618,7 +626,7 @@ async fn resume_task(
     task.updated_at = Utc::now();
     service
         .update_task(&task_id, &task)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal_error)?;
     let response = ScheduledTaskDetailResponse {
         summary: ScheduledTaskSummaryResponse::from_doc(&task),
         prompt: task.prompt.clone(),
@@ -633,8 +641,8 @@ async fn run_task_now(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let task = service
         .get_task(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(internal_error)?
+        .ok_or_else(not_found)?;
     let run = trigger_run_now(service.clone(), task, "Asia/Shanghai".to_string())
         .await
         .map_err(|error| {
@@ -651,28 +659,24 @@ async fn run_task_now(
 async fn delete_task(
     State(service): State<ScheduledTaskState>,
     Path(task_id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let _ = service
         .get_task(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    service
-        .delete_task(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal_error)?
+        .ok_or_else(not_found)?;
+    service.delete_task(&task_id).map_err(internal_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_task_runs(
     State(service): State<ScheduledTaskState>,
     Path(task_id): Path<String>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let _ = service
         .get_task(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let runs = service
-        .list_runs(&task_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal_error)?
+        .ok_or_else(not_found)?;
+    let runs = service.list_runs(&task_id).map_err(internal_error)?;
     let responses: Vec<ScheduledTaskRunResponse> = runs
         .iter()
         .map(ScheduledTaskRunResponse::from_doc)
@@ -721,13 +725,14 @@ mod tests {
             std::env::temp_dir().join("test-scheduled-task-runs"),
         ));
         // The parse endpoint should handle empty text gracefully
-        let result = tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(parse_task(State(service), Json(ParseScheduledTaskRequest {
+        let result = tokio::runtime::Runtime::new().unwrap().block_on(parse_task(
+            State(service),
+            Json(ParseScheduledTaskRequest {
                 text: "每天早上9点生成报告".to_string(),
                 timezone: Some("Asia/Shanghai".to_string()),
                 agent_id: None,
-            })));
+            }),
+        ));
         assert!(result.is_ok());
     }
 
@@ -774,7 +779,10 @@ mod tests {
             None,
         );
         assert_eq!(task.title, "Test Task");
-        assert_eq!(task.task_kind, crate::scheduled_tasks::models::ScheduledTaskKind::Cron);
+        assert_eq!(
+            task.task_kind,
+            crate::scheduled_tasks::models::ScheduledTaskKind::Cron
+        );
         assert_eq!(task.status, ScheduledTaskStatus::Draft);
     }
 }

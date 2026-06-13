@@ -7,12 +7,11 @@
 //! Uses atomic writes (temp file + rename) following the `host_task_store.rs` pattern.
 
 use crate::scheduled_tasks::models::{
-    ScheduledTaskDeliveryTier, ScheduledTaskDoc, ScheduledTaskExecutionContract,
-    ScheduledTaskKind, ScheduledTaskListView, ScheduledTaskPayloadKind,
-    ScheduledTaskProfile, ScheduledTaskPublishBehavior, ScheduledTaskRunDoc,
-    ScheduledTaskRunOutcomeReason, ScheduledTaskRunStatus, ScheduledTaskScheduleConfig,
-    ScheduledTaskScheduleSpecKind, ScheduledTaskScheduleSpec, ScheduledTaskSessionBinding,
-    ScheduledTaskStatus,
+    ScheduledTaskDeliveryTier, ScheduledTaskDoc, ScheduledTaskExecutionContract, ScheduledTaskKind,
+    ScheduledTaskListView, ScheduledTaskPayloadKind, ScheduledTaskProfile,
+    ScheduledTaskPublishBehavior, ScheduledTaskRunDoc, ScheduledTaskRunOutcomeReason,
+    ScheduledTaskRunStatus, ScheduledTaskScheduleConfig, ScheduledTaskScheduleSpec,
+    ScheduledTaskScheduleSpecKind, ScheduledTaskSessionBinding, ScheduledTaskStatus,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -27,8 +26,16 @@ pub struct ScheduledTaskService {
 }
 
 impl ScheduledTaskService {
+    /// Construct a service rooted at the given directories.
+    /// Directories are created lazily on first access; a failure to create them
+    /// results in an empty/inoperative store so startup never hard-fails.
     pub fn new(tasks_dir: PathBuf, runs_dir: PathBuf) -> Self {
-        Self { tasks_dir, runs_dir }
+        let _ = std::fs::create_dir_all(&tasks_dir);
+        let _ = std::fs::create_dir_all(&runs_dir);
+        Self {
+            tasks_dir,
+            runs_dir,
+        }
     }
 
     /// List tasks with optional ownership filter.
@@ -47,10 +54,7 @@ impl ScheduledTaskService {
             match self.read_task(&path) {
                 Ok(task) => tasks.push(task),
                 Err(e) => {
-                    eprintln!(
-                        "WARN: failed to read scheduled task {:?}: {}",
-                        path, e
-                    );
+                    eprintln!("WARN: failed to read scheduled task {:?}: {}", path, e);
                 }
             }
         }
@@ -92,14 +96,17 @@ impl ScheduledTaskService {
     pub fn delete_task(&self, task_id: &str) -> Result<()> {
         let path = self.tasks_dir.join(format!("{task_id}.json"));
         if path.exists() {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("delete scheduled task {task_id}"))?;
+            std::fs::remove_file(&path).context(format!("delete scheduled task {task_id}"))?;
         }
         Ok(())
     }
 
     /// Claim tasks that are due for execution (lease-based concurrency).
-    pub fn claim_due_tasks(&self, lease_owner: &str, lease_secs: i64) -> Result<Vec<ScheduledTaskDoc>> {
+    pub fn claim_due_tasks(
+        &self,
+        lease_owner: &str,
+        lease_secs: i64,
+    ) -> Result<Vec<ScheduledTaskDoc>> {
         let all = self.list_tasks()?;
         let now = Utc::now();
         let deadline = now + chrono::Duration::seconds(lease_secs);
@@ -109,27 +116,17 @@ impl ScheduledTaskService {
             if task.status != ScheduledTaskStatus::Active {
                 continue;
             }
-            if task
-                .next_fire_at
-                .map(|t| t > now)
-                .unwrap_or(true)
-            {
+            if task.next_fire_at.map(|t| t > now).unwrap_or(true) {
                 continue;
             }
-            let expired = task
-                .lease_expires_at
-                .map(|e| e <= now)
-                .unwrap_or(true);
+            let expired = task.lease_expires_at.map(|e| e <= now).unwrap_or(true);
             if !expired {
                 continue;
             }
             task.lease_owner = Some(lease_owner.to_string());
             task.lease_expires_at = Some(deadline);
             if let Err(e) = self.write_task(&task.task_id, &task) {
-                eprintln!(
-                    "WARN: failed to claim task {}: {}",
-                    task.task_id, e
-                );
+                eprintln!("WARN: failed to claim task {}: {}", task.task_id, e);
                 continue;
             }
             claimed.push(task);
@@ -249,39 +246,35 @@ impl ScheduledTaskService {
     // ------------------------------------------------------------------------
 
     fn read_task(&self, path: &Path) -> Result<ScheduledTaskDoc> {
-        let json = std::fs::read_to_string(path)
-            .with_context(|| format!("read task file {}", path.display()))?;
-        serde_json::from_str(&json).with_context(|| format!("parse task file {}", path.display()))
+        let json =
+            std::fs::read_to_string(path).context(format!("read task file {}", path.display()))?;
+        serde_json::from_str(&json).context(format!("parse task file {}", path.display()))
     }
 
     fn write_task(&self, task_id: &str, doc: &ScheduledTaskDoc) -> Result<()> {
         let path = self.tasks_dir.join(format!("{task_id}.json"));
         let tmp = path.with_extension("json.tmp");
-        let json = serde_json::to_string_pretty(doc)
-            .with_context(|| format!("serialize task {}", task_id))?;
-        std::fs::write(&tmp, &json)
-            .with_context(|| format!("write temp task file {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path)
-            .with_context(|| format!("commit task file {}", path.display()))?;
+        let json =
+            serde_json::to_string_pretty(doc).context(format!("serialize task {}", task_id))?;
+        std::fs::write(&tmp, &json).context(format!("write temp task file {}", tmp.display()))?;
+        std::fs::rename(&tmp, &path).context(format!("commit task file {}", path.display()))?;
         Ok(())
     }
 
     fn read_run(&self, path: &Path) -> Result<ScheduledTaskRunDoc> {
-        let json = std::fs::read_to_string(path)
-            .with_context(|| format!("read run file {}", path.display()))?;
-        serde_json::from_str(&json).with_context(|| format!("parse run file {}", path.display()))
+        let json =
+            std::fs::read_to_string(path).context(format!("read run file {}", path.display()))?;
+        serde_json::from_str(&json).context(format!("parse run file {}", path.display()))
     }
 
     fn write_run(&self, run_id: &str, run: &ScheduledTaskRunDoc) -> Result<()> {
         std::fs::create_dir_all(&self.runs_dir)?;
         let path = self.runs_dir.join(format!("{run_id}.json"));
         let tmp = path.with_extension("json.tmp");
-        let json = serde_json::to_string_pretty(run)
-            .with_context(|| format!("serialize run {}", run_id))?;
-        std::fs::write(&tmp, &json)
-            .with_context(|| format!("write temp run file {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path)
-            .with_context(|| format!("commit run file {}", path.display()))?;
+        let json =
+            serde_json::to_string_pretty(run).context(format!("serialize run {}", run_id))?;
+        std::fs::write(&tmp, &json).context(format!("write temp run file {}", tmp.display()))?;
+        std::fs::rename(&tmp, &path).context(format!("commit run file {}", path.display()))?;
         Ok(())
     }
 }

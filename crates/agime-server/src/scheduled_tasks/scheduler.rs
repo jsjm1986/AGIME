@@ -5,10 +5,9 @@
 
 use crate::scheduled_tasks::models::{
     infer_task_profile_from_prompt, ScheduledTaskDoc, ScheduledTaskExecutionContract,
-    ScheduledTaskKind, ScheduledTaskPayloadKind, ScheduledTaskProfile,
-    ScheduledTaskRunDoc, ScheduledTaskRunOutcomeReason, ScheduledTaskRunStatus,
-    ScheduledTaskScheduleSpecKind, ScheduledTaskSelfEvaluation,
-    ScheduledTaskSelfEvaluationGrade,
+    ScheduledTaskKind, ScheduledTaskPayloadKind, ScheduledTaskProfile, ScheduledTaskRunDoc,
+    ScheduledTaskRunOutcomeReason, ScheduledTaskRunStatus, ScheduledTaskScheduleSpecKind,
+    ScheduledTaskSelfEvaluation, ScheduledTaskSelfEvaluationGrade,
 };
 use crate::scheduled_tasks::service::{ScheduledTaskService, TaskRunResult};
 use anyhow::Result;
@@ -24,10 +23,7 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// Compute the next fire time for a task given its schedule spec.
-pub fn compute_next_fire_at(
-    task: &ScheduledTaskDoc,
-    timezone: &str,
-) -> Option<DateTime<Utc>> {
+pub fn compute_next_fire_at(task: &ScheduledTaskDoc, timezone: &str) -> Option<DateTime<Utc>> {
     let now = Utc::now();
     match task.task_kind {
         ScheduledTaskKind::OneShot => task.one_shot_at.filter(|t| *t > now),
@@ -46,6 +42,7 @@ pub fn compute_next_fire_at(
             };
             let localized_now = now.with_timezone(&tz);
             cron.find_next_occurrence(&localized_now, false)
+                .ok()
                 .map(|next| next.with_timezone(&Utc))
         }
     }
@@ -84,9 +81,13 @@ fn classify_run_completion(
             {
                 ScheduledTaskRunOutcomeReason::Completed
             } else if self_eval
-                .map(|e| matches!(e.grade,
-                    ScheduledTaskSelfEvaluationGrade::Good
-                    | ScheduledTaskSelfEvaluationGrade::Acceptable))
+                .map(|e| {
+                    matches!(
+                        e.grade,
+                        ScheduledTaskSelfEvaluationGrade::Good
+                            | ScheduledTaskSelfEvaluationGrade::Acceptable
+                    )
+                })
                 .unwrap_or(false)
             {
                 ScheduledTaskRunOutcomeReason::Completed
@@ -229,13 +230,8 @@ pub async fn run_task(
         run_doc.improvement_loop_count = improvement_count;
 
         // Retry execution with feedback
-        let retry_result = retry_with_feedback(
-            &agent_id,
-            &prompt,
-            &exec_contract,
-            final_self_eval.as_ref(),
-        )
-        .await;
+        let retry_result =
+            retry_with_feedback(&agent_id, &prompt, &exec_contract, final_self_eval.as_ref()).await;
 
         match retry_result {
             Ok(retry_outcome) => {
@@ -400,7 +396,12 @@ pub async fn trigger_run_now(
             r.summary,
             r.self_evaluation,
         ),
-        Err(e) => (ScheduledTaskRunStatus::Failed, Some(e.to_string()), None, None),
+        Err(e) => (
+            ScheduledTaskRunStatus::Failed,
+            Some(e.to_string()),
+            None,
+            None,
+        ),
     };
 
     service.complete_run(

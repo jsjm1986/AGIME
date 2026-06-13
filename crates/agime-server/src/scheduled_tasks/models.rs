@@ -726,24 +726,51 @@ fn infer_source_policy_from_prompt(
 
     let normalized = prompt.trim().to_ascii_lowercase();
     let domestic_markers = [
-        "国内", "中国", "本土", "a股", "港股", "国务院", "工信部", "国家", "网信办",
-        "新华社", "人民日报", "腾讯", "阿里", "百度", "字节",
+        "国内",
+        "中国",
+        "本土",
+        "a股",
+        "港股",
+        "国务院",
+        "工信部",
+        "国家",
+        "网信办",
+        "新华社",
+        "人民日报",
+        "腾讯",
+        "阿里",
+        "百度",
+        "字节",
     ];
     if contains_any(prompt, &domestic_markers) || contains_any(&normalized, &domestic_markers) {
         return Some(ScheduledTaskSourcePolicy::DomesticPreferred);
     }
 
     let global_markers = [
-        "全球", "国际", "海外", "world", "global", "international",
-        "silicon valley", "openai", "anthropic", "google deepmind",
+        "全球",
+        "国际",
+        "海外",
+        "world",
+        "global",
+        "international",
+        "silicon valley",
+        "openai",
+        "anthropic",
+        "google deepmind",
     ];
     if contains_any(prompt, &global_markers) || contains_any(&normalized, &global_markers) {
         return Some(ScheduledTaskSourcePolicy::GlobalPreferred);
     }
 
     let official_markers = [
-        "官方", "公告", "博客", "文档",
-        "release note", "release notes", "changelog", "developer blog",
+        "官方",
+        "公告",
+        "博客",
+        "文档",
+        "release note",
+        "release notes",
+        "changelog",
+        "developer blog",
     ];
     if contains_any(prompt, &official_markers) || contains_any(&normalized, &official_markers) {
         return Some(ScheduledTaskSourcePolicy::OfficialFirst);
@@ -752,7 +779,11 @@ fn infer_source_policy_from_prompt(
     Some(ScheduledTaskSourcePolicy::Mixed)
 }
 
-fn default_artifact_path(task_id: &str, output_mode: ScheduledTaskOutputMode, prompt: &str) -> Option<String> {
+fn default_artifact_path(
+    task_id: &str,
+    output_mode: ScheduledTaskOutputMode,
+    prompt: &str,
+) -> Option<String> {
     if !matches!(output_mode, ScheduledTaskOutputMode::SummaryAndArtifact) {
         return None;
     }
@@ -781,10 +812,9 @@ pub fn infer_task_profile_from_prompt(prompt: &str) -> ScheduledTaskProfile {
     let has_document = looks_like_document_task(&normalized) || looks_like_document_task(prompt);
     let has_workspace = looks_like_workspace_artifact_task(&normalized)
         || looks_like_workspace_artifact_task(prompt);
-    let has_publish = looks_like_publish_back_task(&normalized)
-        || looks_like_publish_back_task(prompt);
-    let has_retrieval =
-        looks_like_retrieval_task(&normalized) || looks_like_retrieval_task(prompt);
+    let has_publish =
+        looks_like_publish_back_task(&normalized) || looks_like_publish_back_task(prompt);
+    let has_retrieval = looks_like_retrieval_task(&normalized) || looks_like_retrieval_task(prompt);
 
     if has_document && (has_workspace || has_publish) {
         ScheduledTaskProfile::HybridTask
@@ -882,8 +912,12 @@ pub fn infer_session_binding(
         || contains_any(
             prompt,
             &[
-                "当前对话", "当前会话", "本次会话", "当前聊天",
-                "this chat", "current session",
+                "当前对话",
+                "当前会话",
+                "本次会话",
+                "当前聊天",
+                "this chat",
+                "current session",
             ],
         )
     {
@@ -893,7 +927,9 @@ pub fn infer_session_binding(
     }
 }
 
-pub fn infer_delivery_plan(contract: &ScheduledTaskExecutionContract) -> ScheduledTaskDeliveryPlanKind {
+pub fn infer_delivery_plan(
+    contract: &ScheduledTaskExecutionContract,
+) -> ScheduledTaskDeliveryPlanKind {
     match contract.publish_behavior {
         ScheduledTaskPublishBehavior::PublishWorkspaceArtifact
         | ScheduledTaskPublishBehavior::CreateDocumentFromFile => {
@@ -930,8 +966,10 @@ pub fn normalize_execution_contract(
     if matches!(
         contract.source_scope,
         ScheduledTaskSourceScope::WorkspaceOnly
-    ) && !matches!(inferred.source_scope, ScheduledTaskSourceScope::WorkspaceOnly)
-    {
+    ) && !matches!(
+        inferred.source_scope,
+        ScheduledTaskSourceScope::WorkspaceOnly
+    ) {
         contract.source_scope = inferred.source_scope;
     }
     if matches!(
@@ -1018,8 +1056,11 @@ fn parse_day_of_week_field(value: &str) -> Option<(ScheduledTaskScheduleMode, Ve
         return Some((
             ScheduledTaskScheduleMode::WeekdaysAt,
             vec![
-                "1".to_string(), "2".to_string(), "3".to_string(),
-                "4".to_string(), "5".to_string(),
+                "1".to_string(),
+                "2".to_string(),
+                "3".to_string(),
+                "4".to_string(),
+                "5".to_string(),
             ],
         ));
     }
@@ -1030,7 +1071,10 @@ fn parse_day_of_week_field(value: &str) -> Option<(ScheduledTaskScheduleMode, Ve
         return Some((
             ScheduledTaskScheduleMode::WeeklyOn,
             normalize_weekly_days(
-                &normalized.split(',').map(|item| item.to_string()).collect::<Vec<_>>(),
+                &normalized
+                    .split(',')
+                    .map(|item| item.to_string())
+                    .collect::<Vec<_>>(),
             ),
         ));
     }
@@ -1164,19 +1208,23 @@ pub fn human_schedule_for_task(doc: &ScheduledTaskDoc) -> String {
                 mode: ScheduledTaskScheduleMode::DailyAt,
                 daily_time: Some(value),
                 ..
-            }) => format!("每天 {value} 执行 ({})", value, doc.timezone),
+            }) => format!("每天 {} 执行 ({})", value, doc.timezone),
             Some(ScheduledTaskScheduleConfig {
                 mode: ScheduledTaskScheduleMode::WeekdaysAt,
                 daily_time: Some(value),
                 ..
-            }) => format!("每个工作日 {value} 执行 ({})", value, doc.timezone),
+            }) => format!("每个工作日 {} 执行 ({})", value, doc.timezone),
             Some(ScheduledTaskScheduleConfig {
                 mode: ScheduledTaskScheduleMode::WeeklyOn,
                 daily_time: Some(value),
                 weekly_days: Some(days),
                 ..
             }) => {
-                format!("每周 {} {value} 执行 ({})", weekday_labels(&days), doc.timezone)
+                format!(
+                    "每周 {} {value} 执行 ({})",
+                    weekday_labels(&days),
+                    doc.timezone
+                )
             }
             Some(ScheduledTaskScheduleConfig {
                 cron_expression: Some(expression),
@@ -1188,7 +1236,8 @@ pub fn human_schedule_for_task(doc: &ScheduledTaskDoc) -> String {
 }
 
 pub fn next_fire_preview_for_task(doc: &ScheduledTaskDoc) -> Option<String> {
-    doc.next_fire_at.map(|value| format!("{} ({})", to_rfc3339(value), doc.timezone))
+    doc.next_fire_at
+        .map(|value| format!("{} ({})", to_rfc3339(value), doc.timezone))
 }
 
 // ---------------------------------------------------------------------------
@@ -1203,10 +1252,9 @@ impl ScheduledTaskSummaryResponse {
         let can_resume = match doc.status {
             ScheduledTaskStatus::Paused => match doc.task_kind {
                 ScheduledTaskKind::Cron => true,
-                ScheduledTaskKind::OneShot => doc
-                    .one_shot_at
-                    .map(|value| value > now)
-                    .unwrap_or(false),
+                ScheduledTaskKind::OneShot => {
+                    doc.one_shot_at.map(|value| value > now).unwrap_or(false)
+                }
             },
             _ => false,
         };
@@ -1215,10 +1263,7 @@ impl ScheduledTaskSummaryResponse {
                 doc.status,
                 ScheduledTaskStatus::Paused | ScheduledTaskStatus::Completed
             )
-            && doc
-                .one_shot_at
-                .map(|value| value <= now)
-                .unwrap_or(false)
+            && doc.one_shot_at.map(|value| value <= now).unwrap_or(false)
         {
             Some(
                 "这条一次性任务的原始执行时间已经过去。请修改时间后重新启用，或直接立即运行。"
@@ -1311,7 +1356,10 @@ mod tests {
             "每天早上8点搜索互联网最新AI资讯并输出中文总结",
             ScheduledTaskProfile::RetrievalTask,
         );
-        assert_eq!(contract.source_policy, Some(ScheduledTaskSourcePolicy::Mixed));
+        assert_eq!(
+            contract.source_policy,
+            Some(ScheduledTaskSourcePolicy::Mixed)
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::scheduled_tasks::models::{
     ScheduledTaskParseResult, ScheduledTaskPayloadKind, ScheduledTaskProfile,
     ScheduledTaskPublishBehavior, ScheduledTaskScheduleConfig, ScheduledTaskScheduleMode,
     ScheduledTaskScheduleSpec, ScheduledTaskScheduleSpecKind, ScheduledTaskSessionBinding,
-    ScheduledTaskSourceScope, ScheduledTaskSourcePolicy,
+    ScheduledTaskSourcePolicy, ScheduledTaskSourceScope,
 };
 use chrono::{DateTime, Utc};
 use std::str::FromStr;
@@ -72,8 +72,9 @@ impl From<ScheduledTaskScheduleSpecKind> for ScheduledTaskKind {
     fn from(kind: ScheduledTaskScheduleSpecKind) -> Self {
         match kind {
             ScheduledTaskScheduleSpecKind::OneShot => ScheduledTaskKind::OneShot,
-            ScheduledTaskScheduleSpecKind::Every
-            | ScheduledTaskScheduleSpecKind::Calendar => ScheduledTaskKind::Cron,
+            ScheduledTaskScheduleSpecKind::Every | ScheduledTaskScheduleSpecKind::Calendar => {
+                ScheduledTaskKind::Cron
+            }
         }
     }
 }
@@ -85,74 +86,58 @@ impl From<ScheduledTaskScheduleSpecKind> for ScheduledTaskKind {
 fn parse_hhmm(text: &str) -> Option<(u32, u32)> {
     let text = text.trim();
     for pattern in &["HH:MM", "H:MM", "HHMM", "HMM"] {
-        let mut chars = pattern.chars().peekable();
-        let mut digits = Vec::new();
-        let mut separators = Vec::new();
-        for ch in chars {
-            if ch == 'H' {
-                digits.push(ch);
-            } else {
-                separators.push(ch);
-            }
-        }
-        let digit_count = digits.len();
-        let sep_count = separators.len();
-        let total = digit_count + sep_count;
+        let digit_count = pattern.chars().filter(|&c| c == 'H').count();
+        let _sep_count = pattern.chars().filter(|c| *c != 'H').count();
+        let total = digit_count + pattern.len() - digit_count;
         if text.len() != total {
             continue;
         }
         let mut found = true;
         let mut pos = 0_usize;
-        let mut parts: Vec<u32> = Vec::new();
-        for (i, ch) in text.chars().enumerate() {
-            let expected = chars.by_ref().next();
+        let chars: Vec<char> = pattern.chars().collect();
+        let text_chars: Vec<char> = text.chars().collect();
+        for (i, expected) in chars.iter().enumerate() {
+            let ch = text_chars[i];
             match expected {
-                Some('H') => {
-                    if ch.is_ascii_digit() {
-                        pos += 1;
-                    } else {
+                'H' => {
+                    if !ch.is_ascii_digit() {
                         found = false;
                         break;
                     }
+                    pos += 1;
                 }
-                Some(c) => {
-                    if ch == c {
-                        pos += 1;
-                    } else {
+                c => {
+                    if ch != *c {
                         found = false;
                         break;
                     }
-                }
-                None => {
-                    found = false;
-                    break;
+                    pos += 1;
                 }
             }
         }
         if found && text.len() == pos {
-            let chars: Vec<char> = text.chars().collect();
             if digit_count == 4 {
-                let h1 = chars[0].to_digit(10)?;
-                let h2 = chars[1].to_digit(10)?;
-                let m1 = chars[2].to_digit(10)?;
-                let m2 = chars[3].to_digit(10)?;
+                let h1 = text_chars[0].to_digit(10)?;
+                let h2 = text_chars[1].to_digit(10)?;
+                let m1 = text_chars[2].to_digit(10)?;
+                let m2 = text_chars[3].to_digit(10)?;
                 let hour = h1 * 10 + h2;
                 let minute = m1 * 10 + m2;
                 if hour < 24 && minute < 60 {
                     return Some((hour, minute));
                 }
             } else if digit_count == 3 {
-                let h1 = chars[0].to_digit(10)?;
-                let h2 = chars[1].to_digit(10)?;
-                let m1 = chars[2].to_digit(10)?;
+                let h1 = text_chars[0].to_digit(10)?;
+                let h2 = text_chars[1].to_digit(10)?;
+                let m1 = text_chars[2].to_digit(10)?;
                 let hour = h1 * 10 + h2;
                 let minute = m1 * 10;
                 if hour < 24 && minute < 60 {
                     return Some((hour, minute));
                 }
             } else if digit_count == 2 {
-                let h1 = chars[0].to_digit(10)?;
-                let h2 = chars[1].to_digit(10)?;
+                let h1 = text_chars[0].to_digit(10)?;
+                let h2 = text_chars[1].to_digit(10)?;
                 let hour = h1;
                 let minute = h2 * 10;
                 if hour < 24 && minute < 60 {
@@ -394,7 +379,10 @@ fn parse_schedule_from_text(
                 cron_expression: Some(format!("0 {} * * 1-5", hour)),
                 timezone: timezone.to_string(),
             },
-            format!("每个工作日 {:02}:{:02} 执行一次 ({})", hour, minute, timezone),
+            format!(
+                "每个工作日 {:02}:{:02} 执行一次 ({})",
+                hour, minute, timezone
+            ),
             warnings,
         );
     }
@@ -460,7 +448,10 @@ fn parse_schedule_from_text(
                 cron_expression: Some(cron),
                 timezone: timezone.to_string(),
             },
-            format!("每周 {} {:02}:{:02} 执行一次 ({})", day_names, hour, minute, timezone),
+            format!(
+                "每周 {} {:02}:{:02} 执行一次 ({})",
+                day_names, hour, minute, timezone
+            ),
             warnings,
         );
     }
@@ -469,7 +460,8 @@ fn parse_schedule_from_text(
     if text.contains("明天") || text.contains("tomorrow") {
         if let Some((hour, minute)) = extract_time(text) {
             let tomorrow = now + chrono::Duration::days(1);
-            let at_str = tomorrow.format("%Y-%m-%dT{:02}:{:02}:00Z", hour, minute);
+            let fmt_str = format!("%Y-%m-%dT{hour:02}:{minute:02}:00Z");
+            let at_str = tomorrow.format(&fmt_str);
             return (
                 ScheduledTaskScheduleSpec {
                     kind: ScheduledTaskScheduleSpecKind::OneShot,
@@ -478,10 +470,7 @@ fn parse_schedule_from_text(
                     cron_expression: None,
                     timezone: timezone.to_string(),
                 },
-                format!(
-                    "明天 {:02}:{:02} 执行一次 ({})",
-                    hour, minute, timezone
-                ),
+                format!("明天 {:02}:{:02} 执行一次 ({})", hour, minute, timezone),
                 warnings,
             );
         }
@@ -490,7 +479,8 @@ fn parse_schedule_from_text(
     // One-shot at specific time
     if text.contains("在") || text.contains("at") || text.contains("点") {
         if let Some((hour, minute)) = extract_time(text) {
-            let at_str = now.format("%Y-%m-%dT{:02}:{:02}:00Z", hour, minute);
+            let fmt_str = format!("%Y-%m-%dT{hour:02}:{minute:02}:00Z");
+            let at_str = now.format(&fmt_str);
             return (
                 ScheduledTaskScheduleSpec {
                     kind: ScheduledTaskScheduleSpecKind::OneShot,
@@ -574,8 +564,11 @@ fn extract_time(text: &str) -> Option<(u32, u32)> {
     for pattern in &hhmm_patterns {
         if let Ok(re) = regex::Regex::new(pattern) {
             if let Some(caps) = re.captures(text) {
-                let h1 = caps.get(1)?.as_str().parse::<u32>().ok()?;
-                let m1 = caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
+                let h1: u32 = caps.get(1)?.as_str().parse::<u32>().ok()?;
+                let m1: u32 = caps
+                    .get(2)
+                    .and_then(|m: regex::Match<'_>| m.as_str().parse::<u32>().ok())
+                    .unwrap_or(0);
                 if h1 < 24 && m1 < 60 {
                     return Some((h1, m1));
                 }
@@ -598,13 +591,12 @@ fn extract_time(text: &str) -> Option<(u32, u32)> {
     for (pattern, offset) in &chinese_patterns {
         if let Ok(re) = regex::Regex::new(pattern) {
             if let Some(caps) = re.captures(text) {
-                let h1 = caps.get(1)?.as_str().parse::<u32>().ok()?;
-                let m1 = caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
-                let hour = if offset == &0 {
-                    h1
-                } else {
-                    h1 + offset
-                };
+                let h1: u32 = caps.get(1)?.as_str().parse::<u32>().ok()?;
+                let m1: u32 = caps
+                    .get(2)
+                    .and_then(|m: regex::Match<'_>| m.as_str().parse::<u32>().ok())
+                    .unwrap_or(0);
+                let hour = if offset == &0 { h1 } else { h1 + offset };
                 if hour < 24 && m1 < 60 {
                     return Some((hour, m1));
                 }
@@ -668,10 +660,7 @@ fn infer_title(prompt: &str) -> String {
     }
 }
 
-fn calculate_confidence(
-    schedule_spec: &ScheduledTaskScheduleSpec,
-    warnings: &[String],
-) -> f32 {
+fn calculate_confidence(schedule_spec: &ScheduledTaskScheduleSpec, warnings: &[String]) -> f32 {
     let mut base: f32 = 0.5;
 
     // Schedule presence
@@ -741,17 +730,19 @@ mod tests {
 
     #[test]
     fn test_parse_every_5_minutes() {
-        let result = parse_scheduled_task_text(
-            "每5分钟检查一下是否有新消息",
-            Some("Asia/Shanghai"),
-            None,
-        );
+        let result =
+            parse_scheduled_task_text("每5分钟检查一下是否有新消息", Some("Asia/Shanghai"), None);
         assert_eq!(
             result.schedule_spec.kind,
             ScheduledTaskScheduleSpecKind::Every
         );
         assert_eq!(
-            result.schedule_spec.schedule_config.as_ref().unwrap().every_minutes,
+            result
+                .schedule_spec
+                .schedule_config
+                .as_ref()
+                .unwrap()
+                .every_minutes,
             Some(5)
         );
         assert!(result.confidence > 0.8);
@@ -759,11 +750,7 @@ mod tests {
 
     #[test]
     fn test_parse_daily_at_9am() {
-        let result = parse_scheduled_task_text(
-            "每天早上9点生成报告",
-            Some("Asia/Shanghai"),
-            None,
-        );
+        let result = parse_scheduled_task_text("每天早上9点生成报告", Some("Asia/Shanghai"), None);
         assert_eq!(
             result.schedule_spec.kind,
             ScheduledTaskScheduleSpecKind::Calendar
@@ -790,11 +777,7 @@ mod tests {
 
     #[test]
     fn test_parse_no_schedule_low_confidence() {
-        let result = parse_scheduled_task_text(
-            "帮我总结一下",
-            Some("Asia/Shanghai"),
-            None,
-        );
+        let result = parse_scheduled_task_text("帮我总结一下", Some("Asia/Shanghai"), None);
         assert!(result.confidence < 0.6);
         assert!(!result.warnings.is_empty());
         assert!(!result.ready_to_create);
@@ -832,21 +815,13 @@ mod tests {
 
     #[test]
     fn test_confidence_for_valid_schedule() {
-        let result = parse_scheduled_task_text(
-            "每30分钟同步一次数据",
-            Some("Asia/Shanghai"),
-            None,
-        );
+        let result = parse_scheduled_task_text("每30分钟同步一次数据", Some("Asia/Shanghai"), None);
         assert!(result.confidence >= 0.85);
     }
 
     #[test]
     fn test_confidence_for_missing_schedule() {
-        let result = parse_scheduled_task_text(
-            "帮我整理文件",
-            Some("Asia/Shanghai"),
-            None,
-        );
+        let result = parse_scheduled_task_text("帮我整理文件", Some("Asia/Shanghai"), None);
         assert!(result.confidence < 0.7);
     }
 }

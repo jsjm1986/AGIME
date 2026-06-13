@@ -701,6 +701,7 @@ pub fn router(service: ScheduledTaskState) -> Router {
 
 /// Start the background scheduler with the given service and timezone.
 #[cfg(feature = "desktop_harness_host")]
+#[allow(dead_code)]
 pub fn start_scheduler(service: Arc<ScheduledTaskService>, timezone: String) {
     spawn_scheduler_loop(service, timezone);
 }

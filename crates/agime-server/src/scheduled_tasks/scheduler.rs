@@ -111,13 +111,18 @@ fn classify_run_completion(
 // Scheduler loop
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 const DEFAULT_LEASE_SECS: i64 = 120;
+#[allow(dead_code)]
 const DEFAULT_TICK_INTERVAL_SECS: u64 = 5;
+#[allow(dead_code)]
 const SELF_EVALUATION_THRESHOLD: i32 = 75;
+#[allow(dead_code)]
 const MAX_IMPROVEMENT_LOOPS: i32 = 3;
 
 /// Spawn the background scheduler loop.
 /// Returns a `JoinHandle` so the caller can manage lifecycle.
+#[allow(dead_code)]
 pub fn spawn_scheduler_loop(
     service: Arc<ScheduledTaskService>,
     timezone: String,
@@ -148,6 +153,7 @@ pub fn spawn_scheduler_loop(
 }
 
 /// Run a single task: execute, self-evaluate, retry if needed, record.
+#[allow(dead_code)]
 pub async fn run_task(
     service: Arc<ScheduledTaskService>,
     task: ScheduledTaskDoc,
@@ -323,6 +329,7 @@ async fn execute_task_run(
 }
 
 /// Retry with self-evaluation feedback.
+#[allow(dead_code)]
 async fn retry_with_feedback(
     _agent_id: &str,
     _prompt: &str,

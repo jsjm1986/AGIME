@@ -42,6 +42,7 @@ pub enum ScheduledTaskDeliveryTier {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
 pub enum ScheduledTaskListView {
     Mine,
     AllVisible,
@@ -419,6 +420,7 @@ pub struct ScheduledTaskParseResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct ScheduledTaskParseResponse {
     pub preview: ScheduledTaskParseResult,
 }

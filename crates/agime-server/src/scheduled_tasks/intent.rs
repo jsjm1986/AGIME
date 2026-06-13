@@ -196,22 +196,8 @@ fn parse_every_hours(text: &str) -> Option<u32> {
 
 fn weekly_days_from_text(text: &str) -> Vec<String> {
     let mut days: Vec<String> = Vec::new();
-    let day_names = [
-        ("一", "1"),
-        ("二", "2"),
-        ("三", "3"),
-        ("四", "4"),
-        ("五", "5"),
-        ("六", "6"),
-        ("日", "0"),
-        ("天", "0"),
-        ("weekday", "1-5"),
-        ("weekdays", "1-5"),
-        ("工作日", "1-5"),
-        ("平日", "1-5"),
-        ("weekend", "0,6"),
-        ("周末", "0,6"),
-    ];
+
+    // Exact day phrases with "周" prefix — safe, won't match "一下" or other words
     let day_map = [
         ("周一", "1"),
         ("星期1", "1"),
@@ -244,7 +230,17 @@ fn weekly_days_from_text(text: &str) -> Vec<String> {
             }
         }
     }
-    for (name, value) in &day_names {
+
+    // Group keywords — these cover multiple days, safe to match anywhere
+    let group_names = [
+        ("weekday", "1-5"),
+        ("weekdays", "1-5"),
+        ("工作日", "1-5"),
+        ("平日", "1-5"),
+        ("weekend", "0,6"),
+        ("周末", "0,6"),
+    ];
+    for (name, value) in &group_names {
         if text.contains(*name) {
             if value.contains(',') {
                 for part in value.split(',') {
@@ -257,6 +253,7 @@ fn weekly_days_from_text(text: &str) -> Vec<String> {
             }
         }
     }
+
     days
 }
 
@@ -550,12 +547,38 @@ fn parse_schedule_from_text(
 }
 
 fn extract_time(text: &str) -> Option<(u32, u32)> {
-    // HH:MM format first
-    let hhmm_patterns = [
-        r"(\d{1,2}):(\d{2})",
-        r"(\d{1,2})点(\d{1,2})?",
-        r"(\d{1,2})\.(\d{2})",
+    // Chinese patterns with offset — offset is the minimum valid hour for that time-of-day.
+    // We add the offset only when h1 < offset (i.e., the hour is below the valid range).
+    // This handles both "下午3点" (3 < 12 → 3+12=15) and "下午8点" (8 < 12 → 8+12=20).
+    let chinese_patterns = [
+        (r"早上(\d{1,2})点(\d{1,2})?", 0), // morning: 0-11, hour is already correct
+        (r"上午(\d{1,2})点(\d{1,2})?", 0), // forenoon: 0-11, hour is already correct
+        (r"中午(\d{1,2})点(\d{1,2})?", 11), // midday: add 12 only if hour <= 11 (e.g., "中午12点" → 12, not 24)
+        (r"下午(\d{1,2})点(\d{1,2})?", 12), // afternoon: add 12 only if hour < 12 (so 3→15, 8→20)
+        (r"晚上(\d{1,2})点(\d{1,2})?", 18), // evening: hour is already correct (18-23), bare "20点" falls here
+        (r"凌晨(\d{1,2})点(\d{1,2})?", 3),  // dawn: 0-6, hour is already correct
+        (r"傍晚(\d{1,2})点(\d{1,2})?", 17), // dusk: 17-23, hour is already correct
+        (r"深夜(\d{1,2})点(\d{1,2})?", 22), // late night: 22-23, hour is already correct
+        (r"(\d{1,2})点(\d{1,2})?", 0),      // bare hour: add offset only if hour < valid_range_min
     ];
+    for (pattern, offset) in &chinese_patterns {
+        if let Ok(re) = regex::Regex::new(pattern) {
+            if let Some(caps) = re.captures(text) {
+                let h1: u32 = caps.get(1)?.as_str().parse::<u32>().ok()?;
+                let m1: u32 = caps
+                    .get(2)
+                    .and_then(|m: regex::Match<'_>| m.as_str().parse::<u32>().ok())
+                    .unwrap_or(0);
+                let hour = if h1 < *offset { h1 + offset } else { h1 };
+                if hour < 24 && m1 < 60 {
+                    return Some((hour, m1));
+                }
+            }
+        }
+    }
+
+    // HH:MM format second
+    let hhmm_patterns = [r"(\d{1,2}):(\d{2})", r"(\d{1,2})\.(\d{2})"];
     for pattern in &hhmm_patterns {
         if let Ok(re) = regex::Regex::new(pattern) {
             if let Some(caps) = re.captures(text) {
@@ -566,34 +589,6 @@ fn extract_time(text: &str) -> Option<(u32, u32)> {
                     .unwrap_or(0);
                 if h1 < 24 && m1 < 60 {
                     return Some((h1, m1));
-                }
-            }
-        }
-    }
-
-    // Chinese patterns
-    let chinese_patterns = [
-        (r"早上(\d{1,2})点(\d{1,2})?", 8),
-        (r"上午(\d{1,2})点(\d{1,2})?", 10),
-        (r"中午(\d{1,2})点(\d{1,2})?", 12),
-        (r"下午(\d{1,2})点(\d{1,2})?", 14),
-        (r"晚上(\d{1,2})点(\d{1,2})?", 20),
-        (r"凌晨(\d{1,2})点(\d{1,2})?", 3),
-        (r"傍晚(\d{1,2})点(\d{1,2})?", 18),
-        (r"深夜(\d{1,2})点(\d{1,2})?", 22),
-        (r"(\d{1,2})点(\d{1,2})?", 0),
-    ];
-    for (pattern, offset) in &chinese_patterns {
-        if let Ok(re) = regex::Regex::new(pattern) {
-            if let Some(caps) = re.captures(text) {
-                let h1: u32 = caps.get(1)?.as_str().parse::<u32>().ok()?;
-                let m1: u32 = caps
-                    .get(2)
-                    .and_then(|m: regex::Match<'_>| m.as_str().parse::<u32>().ok())
-                    .unwrap_or(0);
-                let hour = if offset == &0 { h1 } else { h1 + offset };
-                if hour < 24 && m1 < 60 {
-                    return Some((hour, m1));
                 }
             }
         }
@@ -773,8 +768,17 @@ mod tests {
     #[test]
     fn test_parse_no_schedule_low_confidence() {
         let result = parse_scheduled_task_text("帮我总结一下", Some("Asia/Shanghai"), None);
-        assert!(result.confidence < 0.8);
-        assert!(!result.ready_to_create);
+        // "帮我总结" without explicit time should produce low confidence and not be ready to create.
+        // The schedule spec defaults to OneShot with no one_shot_at, giving confidence = 0.25.
+        let confidence_low = result.confidence < 0.8;
+        let not_ready = !result.ready_to_create;
+        assert!(
+            confidence_low && not_ready,
+            "expected low confidence ({:.2}) and not ready_to_create, got confidence={:.2}, ready_to_create={}",
+            result.confidence,
+            result.confidence,
+            result.ready_to_create
+        );
     }
 
     #[test]

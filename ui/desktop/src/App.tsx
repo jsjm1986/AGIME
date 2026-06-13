@@ -40,6 +40,7 @@ import PermissionSettingsView from './components/settings/permission/PermissionS
 
 import ExtensionsView, { ExtensionsViewOptions } from './components/extensions/ExtensionsView';
 import RecipesView from './components/recipes/RecipesView';
+import ScheduledTasksView from './components/scheduled/ScheduledTasksView';
 import { ConfigCopilotView } from './components/config-copilot';
 import TeamView from './components/team/TeamView';
 import { View, ViewOptions } from './utils/navigationUtils';
@@ -375,6 +376,16 @@ const ExtensionsRoute = () => {
         }
       }}
       viewOptions={viewOptions}
+    />
+  );
+};
+
+const ScheduledTasksRoute = () => {
+  const navigate = useNavigate();
+
+  return (
+    <ScheduledTasksView
+      onClose={() => navigate(-1)}
     />
   );
 };
@@ -897,6 +908,7 @@ export function AppInner() {
             />
             <Route path="recipes" element={<RecipesRoute />} />
             <Route path="team" element={<TeamView />} />
+            <Route path="scheduled-tasks" element={<ScheduledTasksRoute />} />
             <Route path="config-copilot" element={<ConfigCopilotView />} />
             <Route
               path="shared-session"

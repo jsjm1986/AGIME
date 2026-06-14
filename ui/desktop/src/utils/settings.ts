@@ -38,7 +38,19 @@ export function loadSettings(): Settings {
   try {
     if (fs.existsSync(SETTINGS_FILE)) {
       const data = fs.readFileSync(SETTINGS_FILE, 'utf8');
-      return JSON.parse(data);
+      try {
+        return JSON.parse(data);
+      } catch (parseError) {
+        console.error('Error parsing settings.json, resetting to defaults:', parseError);
+        // Backup corrupted file for debugging
+        try {
+          const backupPath = SETTINGS_FILE + '.corrupt.' + Date.now();
+          fs.writeFileSync(backupPath, data);
+          console.warn(`Corrupted settings backed up to: ${backupPath}`);
+        } catch {
+          // Backup failed, continue
+        }
+      }
     }
   } catch (error) {
     console.error('Error loading settings:', error);

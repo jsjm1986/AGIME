@@ -13,7 +13,13 @@ export function loadRecentDirs(): string[] {
   try {
     if (fs.existsSync(RECENT_DIRS_FILE)) {
       const data = fs.readFileSync(RECENT_DIRS_FILE, 'utf8');
-      const recentDirs: RecentDirs = JSON.parse(data);
+      let recentDirs: RecentDirs;
+      try {
+        recentDirs = JSON.parse(data);
+      } catch (parseError) {
+        console.error('Error parsing recent-dirs.json, resetting:', parseError);
+        return [];
+      }
 
       // Filter out invalid directories (non-existent or not directories)
       const validDirs = recentDirs.dirs.filter((dir) => {

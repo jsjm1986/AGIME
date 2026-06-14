@@ -33,7 +33,14 @@ interface SaveDataUrlResponse {
   error?: string;
 }
 
-const config = JSON.parse(process.argv.find((arg) => arg.startsWith('{')) || '{}');
+let config: Record<string, unknown> = {};
+try {
+  const configArg = process.argv.find((arg) => arg.startsWith('{'));
+  config = configArg ? JSON.parse(configArg) : {};
+} catch (parseError) {
+  console.warn('Failed to parse config from command line, using defaults:', parseError);
+  config = {};
+}
 
 interface UpdaterEvent {
   event: string;

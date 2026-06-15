@@ -126,8 +126,7 @@ pub struct AppState {
     /// `data_dir()/scheduled_tasks/` and `data_dir()/scheduled_task_runs/`.
     /// Lazy-init on first access via [`AppState::scheduled_task_service`].
     #[cfg(feature = "desktop_harness_host")]
-    pub(crate) scheduled_task_service:
-        Arc<Mutex<Option<Arc<crate::scheduled_tasks::service::ScheduledTaskService>>>>,
+    pub(crate) scheduled_task_service: Arc<crate::scheduled_tasks::service::ScheduledTaskService>,
 }
 
 impl AppState {
@@ -158,7 +157,13 @@ impl AppState {
             #[cfg(feature = "desktop_harness_host")]
             task_manager: Arc::new(Mutex::new(None)),
             #[cfg(feature = "desktop_harness_host")]
-            scheduled_task_service: Arc::new(Mutex::new(None)),
+            scheduled_task_service: {
+                let data_dir = agime::config::paths::Paths::data_dir();
+                Arc::new(crate::scheduled_tasks::service::ScheduledTaskService::new(
+                    data_dir.join("scheduled_tasks"),
+                    data_dir.join("scheduled_task_runs"),
+                ))
+            },
         }))
     }
     pub async fn set_recipe_file_hash_map(&self, hash_map: HashMap<String, PathBuf>) {
@@ -440,25 +445,10 @@ impl AppState {
         mgr
     }
 
+    #[cfg(feature = "desktop_harness_host")]
     pub fn scheduled_task_service(
         &self,
     ) -> Arc<crate::scheduled_tasks::service::ScheduledTaskService> {
-        // Synchronous accessor: safe because AppState is built before any
-        // concurrent access; the Mutex<Option<_>> lets us lazily init.
-        let mut guard = self.scheduled_task_service.blocking_lock();
-        let svc: Arc<crate::scheduled_tasks::service::ScheduledTaskService> = match guard.as_ref() {
-            Some(svc) => Arc::clone(svc),
-            None => {
-                let data_dir = agime::config::paths::Paths::data_dir();
-                let tasks_dir = data_dir.join("scheduled_tasks");
-                let runs_dir = data_dir.join("scheduled_task_runs");
-                let new_svc = Arc::new(crate::scheduled_tasks::service::ScheduledTaskService::new(
-                    tasks_dir, runs_dir,
-                ));
-                *guard = Some(new_svc.clone());
-                new_svc
-            }
-        };
-        svc
+        Arc::clone(&self.scheduled_task_service)
     }
 }

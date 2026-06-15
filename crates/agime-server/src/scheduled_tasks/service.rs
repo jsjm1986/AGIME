@@ -24,7 +24,7 @@ pub struct ScheduledTaskService {
 
 impl ScheduledTaskService {
     /// Construct a service rooted at the given directories.
-    /// Directories are created lazily on first access; a failure to create them
+    /// Directories are created at construction; a failure to create them
     /// results in an empty/inoperative store so startup never hard-fails.
     pub fn new(tasks_dir: PathBuf, runs_dir: PathBuf) -> Self {
         let _ = std::fs::create_dir_all(&tasks_dir);

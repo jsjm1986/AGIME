@@ -124,7 +124,7 @@ pub struct AppState {
     /// JSON-file backed service for **scheduled tasks** (natural language
     /// parsed cron / one-shot jobs). Lives under
     /// `data_dir()/scheduled_tasks/` and `data_dir()/scheduled_task_runs/`.
-    /// Lazy-init on first access via [`AppState::scheduled_task_service`].
+    /// Eagerly initialized in [`AppState::new`].
     #[cfg(feature = "desktop_harness_host")]
     pub(crate) scheduled_task_service: Arc<crate::scheduled_tasks::service::ScheduledTaskService>,
 }

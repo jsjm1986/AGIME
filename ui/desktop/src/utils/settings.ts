@@ -39,7 +39,18 @@ export function loadSettings(): Settings {
     if (fs.existsSync(SETTINGS_FILE)) {
       const data = fs.readFileSync(SETTINGS_FILE, 'utf8');
       try {
-        return JSON.parse(data);
+        const parsed = JSON.parse(data) as Partial<Settings>;
+        // Merge with defaults so a partial-but-valid file (e.g. missing
+        // envToggles) can't leave required fields undefined and crash callers
+        // like updateEnvironmentVariables().
+        return {
+          ...defaultSettings,
+          ...parsed,
+          envToggles: {
+            ...defaultSettings.envToggles,
+            ...(parsed.envToggles ?? {}),
+          },
+        };
       } catch (parseError) {
         console.error('Error parsing settings.json, resetting to defaults:', parseError);
         // Backup corrupted file for debugging

@@ -161,9 +161,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Electron App (Package)
         working-directory: ui/desktop
@@ -288,9 +295,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Electron App (Package for Installer)
         working-directory: ui/desktop
@@ -359,9 +373,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Windows EXE Installer
         working-directory: ui/desktop
@@ -415,9 +436,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Electron App
         working-directory: ui/desktop
@@ -484,9 +512,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Electron App (Package)
         working-directory: ui/desktop
@@ -554,9 +589,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Electron App (Package)
         working-directory: ui/desktop
@@ -623,9 +665,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Electron App
         working-directory: ui/desktop
@@ -680,9 +729,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Electron App (Package)
         working-directory: ui/desktop
@@ -750,9 +806,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Electron App (Package)
         working-directory: ui/desktop
@@ -831,9 +894,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Electron App
         working-directory: ui/desktop
@@ -902,9 +972,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build DEB Package
         working-directory: ui/desktop
@@ -968,9 +1045,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build RPM Package
         working-directory: ui/desktop
@@ -1033,9 +1117,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build Electron App
         working-directory: ui/desktop
@@ -1104,9 +1195,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build DEB Package
         working-directory: ui/desktop
@@ -1170,9 +1268,16 @@ jobs:
         run: npm ci
 
       - name: Update version (if specified)
-        if: ${{ inputs.version != '' }}
         working-directory: ui/desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          fi
 
       - name: Build RPM Package
         working-directory: ui/desktop

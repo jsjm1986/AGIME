@@ -1191,7 +1191,7 @@ pub fn human_schedule_for_task(doc: &ScheduledTaskDoc) -> String {
         ScheduledTaskKind::OneShot => {
             let when = doc
                 .one_shot_at
-                .map(to_rfc3339)
+                .map(|value| to_local_rfc3339(value, &doc.timezone))
                 .unwrap_or_else(|| "未设置".to_string());
             format!("一次性执行：{} ({})", when, doc.timezone)
         }
@@ -1238,8 +1238,13 @@ pub fn human_schedule_for_task(doc: &ScheduledTaskDoc) -> String {
 }
 
 pub fn next_fire_preview_for_task(doc: &ScheduledTaskDoc) -> Option<String> {
-    doc.next_fire_at
-        .map(|value| format!("{} ({})", to_rfc3339(value), doc.timezone))
+    doc.next_fire_at.map(|value| {
+        format!(
+            "{} ({})",
+            to_local_rfc3339(value, &doc.timezone),
+            doc.timezone
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1332,6 +1337,16 @@ impl ScheduledTaskRunResponse {
 
 pub fn to_rfc3339(value: DateTime<Utc>) -> String {
     value.to_rfc3339()
+}
+
+/// Render a UTC instant as a wall-clock time in `timezone`, so the time and the
+/// timezone label shown next to it agree. Falls back to the raw RFC3339 (UTC)
+/// string if the timezone name can't be parsed.
+fn to_local_rfc3339(value: DateTime<Utc>, timezone: &str) -> String {
+    match timezone.parse::<chrono_tz::Tz>() {
+        Ok(tz) => value.with_timezone(&tz).to_rfc3339(),
+        Err(_) => value.to_rfc3339(),
+    }
 }
 
 #[cfg(test)]

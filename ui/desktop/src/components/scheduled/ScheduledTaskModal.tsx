@@ -13,6 +13,7 @@ import {
 import type {
   ScheduledTaskSummary,
   ScheduledTaskParseResult,
+  UpdateTaskRequest,
 } from '../../types/scheduledTask';
 import { toastError } from '../../toasts';
 
@@ -42,57 +43,75 @@ export default function ScheduledTaskModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingTask, setIsLoadingTask] = useState(isEditing);
   const parseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   // Load full task detail when editing
   useEffect(() => {
     if (!isEditing || !task) return;
 
+    let cancelled = false;
     const loadTaskDetail = async () => {
       try {
         const detail = await getTask(task.task_id);
+        if (cancelled) return;
         setTitle(detail.title);
         setPrompt(detail.prompt);
       } catch (err) {
+        if (cancelled) return;
         toastError({ title: t('errors.unknownFetch'), msg: String(err) });
-        onClose();
+        onCloseRef.current();
       } finally {
-        setIsLoadingTask(false);
+        if (!cancelled) setIsLoadingTask(false);
       }
     };
 
     loadTaskDetail();
-  }, [isEditing, task, t, onClose]);
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditing, task, t]);
 
-  // Auto-parse when natural language text changes (debounced)
+  // Auto-parse when natural language text changes (debounced). Enabled in both
+  // create and edit mode: in edit mode an entered schedule description lets the
+  // user change the task's timing/frequency (otherwise only title+prompt are
+  // editable, which silently drops schedule changes).
   useEffect(() => {
-    if (isEditing) return;
-
     if (parseTimeoutRef.current) {
       clearTimeout(parseTimeoutRef.current);
     }
 
     if (naturalLanguage.trim().length < 3) {
-      setParseResult(null);
+      // In edit mode, clearing the NL box means "keep the existing schedule",
+      // so don't wipe a previously parsed override unless the user is creating.
+      if (!isEditing) setParseResult(null);
       return;
     }
+
+    // Guard against an older in-flight parse resolving after a newer one and
+    // clobbering state with stale results.
+    let cancelled = false;
 
     parseTimeoutRef.current = setTimeout(async () => {
       setIsParsing(true);
       try {
         const result = await parseTaskText(naturalLanguage);
+        if (cancelled) return;
         setParseResult(result);
         // Auto-fill title and prompt from parse result
         if (result.title) setTitle(result.title);
         if (result.prompt) setPrompt(result.prompt);
       } catch (err) {
+        if (cancelled) return;
         console.error('Parse error:', err);
         setParseResult(null);
       } finally {
-        setIsParsing(false);
+        if (!cancelled) setIsParsing(false);
       }
     }, 500);
 
     return () => {
+      cancelled = true;
       if (parseTimeoutRef.current) {
         clearTimeout(parseTimeoutRef.current);
       }
@@ -104,25 +123,32 @@ export default function ScheduledTaskModal({
 
     // Validate
     if (!title.trim()) {
-      toastError({ title: t('toasts.createError'), msg: '请输入任务名称' });
+      toastError({ title: t('toasts.createError'), msg: t('modal.titleRequired') });
       return;
     }
 
     setIsSubmitting(true);
     try {
       if (isEditing && task) {
-        // Update existing task
-        const updated = await updateTask(task.task_id, { title, prompt });
-        onUpdated({
-          task_id: updated.task_id,
-          title: updated.title,
-          status: updated.status,
-          task_kind: updated.task_kind,
-          next_fire_at: updated.next_fire_at,
-          last_fire_at: updated.last_fire_at,
-          timezone: updated.timezone,
-          created_at: updated.created_at,
-        });
+        // Update existing task. If the user entered a new schedule description
+        // (parseResult present in edit mode), carry the re-parsed schedule
+        // fields through so timing/frequency changes actually persist; the
+        // backend re-validates and recomputes next_fire_at. Without a new
+        // parse, only title+prompt change and the existing schedule is kept.
+        const updates: UpdateTaskRequest = { title, prompt };
+        if (parseResult) {
+          updates.task_kind = parseResult.task_kind;
+          updates.timezone = parseResult.schedule_spec.timezone;
+          if (parseResult.task_kind === 'one_shot') {
+            updates.one_shot_at = parseResult.schedule_spec.one_shot_at;
+          } else if (parseResult.schedule_spec.schedule_config) {
+            updates.schedule_config = parseResult.schedule_spec.schedule_config;
+          } else if (parseResult.schedule_spec.cron_expression) {
+            updates.cron_expression = parseResult.schedule_spec.cron_expression;
+          }
+        }
+        const updated = await updateTask(task.task_id, updates);
+        onUpdated(updated);
       } else {
         // Create from parse result
         if (!parseResult?.ready_to_create) {
@@ -133,16 +159,7 @@ export default function ScheduledTaskModal({
           preview: parseResult,
           overrides: { title, prompt },
         });
-        onCreated({
-          task_id: created.task_id,
-          title: created.title,
-          status: created.status,
-          task_kind: created.task_kind,
-          next_fire_at: created.next_fire_at,
-          last_fire_at: created.last_fire_at,
-          timezone: created.timezone,
-          created_at: created.created_at,
-        });
+        onCreated(created);
       }
     } catch (err) {
       toastError({
@@ -213,29 +230,30 @@ export default function ScheduledTaskModal({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Natural Language Input (only for create) */}
-          {!isEditing && (
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-text-default">
-                {t('modal.naturalLanguage')}
-              </label>
-              <div className="relative">
-                <Input
-                  value={naturalLanguage}
-                  onChange={(e) => setNaturalLanguage(e.target.value)}
-                  placeholder={t('modal.naturalLanguagePlaceholder')}
-                  className="pr-10"
-                />
-                {isParsing && (
-                  <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-text-muted" />
-                )}
-              </div>
-              <p className="text-xs text-text-muted">{t('parse.placeholder')}</p>
+          {/* Natural Language Input — in edit mode this lets the user change
+              the schedule (timing/frequency), which is otherwise locked. */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-text-default">
+              {isEditing ? t('modal.naturalLanguageEdit') : t('modal.naturalLanguage')}
+            </label>
+            <div className="relative">
+              <Input
+                value={naturalLanguage}
+                onChange={(e) => setNaturalLanguage(e.target.value)}
+                placeholder={t('modal.naturalLanguagePlaceholder')}
+                className="pr-10"
+              />
+              {isParsing && (
+                <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-text-muted" />
+              )}
             </div>
-          )}
+            <p className="text-xs text-text-muted">
+              {isEditing ? t('modal.naturalLanguageEditHint') : t('parse.placeholder')}
+            </p>
+          </div>
 
           {/* Parse Preview */}
-          {parseResult && !isEditing && (
+          {parseResult && (
             <div className="bg-background-subtle rounded-lg p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-text-default">{t('modal.previewTitle')}</span>

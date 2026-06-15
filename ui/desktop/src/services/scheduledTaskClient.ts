@@ -71,7 +71,26 @@ async function jsonRequest<T>(
   });
 
   if (!response.ok) {
-    throw new Error(`${init.method} ${path} failed: ${response.status}`);
+    // The desktop scheduled-task routes return a JSON body of the shape
+    // `{ error: string, hint?: string }` on failure. Surface that instead of
+    // a bare status code so callers can show the backend's message + hint.
+    let detail = '';
+    try {
+      const body = await response.text();
+      if (body) {
+        const parsed = JSON.parse(body) as { error?: string; hint?: string };
+        if (parsed.error) {
+          detail = parsed.hint ? `${parsed.error} — ${parsed.hint}` : parsed.error;
+        } else {
+          detail = body;
+        }
+      }
+    } catch {
+      // Non-JSON body (or empty) — fall back to the status line below.
+    }
+    throw new Error(
+      detail || `${init.method} ${path} failed: ${response.status}`
+    );
   }
 
   const text = await response.text();

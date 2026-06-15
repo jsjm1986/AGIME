@@ -27,6 +27,7 @@ import enWelcome from './locales/en/welcome.json';
 import enTools from './locales/en/tools.json';
 import enConfigCopilot from './locales/en/configCopilot.json';
 import enTeam from './locales/en/team.json';
+import enScheduledTasks from './locales/en/scheduledTasks.json';
 
 // Import Chinese translations
 import zhCommon from './locales/zh-CN/common.json';
@@ -43,6 +44,7 @@ import zhWelcome from './locales/zh-CN/welcome.json';
 import zhTools from './locales/zh-CN/tools.json';
 import zhConfigCopilot from './locales/zh-CN/configCopilot.json';
 import zhTeam from './locales/zh-CN/team.json';
+import zhScheduledTasks from './locales/zh-CN/scheduledTasks.json';
 
 export const resources = {
   en: {
@@ -60,6 +62,7 @@ export const resources = {
     tools: enTools,
     configCopilot: enConfigCopilot,
     team: enTeam,
+    scheduledTasks: enScheduledTasks,
   },
   'zh-CN': {
     common: zhCommon,
@@ -76,6 +79,7 @@ export const resources = {
     tools: zhTools,
     configCopilot: zhConfigCopilot,
     team: zhTeam,
+    scheduledTasks: zhScheduledTasks,
   },
 };
 
@@ -91,7 +95,7 @@ i18n
     resources,
     fallbackLng: 'en',
     defaultNS: 'common',
-    ns: ['common', 'sidebar', 'settings', 'chat', 'greeting', 'errors', 'recipes', 'sessions', 'extensions', 'modes', 'welcome', 'tools', 'configCopilot', 'team'],
+    ns: ['common', 'sidebar', 'settings', 'chat', 'greeting', 'errors', 'recipes', 'sessions', 'extensions', 'modes', 'welcome', 'tools', 'configCopilot', 'team', 'scheduledTasks'],
     interpolation: {
       escapeValue: false,
     },

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use axum::{
-    extract::{Path, State},
+    extract::{FromRef, Path, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -21,16 +21,38 @@ use crate::scheduled_tasks::models::{
     normalize_execution_contract, reconcile_task_contract, CreateScheduledTaskFromParseRequest,
     CreateScheduledTaskRequest, ParseScheduledTaskRequest, ScheduledTaskDeliveryTier,
     ScheduledTaskDetailResponse, ScheduledTaskDoc, ScheduledTaskExecutionContract,
-    ScheduledTaskProfile, ScheduledTaskRunResponse, ScheduledTaskScheduleConfig,
-    ScheduledTaskScheduleMode, ScheduledTaskSessionBinding, ScheduledTaskStatus,
-    ScheduledTaskSummaryResponse, UpdateScheduledTaskRequest,
+    ScheduledTaskProfile, ScheduledTaskRunResponse, ScheduledTaskRunStatus,
+    ScheduledTaskScheduleConfig, ScheduledTaskScheduleMode, ScheduledTaskSessionBinding,
+    ScheduledTaskStatus, ScheduledTaskSummaryResponse, UpdateScheduledTaskRequest,
 };
 use crate::scheduled_tasks::scheduler::{
     compute_next_fire_at, spawn_scheduler_loop, trigger_run_now,
 };
 use crate::scheduled_tasks::service::ScheduledTaskService;
+use crate::state::AppState;
 
 type ScheduledTaskState = Arc<ScheduledTaskService>;
+
+/// Combined router state: holds the full `AppState` so the run-now handler can
+/// drive a real LLM turn, while existing handlers keep extracting just the
+/// `Arc<ScheduledTaskService>` via `FromRef`.
+#[derive(Clone)]
+struct SchedulerRouterState {
+    app_state: Arc<AppState>,
+    service: Arc<ScheduledTaskService>,
+}
+
+impl FromRef<SchedulerRouterState> for Arc<ScheduledTaskService> {
+    fn from_ref(state: &SchedulerRouterState) -> Self {
+        state.service.clone()
+    }
+}
+
+impl FromRef<SchedulerRouterState> for Arc<AppState> {
+    fn from_ref(state: &SchedulerRouterState) -> Self {
+        state.app_state.clone()
+    }
+}
 
 fn bad_request(message: impl ToString) -> (StatusCode, Json<serde_json::Value>) {
     (
@@ -50,6 +72,16 @@ fn not_found() -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({ "error": "not found" })),
+    )
+}
+
+fn conflict(message: impl ToString, hint: impl ToString) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": message.to_string(),
+            "hint": hint.to_string(),
+        })),
     )
 }
 
@@ -542,6 +574,15 @@ async fn publish_task(
         .get_task(&task_id)
         .map_err(internal_error)?
         .ok_or_else(not_found)?;
+    if !matches!(
+        task.status,
+        ScheduledTaskStatus::Draft | ScheduledTaskStatus::Paused
+    ) {
+        return Err(conflict(
+            "task cannot be activated from its current state",
+            "Only draft or paused tasks can be activated.",
+        ));
+    }
     let next_fire_at = validate_schedule_candidate(&task)?;
     task.status = ScheduledTaskStatus::Active;
     task.next_fire_at = next_fire_at;
@@ -565,6 +606,12 @@ async fn pause_task(
         .get_task(&task_id)
         .map_err(internal_error)?
         .ok_or_else(not_found)?;
+    if task.status != ScheduledTaskStatus::Active {
+        return Err(conflict(
+            "only active tasks can be paused",
+            "The task is not currently active.",
+        ));
+    }
     task.status = ScheduledTaskStatus::Paused;
     task.lease_owner = None;
     task.lease_expires_at = None;
@@ -588,24 +635,24 @@ async fn resume_task(
         .get_task(&task_id)
         .map_err(internal_error)?
         .ok_or_else(not_found)?;
+    if task.status != ScheduledTaskStatus::Paused {
+        return Err(conflict(
+            "only paused tasks can be resumed",
+            "The task is not currently paused.",
+        ));
+    }
     let next_fire_at = match task.task_kind {
         crate::scheduled_tasks::models::ScheduledTaskKind::OneShot => {
             let fire_at = task.one_shot_at.ok_or_else(|| {
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({
-                        "error": "one-shot task can no longer be resumed",
-                        "hint": "The original one-shot time has already passed. Update the scheduled time before enabling it again, or use run-now."
-                    })),
+                conflict(
+                    "one-shot task can no longer be resumed",
+                    "The original one-shot time has already passed. Update the scheduled time before enabling it again, or use run-now.",
                 )
             })?;
             if fire_at <= Utc::now() {
-                return Err((
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({
-                        "error": "one-shot task can no longer be resumed",
-                        "hint": "The original one-shot time has already passed. Update the scheduled time before enabling it again, or use run-now."
-                    })),
+                return Err(conflict(
+                    "one-shot task can no longer be resumed",
+                    "The original one-shot time has already passed. Update the scheduled time before enabling it again, or use run-now.",
                 ));
             }
             Some(fire_at)
@@ -631,20 +678,33 @@ async fn resume_task(
 
 async fn run_task_now(
     State(service): State<ScheduledTaskState>,
+    State(app_state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let task = service
         .get_task(&task_id)
         .map_err(internal_error)?
         .ok_or_else(not_found)?;
-    let run = trigger_run_now(service.clone(), task, "Asia/Shanghai".to_string())
+    if task.status == ScheduledTaskStatus::Deleted {
+        return Err(conflict(
+            "deleted tasks cannot be run",
+            "This task has been deleted.",
+        ));
+    }
+    let has_running = service
+        .list_runs(&task_id)
+        .map_err(internal_error)?
+        .iter()
+        .any(|run| run.status == ScheduledTaskRunStatus::Running);
+    if has_running {
+        return Err(conflict(
+            "task is already running",
+            "Wait for the current run to finish before triggering another.",
+        ));
+    }
+    let run = trigger_run_now(app_state, service.clone(), task)
         .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": error.to_string() })),
-            )
-        })?;
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({
         "run": ScheduledTaskRunResponse::from_doc(&run),
     })))
@@ -682,7 +742,11 @@ async fn list_task_runs(
 // Router
 // ---------------------------------------------------------------------------
 
-pub fn router(service: ScheduledTaskState) -> Router {
+pub fn router(state: Arc<AppState>) -> Router {
+    let router_state = SchedulerRouterState {
+        service: state.scheduled_task_service(),
+        app_state: state,
+    };
     Router::new()
         .route("/", get(list_tasks).post(create_task))
         .route("/parse", post(parse_task))
@@ -696,14 +760,14 @@ pub fn router(service: ScheduledTaskState) -> Router {
         .route("/{task_id}/resume", post(resume_task))
         .route("/{task_id}/run-now", post(run_task_now))
         .route("/{task_id}/runs", get(list_task_runs))
-        .with_state(service)
+        .with_state(router_state)
 }
 
-/// Start the background scheduler with the given service and timezone.
+/// Start the background scheduler with the given app state and timezone.
 #[cfg(feature = "desktop_harness_host")]
-#[allow(dead_code)]
-pub fn start_scheduler(service: Arc<ScheduledTaskService>, timezone: String) {
-    spawn_scheduler_loop(service, timezone);
+pub fn start_scheduler(state: Arc<AppState>, timezone: String) {
+    let service = state.scheduled_task_service();
+    spawn_scheduler_loop(state, service, timezone);
 }
 
 #[cfg(test)]

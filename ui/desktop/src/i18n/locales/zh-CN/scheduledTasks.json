@@ -13,6 +13,7 @@
   "lastRun": "上次运行：{{time}}",
   "nextRun": "下次运行：{{time}}",
   "neverRun": "从未运行",
+  "retry": "重试",
   "edit": "编辑",
   "delete": "删除",
   "pause": "暂停",
@@ -33,7 +34,8 @@
   "card": {
     "active": "运行中",
     "paused": "已暂停",
-    "draft": "草稿"
+    "draft": "草稿",
+    "completed": "已完成"
   },
   "parse": {
     "placeholder": "每天早上9点生成报告",
@@ -52,6 +54,8 @@
     "createTitle": "创建计划任务",
     "editTitle": "编辑计划任务",
     "naturalLanguage": "描述任务",
+    "naturalLanguageEdit": "修改时间安排（可选）",
+    "naturalLanguageEditHint": "输入新的时间安排即可修改执行时间，例如「每天上午10点」。留空则保持当前安排。",
     "naturalLanguagePlaceholder": "例如：每天早上9点生成报告",
     "titleLabel": "任务名称",
     "titlePlaceholder": "输入任务名称",
@@ -71,7 +75,8 @@
     "dailyAt": "每天 {{time}}",
     "weekdaysAt": "工作日 {{time}}",
     "weeklyOn": "每周 {{days}} {{time}}",
-    "customCron": "自定义 Cron"
+    "customCron": "自定义 Cron",
+    "titleRequired": "请输入任务名称"
   },
   "toasts": {
     "createSuccess": "任务已创建",

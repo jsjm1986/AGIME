@@ -169,6 +169,13 @@ pub async fn run() -> Result<()> {
     #[cfg(feature = "desktop_harness_host")]
     {
         app_state.task_manager().await.resume_queued_tasks().await;
+
+        // Start the background scheduler that fires due scheduled tasks.
+        let scheduler_tz = std::env::var("AGIME_SCHEDULER_TIMEZONE")
+            .ok()
+            .filter(|tz| !tz.trim().is_empty())
+            .unwrap_or_else(|| "Asia/Shanghai".to_string());
+        crate::scheduled_tasks::routes::start_scheduler(app_state.clone(), scheduler_tz);
     }
 
     let cors = CorsLayer::new()

@@ -7,7 +7,7 @@ use crate::scheduled_tasks::models::{
     ScheduledTaskParseResult, ScheduledTaskScheduleConfig, ScheduledTaskScheduleMode,
     ScheduledTaskScheduleSpec, ScheduledTaskScheduleSpecKind,
 };
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -78,80 +78,12 @@ impl From<ScheduledTaskScheduleSpecKind> for ScheduledTaskKind {
 // Time parsing
 // ---------------------------------------------------------------------------
 
-fn _parse_hhmm(text: &str) -> Option<(u32, u32)> {
-    let text = text.trim();
-    for pattern in &["HH:MM", "H:MM", "HHMM", "HMM"] {
-        let digit_count = pattern.chars().filter(|&c| c == 'H').count();
-        let _sep_count = pattern.chars().filter(|c| *c != 'H').count();
-        let total = digit_count + pattern.len() - digit_count;
-        if text.len() != total {
-            continue;
-        }
-        let mut found = true;
-        let mut pos = 0_usize;
-        let chars: Vec<char> = pattern.chars().collect();
-        let text_chars: Vec<char> = text.chars().collect();
-        for (i, expected) in chars.iter().enumerate() {
-            let ch = text_chars[i];
-            match expected {
-                'H' => {
-                    if !ch.is_ascii_digit() {
-                        found = false;
-                        break;
-                    }
-                    pos += 1;
-                }
-                c => {
-                    if ch != *c {
-                        found = false;
-                        break;
-                    }
-                    pos += 1;
-                }
-            }
-        }
-        if found && text.len() == pos {
-            if digit_count == 4 {
-                let h1 = text_chars[0].to_digit(10)?;
-                let h2 = text_chars[1].to_digit(10)?;
-                let m1 = text_chars[2].to_digit(10)?;
-                let m2 = text_chars[3].to_digit(10)?;
-                let hour = h1 * 10 + h2;
-                let minute = m1 * 10 + m2;
-                if hour < 24 && minute < 60 {
-                    return Some((hour, minute));
-                }
-            } else if digit_count == 3 {
-                let h1 = text_chars[0].to_digit(10)?;
-                let h2 = text_chars[1].to_digit(10)?;
-                let m1 = text_chars[2].to_digit(10)?;
-                let hour = h1 * 10 + h2;
-                let minute = m1 * 10;
-                if hour < 24 && minute < 60 {
-                    return Some((hour, minute));
-                }
-            } else if digit_count == 2 {
-                let h1 = text_chars[0].to_digit(10)?;
-                let h2 = text_chars[1].to_digit(10)?;
-                let hour = h1;
-                let minute = h2 * 10;
-                if hour < 24 && minute < 60 {
-                    return Some((hour, minute));
-                }
-            }
-        }
-    }
-    None
-}
-
 fn parse_every_minutes(text: &str) -> Option<u32> {
     let patterns = [
         r"每(\d+)分钟",
         r"每(\d+)分钟执行",
         r"every\s*(\d+)\s*min",
         r"every\s*(\d+)\s*minutes?",
-        r"(\d+)\s*min",
-        r"(\d+)\s*minute",
         r"每(\d+)分钟一次",
         r"每(\d+)分钟执行一次",
     ];
@@ -175,8 +107,6 @@ fn parse_every_hours(text: &str) -> Option<u32> {
         r"每(\d+)小时执行",
         r"every\s*(\d+)\s*hour",
         r"every\s*(\d+)\s*hours?",
-        r"(\d+)\s*hour",
-        r"(\d+)\s*hours",
         r"每(\d+)小时一次",
         r"每(\d+)小时执行一次",
     ];
@@ -229,6 +159,53 @@ fn weekly_days_from_text(text: &str) -> Vec<String> {
                 days.push(value.to_string());
             }
         }
+    }
+
+    // Connected abbreviations like 周一三五 / 星期一三五 — a single 周/星期
+    // prefix followed by a run of day characters. The exact-phrase map above
+    // only catches the first day (周一), so the trailing days (三、五) are lost;
+    // walk the run explicitly here to recover them.
+    let day_char = |c: char| -> Option<&'static str> {
+        match c {
+            '一' | '1' => Some("1"),
+            '二' | '2' => Some("2"),
+            '三' | '3' => Some("3"),
+            '四' | '4' => Some("4"),
+            '五' | '5' => Some("5"),
+            '六' | '6' => Some("6"),
+            '日' | '天' | '0' => Some("0"),
+            _ => None,
+        }
+    };
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let prefix_len = if chars[i] == '周' {
+            1
+        } else if chars[i] == '星' && i + 1 < chars.len() && chars[i + 1] == '期' {
+            2
+        } else {
+            0
+        };
+        if prefix_len == 0 {
+            i += 1;
+            continue;
+        }
+        let mut j = i + prefix_len;
+        let mut matched = false;
+        while j < chars.len() {
+            match day_char(chars[j]) {
+                Some(v) => {
+                    if !days.contains(&v.to_string()) {
+                        days.push(v.to_string());
+                    }
+                    matched = true;
+                    j += 1;
+                }
+                None => break,
+            }
+        }
+        i = if matched { j } else { i + prefix_len };
     }
 
     // Group keywords — these cover multiple days, safe to match anywhere
@@ -334,9 +311,9 @@ fn parse_schedule_from_text(
                         every_hours: None,
                         daily_time: Some(time_str.clone()),
                         weekly_days: None,
-                        cron_expression: Some(format!("0 {} * * *", hour)),
+                        cron_expression: Some(format!("{} {} * * *", minute, hour)),
                     }),
-                    cron_expression: Some(format!("0 {} * * *", hour)),
+                    cron_expression: Some(format!("{} {} * * *", minute, hour)),
                     timezone: timezone.to_string(),
                 },
                 format!("每天 {:02}:{:02} 执行一次 ({})", hour, minute, timezone),
@@ -366,9 +343,9 @@ fn parse_schedule_from_text(
                     every_hours: None,
                     daily_time: Some(time_str.clone()),
                     weekly_days: Some(days),
-                    cron_expression: Some(format!("0 {} * * 1-5", hour)),
+                    cron_expression: Some(format!("{} {} * * 1-5", minute, hour)),
                 }),
-                cron_expression: Some(format!("0 {} * * 1-5", hour)),
+                cron_expression: Some(format!("{} {} * * 1-5", minute, hour)),
                 timezone: timezone.to_string(),
             },
             format!(
@@ -394,9 +371,9 @@ fn parse_schedule_from_text(
                     every_hours: None,
                     daily_time: Some(time_str.clone()),
                     weekly_days: Some(days),
-                    cron_expression: Some(format!("0 {} * * 0,6", hour)),
+                    cron_expression: Some(format!("{} {} * * 0,6", minute, hour)),
                 }),
-                cron_expression: Some(format!("0 {} * * 0,6", hour)),
+                cron_expression: Some(format!("{} {} * * 0,6", minute, hour)),
                 timezone: timezone.to_string(),
             },
             format!("每个周末 {:02}:{:02} 执行一次 ({})", hour, minute, timezone),
@@ -410,7 +387,7 @@ fn parse_schedule_from_text(
         let (hour, minute) = extract_time(text).unwrap_or((9, 0));
         let time_str = format!("{:02}:{:02}", hour, minute);
         let days_str = weekly_days.join(",");
-        let cron = format!("0 {} * * {}", hour, days_str);
+        let cron = format!("{} {} * * {}", minute, hour, days_str);
         let day_names = weekly_days
             .iter()
             .map(|d| match d.as_str() {
@@ -451,13 +428,12 @@ fn parse_schedule_from_text(
     // Tomorrow at HH:MM
     if text.contains("明天") || text.contains("tomorrow") {
         if let Some((hour, minute)) = extract_time(text) {
-            let tomorrow = now + chrono::Duration::days(1);
-            let fmt_str = format!("%Y-%m-%dT{hour:02}:{minute:02}:00Z");
-            let at_str = tomorrow.format(&fmt_str);
+            let tomorrow_date = (now + chrono::Duration::days(1)).date_naive();
+            let at_str = local_wallclock_to_utc_rfc3339(tomorrow_date, hour, minute, timezone);
             return (
                 ScheduledTaskScheduleSpec {
                     kind: ScheduledTaskScheduleSpecKind::OneShot,
-                    one_shot_at: Some(at_str.to_string()),
+                    one_shot_at: Some(at_str),
                     schedule_config: None,
                     cron_expression: None,
                     timezone: timezone.to_string(),
@@ -468,26 +444,9 @@ fn parse_schedule_from_text(
         }
     }
 
-    // One-shot at specific time
-    if text.contains("在") || text.contains("at") || text.contains("点") {
-        if let Some((hour, minute)) = extract_time(text) {
-            let fmt_str = format!("%Y-%m-%dT{hour:02}:{minute:02}:00Z");
-            let at_str = now.format(&fmt_str);
-            return (
-                ScheduledTaskScheduleSpec {
-                    kind: ScheduledTaskScheduleSpecKind::OneShot,
-                    one_shot_at: Some(at_str.to_string()),
-                    schedule_config: None,
-                    cron_expression: None,
-                    timezone: timezone.to_string(),
-                },
-                format!("{:02}:{:02} 执行一次 ({})", hour, minute, timezone),
-                warnings,
-            );
-        }
-    }
-
-    // Monthly on specific day at HH:MM
+    // Monthly on specific day at HH:MM. Checked BEFORE the one-shot branch:
+    // "每月15号上午9点" contains "点", which the one-shot branch would otherwise
+    // claim, collapsing a recurring monthly schedule into a single fire.
     let month_day_patterns = [
         r"每月(\d+)号",
         r"每月(\d+)日",
@@ -502,7 +461,7 @@ fn parse_schedule_from_text(
                     if let Ok(day) = m.as_str().parse::<u32>() {
                         if (1..=31).contains(&day) {
                             let (hour, minute) = extract_time(text).unwrap_or((9, 0));
-                            let cron = format!("0 {} {} * *", hour, day);
+                            let cron = format!("{} {} {} * *", minute, hour, day);
                             return (
                                 ScheduledTaskScheduleSpec {
                                     kind: ScheduledTaskScheduleSpecKind::Calendar,
@@ -531,6 +490,39 @@ fn parse_schedule_from_text(
         }
     }
 
+    // One-shot at specific time
+    if text.contains("在") || text.contains("at") || text.contains("点") {
+        if let Some((hour, minute)) = extract_time(text) {
+            // Interpret the wall-clock in the task timezone. If that time has
+            // already passed today, roll to tomorrow so a one-shot fires.
+            let tz: Option<chrono_tz::Tz> = timezone.parse().ok();
+            let base_date = tz
+                .map(|tz| now.with_timezone(&tz).date_naive())
+                .unwrap_or_else(|| now.date_naive());
+            let at_str = local_wallclock_to_utc_rfc3339(base_date, hour, minute, timezone);
+            let at_str = match chrono::DateTime::parse_from_rfc3339(&at_str) {
+                Ok(dt) if dt.with_timezone(&Utc) <= now => local_wallclock_to_utc_rfc3339(
+                    base_date + chrono::Duration::days(1),
+                    hour,
+                    minute,
+                    timezone,
+                ),
+                _ => at_str,
+            };
+            return (
+                ScheduledTaskScheduleSpec {
+                    kind: ScheduledTaskScheduleSpecKind::OneShot,
+                    one_shot_at: Some(at_str),
+                    schedule_config: None,
+                    cron_expression: None,
+                    timezone: timezone.to_string(),
+                },
+                format!("{:02}:{:02} 执行一次 ({})", hour, minute, timezone),
+                warnings,
+            );
+        }
+    }
+
     // No schedule detected — low confidence
     warnings.push("未检测到明确的执行时间，请尝试描述「每天几点」或「每几分钟」。".to_string());
     (
@@ -546,22 +538,48 @@ fn parse_schedule_from_text(
     )
 }
 
+/// Build an RFC3339 (UTC) timestamp for a local wall-clock time on a target
+/// date, interpreting `hour:minute` in `timezone`. Falls back to treating the
+/// wall-clock as UTC if the timezone can't be parsed or the local time is
+/// ambiguous/nonexistent (DST edges).
+fn local_wallclock_to_utc_rfc3339(
+    date: chrono::NaiveDate,
+    hour: u32,
+    minute: u32,
+    timezone: &str,
+) -> String {
+    let naive = match date.and_hms_opt(hour, minute, 0) {
+        Some(n) => n,
+        None => return format!("{}T{:02}:{:02}:00Z", date, hour, minute),
+    };
+    if let Ok(tz) = timezone.parse::<chrono_tz::Tz>() {
+        if let chrono::LocalResult::Single(local) = tz.from_local_datetime(&naive) {
+            return local
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        }
+    }
+    format!("{}T{:02}:{:02}:00Z", date, hour, minute)
+}
+
 fn extract_time(text: &str) -> Option<(u32, u32)> {
-    // Chinese patterns with offset — offset is the minimum valid hour for that time-of-day.
-    // We add the offset only when h1 < offset (i.e., the hour is below the valid range).
-    // This handles both "下午3点" (3 < 12 → 3+12=15) and "下午8点" (8 < 12 → 8+12=20).
+    // Chinese time-of-day prefixes. `offset` is added to a bare hour only when
+    // `h1 < offset`, i.e. the stated hour is in the 12-hour (PM) range and must
+    // be promoted to 24-hour. AM-style periods use offset 0 (hour already 0-23).
+    // The third flag marks night periods where "12点" means midnight (00:00)
+    // rather than noon, per the 12-hour clock convention (12 AM = 00:00).
     let chinese_patterns = [
-        (r"早上(\d{1,2})点(\d{1,2})?", 0), // morning: 0-11, hour is already correct
-        (r"上午(\d{1,2})点(\d{1,2})?", 0), // forenoon: 0-11, hour is already correct
-        (r"中午(\d{1,2})点(\d{1,2})?", 11), // midday: add 12 only if hour <= 11 (e.g., "中午12点" → 12, not 24)
-        (r"下午(\d{1,2})点(\d{1,2})?", 12), // afternoon: add 12 only if hour < 12 (so 3→15, 8→20)
-        (r"晚上(\d{1,2})点(\d{1,2})?", 18), // evening: hour is already correct (18-23), bare "20点" falls here
-        (r"凌晨(\d{1,2})点(\d{1,2})?", 3),  // dawn: 0-6, hour is already correct
-        (r"傍晚(\d{1,2})点(\d{1,2})?", 17), // dusk: 17-23, hour is already correct
-        (r"深夜(\d{1,2})点(\d{1,2})?", 22), // late night: 22-23, hour is already correct
-        (r"(\d{1,2})点(\d{1,2})?", 0),      // bare hour: add offset only if hour < valid_range_min
+        (r"早上(\d{1,2})点(\d{1,2})?", 0, false), // morning 早上9点 → 9
+        (r"上午(\d{1,2})点(\d{1,2})?", 0, false), // forenoon 上午11点 → 11
+        (r"凌晨(\d{1,2})点(\d{1,2})?", 0, true),  // pre-dawn 凌晨3点 → 3, 凌晨12点 → 0
+        (r"中午(\d{1,2})点(\d{1,2})?", 12, false), // midday 中午12点 → 12, 中午1点 → 13
+        (r"下午(\d{1,2})点(\d{1,2})?", 12, false), // afternoon 下午3点 → 15, 下午12点 → 12
+        (r"晚上(\d{1,2})点(\d{1,2})?", 12, true), // evening 晚上8点 → 20, 晚上12点 → 0
+        (r"傍晚(\d{1,2})点(\d{1,2})?", 12, true), // dusk 傍晚6点 → 18
+        (r"深夜(\d{1,2})点(\d{1,2})?", 12, true), // late night 深夜11点 → 23, 深夜12点 → 0
+        (r"(\d{1,2})点(\d{1,2})?", 0, false),     // bare hour: take as-is
     ];
-    for (pattern, offset) in &chinese_patterns {
+    for (pattern, offset, twelve_is_midnight) in &chinese_patterns {
         if let Ok(re) = regex::Regex::new(pattern) {
             if let Some(caps) = re.captures(text) {
                 let h1: u32 = caps.get(1)?.as_str().parse::<u32>().ok()?;
@@ -569,8 +587,39 @@ fn extract_time(text: &str) -> Option<(u32, u32)> {
                     .get(2)
                     .and_then(|m: regex::Match<'_>| m.as_str().parse::<u32>().ok())
                     .unwrap_or(0);
-                let hour = if h1 < *offset { h1 + offset } else { h1 };
+                let hour = if h1 == 12 && *twelve_is_midnight {
+                    0
+                } else if h1 < *offset {
+                    h1 + offset
+                } else {
+                    h1
+                };
                 if hour < 24 && m1 < 60 {
+                    return Some((hour, m1));
+                }
+            }
+        }
+    }
+
+    // English am/pm, e.g. "9am", "at 9 am", "9:30pm", "12am" (midnight),
+    // "12pm" (noon). Checked before bare HH:MM so "9am" isn't missed.
+    let ampm_patterns = [r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)"];
+    for pattern in &ampm_patterns {
+        if let Ok(re) = regex::Regex::new(pattern) {
+            if let Some(caps) = re.captures(text) {
+                let h1: u32 = caps.get(1)?.as_str().parse::<u32>().ok()?;
+                let m1: u32 = caps
+                    .get(2)
+                    .and_then(|m: regex::Match<'_>| m.as_str().parse::<u32>().ok())
+                    .unwrap_or(0);
+                let is_pm = caps.get(3).map(|m| m.as_str() == "pm").unwrap_or(false);
+                if (1..=12).contains(&h1) && m1 < 60 {
+                    let hour = match (h1, is_pm) {
+                        (12, false) => 0,    // 12am → 00:00
+                        (12, true) => 12,    // 12pm → 12:00
+                        (h, false) => h,     // 1am..11am
+                        (h, true) => h + 12, // 1pm..11pm
+                    };
                     return Some((hour, m1));
                 }
             }
@@ -611,7 +660,7 @@ fn infer_title(prompt: &str) -> String {
         r"(?:帮我?|请)?汇报[一下]?(?:以下)?(.+)",
         r"(?:帮我?|请)?提供[一下]?(?:以下)?(.+)",
         r"(?:帮我?|请)?提取[一下]?(?:以下)?(.+)",
-        r"每天[早中晚]?(?:上中下午)?(.+)",
+        r"每天[早中晚]?[上中下午]?(.+)",
         r"每小时(.+)",
         r"每分钟(.+)",
         r"每周(.+)",
@@ -829,5 +878,158 @@ mod tests {
     fn test_confidence_for_missing_schedule() {
         let result = parse_scheduled_task_text("帮我整理文件", Some("Asia/Shanghai"), None);
         assert!(result.confidence < 0.7);
+    }
+
+    #[test]
+    fn test_daily_cron_preserves_minute() {
+        let result =
+            parse_scheduled_task_text("每天早上9点30分生成报告", Some("Asia/Shanghai"), None);
+        let config = result.schedule_spec.schedule_config.as_ref().unwrap();
+        // minute must be preserved in the cron, not flattened to 0.
+        assert_eq!(config.cron_expression.as_deref(), Some("30 9 * * *"));
+        assert_eq!(config.daily_time.as_deref(), Some("09:30"));
+    }
+
+    #[test]
+    fn test_weekdays_cron_preserves_minute() {
+        let result =
+            parse_scheduled_task_text("工作日早上8:30汇报进展", Some("Asia/Shanghai"), None);
+        let config = result.schedule_spec.schedule_config.as_ref().unwrap();
+        assert_eq!(config.cron_expression.as_deref(), Some("30 8 * * 1-5"));
+    }
+
+    #[test]
+    fn test_evening_8pm_promotes_to_20() {
+        // "晚上8点" must become 20:00, not overflow to 26 (which previously
+        // failed the < 24 check and returned None).
+        assert_eq!(extract_time("晚上8点"), Some((20, 0)));
+    }
+
+    #[test]
+    fn test_pre_dawn_1am_stays_1() {
+        // "凌晨1点" is 01:00, not 04:00.
+        assert_eq!(extract_time("凌晨1点"), Some((1, 0)));
+    }
+
+    #[test]
+    fn test_dusk_6pm_promotes_to_18() {
+        assert_eq!(extract_time("傍晚6点"), Some((18, 0)));
+    }
+
+    #[test]
+    fn test_midday_12_stays_12() {
+        assert_eq!(extract_time("中午12点"), Some((12, 0)));
+    }
+
+    #[test]
+    fn test_midnight_12_at_night_is_zero() {
+        // 12 in night periods is midnight (00:00), not noon, per 12-hour clock.
+        assert_eq!(extract_time("晚上12点"), Some((0, 0)));
+        assert_eq!(extract_time("凌晨12点"), Some((0, 0)));
+        assert_eq!(extract_time("深夜12点"), Some((0, 0)));
+    }
+
+    #[test]
+    fn test_afternoon_12_stays_noon() {
+        // 下午12点 stays 12:00 (not promoted to 24, not midnight).
+        assert_eq!(extract_time("下午12点"), Some((12, 0)));
+    }
+
+    #[test]
+    fn test_bare_duration_words_do_not_trigger_every_minutes() {
+        // "30 minutes" buried in prose with an explicit daily time must parse as
+        // a daily schedule, not "every 30 minutes".
+        let result = parse_scheduled_task_text(
+            "summarize the last 30 minutes every day at 9am",
+            Some("Asia/Shanghai"),
+            None,
+        );
+        let config = result.schedule_spec.schedule_config.unwrap();
+        assert_ne!(config.mode, ScheduledTaskScheduleMode::EveryMinutes);
+    }
+
+    #[test]
+    fn test_monthly_not_shadowed_by_one_shot() {
+        // "每月15号上午9点" contains "点"; the monthly branch must win over the
+        // one-shot branch and produce a recurring Calendar schedule.
+        let result =
+            parse_scheduled_task_text("每月15号上午9点生成月度报告", Some("Asia/Shanghai"), None);
+        assert_eq!(
+            result.schedule_spec.kind,
+            ScheduledTaskScheduleSpecKind::Calendar
+        );
+        let config = result.schedule_spec.schedule_config.as_ref().unwrap();
+        assert_eq!(config.cron_expression.as_deref(), Some("0 9 15 * *"));
+    }
+
+    #[test]
+    fn test_english_9am() {
+        assert_eq!(extract_time("every day at 9am"), Some((9, 0)));
+    }
+
+    #[test]
+    fn test_english_3pm() {
+        assert_eq!(extract_time("daily at 3pm"), Some((15, 0)));
+    }
+
+    #[test]
+    fn test_english_930pm() {
+        assert_eq!(extract_time("9:30pm"), Some((21, 30)));
+    }
+
+    #[test]
+    fn test_english_12am_is_midnight() {
+        assert_eq!(extract_time("12am"), Some((0, 0)));
+    }
+
+    #[test]
+    fn test_english_12pm_is_noon() {
+        assert_eq!(extract_time("12pm"), Some((12, 0)));
+    }
+
+    #[test]
+    fn test_english_daily_9am_builds_schedule() {
+        // English schedules must now reach a real Calendar schedule instead of
+        // falling through to the low-confidence fallback.
+        let result =
+            parse_scheduled_task_text("every day at 9am send me a summary", Some("UTC"), None);
+        assert_eq!(
+            result.schedule_spec.kind,
+            ScheduledTaskScheduleSpecKind::Calendar
+        );
+        let config = result.schedule_spec.schedule_config.as_ref().unwrap();
+        assert_eq!(config.cron_expression.as_deref(), Some("0 9 * * *"));
+    }
+
+    #[test]
+    fn test_connected_weekday_abbreviation() {
+        // "每周一三五" must resolve all of Mon/Wed/Fri, not just Monday.
+        let days = weekly_days_from_text("每周一三五下午3点汇报");
+        assert!(days.contains(&"1".to_string()));
+        assert!(days.contains(&"3".to_string()));
+        assert!(days.contains(&"5".to_string()));
+    }
+
+    #[test]
+    fn test_connected_weekday_still_handles_single() {
+        let days = weekly_days_from_text("每周二开会");
+        assert_eq!(days, vec!["2".to_string()]);
+    }
+
+    #[test]
+    fn test_one_shot_tomorrow_converts_local_to_utc() {
+        // 明天9点 in Asia/Shanghai (UTC+8) must serialize as 01:00Z, not 09:00Z.
+        let result =
+            parse_scheduled_task_text("明天早上9点提醒我开会", Some("Asia/Shanghai"), None);
+        assert_eq!(
+            result.schedule_spec.kind,
+            ScheduledTaskScheduleSpecKind::OneShot
+        );
+        let at = result.schedule_spec.one_shot_at.as_deref().unwrap();
+        let parsed = chrono::DateTime::parse_from_rfc3339(at).unwrap();
+        assert_eq!(
+            parsed.with_timezone(&Utc).format("%H:%M").to_string(),
+            "01:00"
+        );
     }
 }

@@ -1,17 +1,20 @@
 //! Background scheduler for scheduled tasks.
 //!
 //! Runs a tick loop that claims due tasks via lease-based concurrency
-//! and spawns async task runs. Self-evaluation loop retries on score < 75.
+//! and spawns async task runs.
 
 use crate::scheduled_tasks::models::{
-    ScheduledTaskDoc, ScheduledTaskExecutionContract, ScheduledTaskKind, ScheduledTaskRunDoc,
-    ScheduledTaskRunOutcomeReason, ScheduledTaskRunStatus, ScheduledTaskSelfEvaluation,
-    ScheduledTaskSelfEvaluationGrade,
+    ScheduledTaskDoc, ScheduledTaskKind, ScheduledTaskRunDoc, ScheduledTaskRunOutcomeReason,
+    ScheduledTaskRunStatus,
 };
 use crate::scheduled_tasks::service::ScheduledTaskService;
-use anyhow::Result;
+use crate::state::AppState;
+use agime::agents::{AgentEvent, SessionConfig};
+use agime::conversation::message::Message;
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use croner::Cron;
+use futures::StreamExt;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -47,50 +50,19 @@ pub fn compute_next_fire_at(task: &ScheduledTaskDoc, timezone: &str) -> Option<D
 }
 
 // ---------------------------------------------------------------------------
-// Self-evaluation
-// ---------------------------------------------------------------------------
-
-fn _grade_from_score(score: i32) -> ScheduledTaskSelfEvaluationGrade {
-    match score {
-        90..=100 => ScheduledTaskSelfEvaluationGrade::Excellent,
-        75..=89 => ScheduledTaskSelfEvaluationGrade::Good,
-        60..=74 => ScheduledTaskSelfEvaluationGrade::Acceptable,
-        40..=59 => ScheduledTaskSelfEvaluationGrade::Weak,
-        _ => ScheduledTaskSelfEvaluationGrade::Failed,
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Run completion classification
 // ---------------------------------------------------------------------------
 
 fn classify_run_completion(
     status: ScheduledTaskRunStatus,
-    self_eval: Option<&ScheduledTaskSelfEvaluation>,
     error: Option<&str>,
 ) -> ScheduledTaskRunOutcomeReason {
     match status {
         ScheduledTaskRunStatus::Completed => {
             if error.is_some() {
                 ScheduledTaskRunOutcomeReason::CompletedWithWarnings
-            } else if self_eval
-                .map(|e| e.grade == ScheduledTaskSelfEvaluationGrade::Excellent)
-                .unwrap_or(false)
-            {
-                ScheduledTaskRunOutcomeReason::Completed
-            } else if self_eval
-                .map(|e| {
-                    matches!(
-                        e.grade,
-                        ScheduledTaskSelfEvaluationGrade::Good
-                            | ScheduledTaskSelfEvaluationGrade::Acceptable
-                    )
-                })
-                .unwrap_or(false)
-            {
-                ScheduledTaskRunOutcomeReason::Completed
             } else {
-                ScheduledTaskRunOutcomeReason::CompletedWithWarnings
+                ScheduledTaskRunOutcomeReason::Completed
             }
         }
         ScheduledTaskRunStatus::Failed => {
@@ -111,19 +83,13 @@ fn classify_run_completion(
 // Scheduler loop
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
-const DEFAULT_LEASE_SECS: i64 = 120;
-#[allow(dead_code)]
+const DEFAULT_LEASE_SECS: i64 = 600;
 const DEFAULT_TICK_INTERVAL_SECS: u64 = 5;
-#[allow(dead_code)]
-const SELF_EVALUATION_THRESHOLD: i32 = 75;
-#[allow(dead_code)]
-const MAX_IMPROVEMENT_LOOPS: i32 = 3;
 
 /// Spawn the background scheduler loop.
 /// Returns a `JoinHandle` so the caller can manage lifecycle.
-#[allow(dead_code)]
 pub fn spawn_scheduler_loop(
+    state: Arc<AppState>,
     service: Arc<ScheduledTaskService>,
     timezone: String,
 ) -> tokio::task::JoinHandle<()> {
@@ -132,6 +98,11 @@ pub fn spawn_scheduler_loop(
         let tick_interval = Duration::from_secs(DEFAULT_TICK_INTERVAL_SECS);
         loop {
             tokio::time::sleep(tick_interval).await;
+            // Reconcile orphaned runs first: a run left Running by a crash or a
+            // failed finish_run would otherwise block its task from re-claiming.
+            if let Err(e) = service.reclaim_stale_runs() {
+                eprintln!("scheduler: reclaim_stale_runs error: {}", e);
+            }
             let due = match service.claim_due_tasks(&lease_owner, DEFAULT_LEASE_SECS) {
                 Ok(tasks) => tasks,
                 Err(e) => {
@@ -140,10 +111,12 @@ pub fn spawn_scheduler_loop(
                 }
             };
             for task in due {
+                let st = state.clone();
                 let svc = service.clone();
                 let tz = timezone.clone();
+                let owner = lease_owner.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = run_task(svc, task, tz).await {
+                    if let Err(e) = run_task(st, svc, task, tz, owner).await {
                         eprintln!("scheduler: run_task error: {}", e);
                     }
                 });
@@ -152,24 +125,26 @@ pub fn spawn_scheduler_loop(
     })
 }
 
-/// Run a single task: execute, self-evaluate, retry if needed, record.
-#[allow(dead_code)]
+/// Run a single task: execute the LLM turn, record the run, advance the
+/// schedule (and terminate one-shot tasks so they don't re-fire).
 pub async fn run_task(
+    state: Arc<AppState>,
     service: Arc<ScheduledTaskService>,
     task: ScheduledTaskDoc,
     timezone: String,
+    lease_owner: String,
 ) -> Result<()> {
     let task_id = task.task_id.clone();
     let agent_id = task.agent_id.clone();
     let prompt = task.prompt.clone();
-    let exec_contract = task.execution_contract.clone();
 
     // Create run record
     let run_id = Uuid::new_v4().to_string();
+    let session_id = format!("scheduled-task::{}::{}", task_id, run_id);
     let run = ScheduledTaskRunDoc {
         run_id: run_id.clone(),
         task_id: task_id.clone(),
-        runtime_session_id: None,
+        runtime_session_id: Some(session_id.clone()),
         fire_message_id: None,
         status: ScheduledTaskRunStatus::Running,
         outcome_reason: None,
@@ -186,174 +161,155 @@ pub async fn run_task(
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
-    let run = service.create_run(run)?;
+    service.create_run(run)?;
 
-    // Execute task (placeholder — desktop runtime integration point)
-    let result = execute_task_run(&agent_id, &prompt, &exec_contract).await;
+    // Execute the real LLM turn through the desktop harness.
+    let result = execute_task_run(&state, &agent_id, &prompt, &session_id).await;
 
-    // Determine outcome
-    let (status, error, summary, self_eval, warnings) = match result {
-        Ok(result) => {
-            let mut warnings = 0;
-            let self_eval = result.self_evaluation.clone();
-            let score = self_eval.as_ref().map(|e| e.score).unwrap_or(100);
-            if score < SELF_EVALUATION_THRESHOLD {
-                warnings = 1;
-            }
-            (
-                ScheduledTaskRunStatus::Completed,
-                result.error,
-                result.summary,
-                self_eval,
-                warnings,
-            )
-        }
-        Err(e) => {
-            let err_msg = e.to_string();
-            (ScheduledTaskRunStatus::Failed, Some(err_msg), None, None, 0)
-        }
+    let (status, error, summary) = match result {
+        Ok(outcome) => (
+            ScheduledTaskRunStatus::Completed,
+            outcome.error,
+            outcome.summary,
+        ),
+        Err(e) => (ScheduledTaskRunStatus::Failed, Some(e.to_string()), None),
     };
 
-    // Self-evaluation retry loop
-    let mut final_status = status;
-    let mut final_summary = summary;
-    let mut final_error = error;
-    let mut final_self_eval = self_eval;
-    let mut improvement_count = 0;
-    let mut run_doc = run;
+    let outcome_reason = Some(classify_run_completion(status, error.as_deref()));
 
-    while final_self_eval
-        .as_ref()
-        .map(|e| e.score < SELF_EVALUATION_THRESHOLD)
-        .unwrap_or(false)
-        && improvement_count < MAX_IMPROVEMENT_LOOPS
-    {
-        improvement_count += 1;
-        run_doc.improvement_loop_applied = true;
-        run_doc.improvement_loop_count = improvement_count;
+    // Persist the run terminal state. If this fails the run is still recorded
+    // as Running on disk; do NOT advance the schedule, or the task's
+    // next_fire_at/lease would move forward while the run record stays
+    // inconsistent. The stale-run reclaimer transitions the orphaned Running
+    // record to Failed, and the task is re-claimed on a later tick.
+    if let Err(e) = service.finish_run(&run_id, status, outcome_reason, summary, error) {
+        eprintln!("scheduler: finish_run error for {}: {}", run_id, e);
+        return Err(anyhow!("finish_run failed for {}: {}", run_id, e));
+    }
 
-        // Retry execution with feedback
-        let retry_result =
-            retry_with_feedback(&agent_id, &prompt, &exec_contract, final_self_eval.as_ref()).await;
-
-        match retry_result {
-            Ok(retry_outcome) => {
-                if let Some(ref eval) = retry_outcome.self_evaluation {
-                    if eval.score >= SELF_EVALUATION_THRESHOLD {
-                        final_status = ScheduledTaskRunStatus::Completed;
-                        final_summary = retry_outcome.summary;
-                        final_error = retry_outcome.error;
-                        final_self_eval = retry_outcome.self_evaluation;
-                        break;
-                    }
-                }
-                final_summary = retry_outcome.summary;
-                final_error = retry_outcome.error;
-                final_self_eval = retry_outcome.self_evaluation;
-            }
-            Err(e) => {
-                final_status = ScheduledTaskRunStatus::Failed;
-                final_error = Some(e.to_string());
-                break;
+    // Advance the schedule. One-shot tasks terminate; cron tasks roll forward.
+    match task.task_kind {
+        ScheduledTaskKind::OneShot => {
+            service.complete_task(&task_id, &run_id, &lease_owner)?;
+        }
+        ScheduledTaskKind::Cron => {
+            // Prefer the task's own timezone; fall back to the scheduler default.
+            let tz = if task.timezone.trim().is_empty() {
+                timezone.as_str()
+            } else {
+                task.timezone.as_str()
+            };
+            let next_fire = compute_next_fire_at(&task, tz);
+            if next_fire.is_none() {
+                // Cron/timezone failed to parse — pause the task instead of
+                // leaving a stale past next_fire_at that re-fires every tick.
+                eprintln!(
+                    "scheduler: task {} has no computable next fire; pausing",
+                    task_id
+                );
+                service.pause_stalled_task(&task_id, &run_id, &lease_owner)?;
+            } else {
+                // `missed` is always false: missed-fire detection (comparing the
+                // expected vs. actual fire time after downtime/lease backlog) is
+                // not wired up yet, so the counter stays at zero.
+                service.record_task_run(&task_id, run_id, next_fire, false, &lease_owner)?;
             }
         }
     }
 
-    // Update run record
-    let outcome_reason = Some(classify_run_completion(
-        final_status,
-        final_self_eval.as_ref(),
-        final_error.as_deref(),
-    ));
-    let mut final_run = run_doc;
-    final_run.status = final_status;
-    final_run.summary = final_summary.clone();
-    final_run.error = final_error.clone();
-    final_run.self_evaluation = final_self_eval.clone();
-    final_run.warning_count = warnings;
-    final_run.outcome_reason = outcome_reason;
-    final_run.finished_at = Some(Utc::now());
-    final_run.updated_at = Utc::now();
-
-    service
-        .complete_run(&run_id, final_run.status, final_run.outcome_reason)
-        .ok();
-
-    // Compute next fire time and record
-    let next_fire = compute_next_fire_at(&task, &timezone);
-    service.record_task_run(&task_id, run_id, next_fire, false)?;
-
     Ok(())
 }
-
 // ---------------------------------------------------------------------------
-// Execution (desktop runtime integration point)
+// Execution (desktop runtime integration)
 // ---------------------------------------------------------------------------
 
 struct TaskExecutionOutcome {
     summary: Option<String>,
     error: Option<String>,
-    self_evaluation: Option<ScheduledTaskSelfEvaluation>,
 }
 
-/// Execute the task — desktop runtime integration point.
-/// In the full implementation this creates a runtime session and runs the LLM turn.
+/// Execute the task by running a real LLM turn through the desktop harness.
+///
+/// Mirrors [`crate::host_task_manager`]'s background-turn pattern: a dedicated
+/// agent keyed by the run's logical session id (so it doesn't contend with the
+/// foreground `/reply` session agent), driven by `execute_chat_host_with_mirror`
+/// to completion, accumulating the assistant text as the run summary.
 async fn execute_task_run(
+    state: &Arc<AppState>,
     _agent_id: &str,
-    _prompt: &str,
-    _contract: &ScheduledTaskExecutionContract,
+    prompt: &str,
+    session_id: &str,
 ) -> Result<TaskExecutionOutcome> {
-    // TODO: integrate with desktop runtime session creation
-    // This would:
-    // 1. Create a runtime session via the desktop harness
-    // 2. Submit the prompt with execution contract constraints
-    // 3. Collect the response and self-evaluation
-    Ok(TaskExecutionOutcome {
-        summary: Some("Task executed (placeholder)".to_string()),
-        error: None,
-        self_evaluation: Some(ScheduledTaskSelfEvaluation {
-            score: 85,
-            grade: ScheduledTaskSelfEvaluationGrade::Good,
-            goal_completion: 80,
-            result_quality: 85,
-            evidence_quality: 80,
-            execution_stability: 90,
-            contract_compliance: 90,
-            summary: "Placeholder execution completed successfully".to_string(),
-            completed_steps: vec![],
-            failed_steps: vec![],
-            risks: vec![],
-            confidence: 0.85,
-        }),
-    })
-}
+    let agent = state
+        .get_agent(session_id.to_string())
+        .await
+        .map_err(|e| anyhow!("failed to get agent for scheduled task: {}", e))?;
 
-/// Retry with self-evaluation feedback.
-#[allow(dead_code)]
-async fn retry_with_feedback(
-    _agent_id: &str,
-    _prompt: &str,
-    _contract: &ScheduledTaskExecutionContract,
-    _prior_eval: Option<&ScheduledTaskSelfEvaluation>,
-) -> Result<TaskExecutionOutcome> {
-    // TODO: integrate with desktop runtime for retry execution
+    let session_config = SessionConfig {
+        id: session_id.to_string(),
+        schedule_id: None,
+        max_turns: None,
+        retry_config: None,
+    };
+
+    let host = crate::desktop_harness_host::DesktopHarnessHost::new(state.clone());
+    let (control_tx, mut control_rx) =
+        tokio::sync::mpsc::channel::<agime::agents::HarnessControlEnvelope>(64);
+    // Drain control envelopes so the bounded channel never back-pressures the
+    // harness; scheduled tasks have no interactive control consumer.
+    let control_drain = tokio::spawn(async move { while control_rx.recv().await.is_some() {} });
+
+    let user_message = Message::user().with_text(prompt);
+
+    let stream_result = host
+        .execute_chat_host_with_mirror(
+            agent.clone(),
+            user_message,
+            session_config,
+            None,
+            control_tx,
+        )
+        .await;
+
+    let mut stream = match stream_result {
+        Ok(stream) => stream,
+        Err(e) => {
+            control_drain.abort();
+            let _ = state.agent_manager.remove_session(session_id).await;
+            return Err(anyhow!("harness host failed to start: {}", e));
+        }
+    };
+
+    let mut last_assistant_text: Option<String> = None;
+    let mut turn_error: Option<String> = None;
+    while let Some(next) = stream.next().await {
+        match next {
+            Ok(AgentEvent::Message(message)) => {
+                if message.role == rmcp::model::Role::Assistant {
+                    let text = message.as_concat_text();
+                    if !text.trim().is_empty() {
+                        last_assistant_text = Some(text);
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                turn_error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+
+    control_drain.abort();
+    let _ = state.agent_manager.remove_session(session_id).await;
+
+    if let Some(err) = turn_error {
+        return Err(anyhow!(err));
+    }
+
     Ok(TaskExecutionOutcome {
-        summary: Some("Retry executed (placeholder)".to_string()),
+        summary: last_assistant_text.map(|t| t.chars().take(2000).collect()),
         error: None,
-        self_evaluation: Some(ScheduledTaskSelfEvaluation {
-            score: 80,
-            grade: ScheduledTaskSelfEvaluationGrade::Good,
-            goal_completion: 75,
-            result_quality: 80,
-            evidence_quality: 75,
-            execution_stability: 85,
-            contract_compliance: 85,
-            summary: "Retry completed".to_string(),
-            completed_steps: vec![],
-            failed_steps: vec![],
-            risks: vec![],
-            confidence: 0.80,
-        }),
     })
 }
 
@@ -361,18 +317,20 @@ async fn retry_with_feedback(
 // Manual run trigger
 // ---------------------------------------------------------------------------
 
-/// Trigger a task run immediately (bypass scheduler).
+/// Trigger a task run immediately (bypass scheduler). Does not touch the
+/// task's schedule/lease — manual runs are independent of the fire cycle.
 pub async fn trigger_run_now(
+    state: Arc<AppState>,
     service: Arc<ScheduledTaskService>,
     task: ScheduledTaskDoc,
-    _timezone: String,
 ) -> Result<ScheduledTaskRunDoc> {
     let task_id = task.task_id.clone();
     let run_id = Uuid::new_v4().to_string();
+    let session_id = format!("scheduled-task::{}::{}", task_id, run_id);
     let run = ScheduledTaskRunDoc {
         run_id: run_id.clone(),
         task_id: task_id.clone(),
-        runtime_session_id: None,
+        runtime_session_id: Some(session_id.clone()),
         fire_message_id: None,
         status: ScheduledTaskRunStatus::Running,
         outcome_reason: None,
@@ -391,38 +349,27 @@ pub async fn trigger_run_now(
     };
     let run = service.create_run(run)?;
 
-    let result = execute_task_run(&task.agent_id, &task.prompt, &task.execution_contract).await;
+    let result = execute_task_run(&state, &task.agent_id, &task.prompt, &session_id).await;
 
-    let (status, error, summary, self_eval) = match result {
-        Ok(r) => (
-            ScheduledTaskRunStatus::Completed,
-            r.error,
-            r.summary,
-            r.self_evaluation,
-        ),
-        Err(e) => (
-            ScheduledTaskRunStatus::Failed,
-            Some(e.to_string()),
-            None,
-            None,
-        ),
+    let (status, error, summary) = match result {
+        Ok(r) => (ScheduledTaskRunStatus::Completed, r.error, r.summary),
+        Err(e) => (ScheduledTaskRunStatus::Failed, Some(e.to_string()), None),
     };
 
-    service.complete_run(
+    let outcome_reason = Some(classify_run_completion(status, error.as_deref()));
+    service.finish_run(
         &run_id,
         status,
-        Some(classify_run_completion(
-            status,
-            self_eval.as_ref(),
-            error.as_deref(),
-        )),
+        outcome_reason,
+        summary.clone(),
+        error.clone(),
     )?;
 
     let mut final_run = run;
     final_run.status = status;
     final_run.summary = summary;
     final_run.error = error;
-    final_run.self_evaluation = self_eval;
+    final_run.outcome_reason = outcome_reason;
     final_run.finished_at = Some(Utc::now());
     final_run.updated_at = Utc::now();
 

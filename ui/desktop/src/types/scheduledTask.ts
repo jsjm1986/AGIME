@@ -110,7 +110,7 @@ export interface ScheduledTaskExecutionContract {
   prefer_structured_sources?: boolean;
   allow_query_retry?: boolean;
   fallback_to_secondary_sources?: boolean;
-  required_sections: string[];
+  required_sections?: string[];
 }
 
 export interface ScheduledTaskScheduleSpec {
@@ -125,50 +125,57 @@ export interface ScheduledTaskScheduleSpec {
 // Document types (JSON-file backed)
 // ---------------------------------------------------------------------------
 
-/** Scheduled task summary for list views. */
+/**
+ * Scheduled task summary for list views.
+ * Mirrors Rust `ScheduledTaskSummaryResponse` (the serialized DTO), NOT the
+ * internal `ScheduledTaskDoc`. Fields marked optional use
+ * `skip_serializing_if = "Option::is_none"` on the backend, so they are absent
+ * (not null) when unset.
+ */
 export interface ScheduledTaskSummary {
   task_id: string;
-  title: string;
-  status: ScheduledTaskStatus;
-  task_kind: ScheduledTaskKind;
-  next_fire_at: string | null;
-  last_fire_at: string | null;
-  timezone: string;
-  created_at: string;
-}
-
-/** Full scheduled task document. */
-export interface ScheduledTaskDoc extends ScheduledTaskSummary {
-  owner_session_id?: string;
   agent_id: string;
-  prompt: string;
+  title: string;
+  task_kind: ScheduledTaskKind;
   task_profile: ScheduledTaskProfile;
   payload_kind: ScheduledTaskPayloadKind;
   session_binding: ScheduledTaskSessionBinding;
   delivery_plan: ScheduledTaskDeliveryPlanKind;
   execution_contract: ScheduledTaskExecutionContract;
   delivery_tier: ScheduledTaskDeliveryTier;
+  timezone: string;
+  status: ScheduledTaskStatus;
+  human_schedule: string;
+  schedule_config?: ScheduledTaskScheduleConfig;
   one_shot_at?: string;
   cron_expression?: string;
-  schedule_config?: ScheduledTaskScheduleConfig;
+  next_fire_at?: string;
+  next_fire_preview?: string;
+  last_fire_at?: string;
   last_run_id?: string;
+  owner_session_id?: string;
   last_expected_fire_at?: string;
   last_missed_at?: string;
   missed_fire_count: number;
-  lease_owner?: string;
-  lease_expires_at?: string;
+  can_resume: boolean;
+  resume_hint?: string;
+  created_at: string;
   updated_at: string;
 }
 
-/** Scheduled task run document. */
+/**
+ * Scheduled task run record. Mirrors Rust `ScheduledTaskRunResponse`.
+ * Note: the run DTO does NOT carry `created_at`/`updated_at` — only
+ * `started_at`/`finished_at`.
+ */
 export interface ScheduledTaskRun {
   run_id: string;
   task_id: string;
-  runtime_session_id?: string;
-  fire_message_id?: string;
   status: ScheduledTaskRunStatus;
   outcome_reason?: ScheduledTaskRunOutcomeReason;
   warning_count: number;
+  runtime_session_id?: string;
+  fire_message_id?: string;
   summary?: string;
   error?: string;
   self_evaluation?: ScheduledTaskSelfEvaluation;
@@ -178,35 +185,45 @@ export interface ScheduledTaskRun {
   trigger_source: string;
   started_at: string;
   finished_at?: string;
-  created_at: string;
-  updated_at: string;
 }
 
+/** Mirrors Rust `ScheduledTaskSelfEvaluation`. */
 export interface ScheduledTaskSelfEvaluation {
-  grade: ScheduledTaskSelfEvaluationGrade;
   score: number;
-  reasoning: string;
+  grade: ScheduledTaskSelfEvaluationGrade;
+  goal_completion: number;
+  result_quality: number;
+  evidence_quality: number;
+  execution_stability: number;
+  contract_compliance: number;
+  summary: string;
+  completed_steps?: string[];
+  failed_steps?: string[];
+  risks?: string[];
+  confidence: number;
 }
 
 // ---------------------------------------------------------------------------
 // Parse result
 // ---------------------------------------------------------------------------
 
-/** Result from natural language parsing. */
+/** Result from natural language parsing. Mirrors Rust `ScheduledTaskParseResult`. */
 export interface ScheduledTaskParseResult {
-  confidence: number;
-  ready_to_create: boolean;
-  task_kind: ScheduledTaskKind;
   title: string;
   prompt: string;
-  schedule_spec: ScheduledTaskScheduleSpec;
+  task_kind: ScheduledTaskKind;
   task_profile: ScheduledTaskProfile;
   payload_kind: ScheduledTaskPayloadKind;
   session_binding: ScheduledTaskSessionBinding;
   delivery_plan: ScheduledTaskDeliveryPlanKind;
+  schedule_spec: ScheduledTaskScheduleSpec;
   execution_contract: ScheduledTaskExecutionContract;
-  agent_id?: string;
+  human_schedule: string;
   warnings: string[];
+  advanced_mode: boolean;
+  confidence: number;
+  ready_to_create: boolean;
+  agent_id?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +318,11 @@ export interface ListRunsResponse {
   runs: ScheduledTaskRun[];
 }
 
-/** Full task detail with runs. */
-export interface ScheduledTaskDetail extends ScheduledTaskDoc {
+/**
+ * Full task detail with runs. Mirrors Rust `ScheduledTaskDetailResponse`,
+ * which flattens the summary fields and adds `prompt` + `runs`.
+ */
+export interface ScheduledTaskDetail extends ScheduledTaskSummary {
+  prompt: string;
   runs: ScheduledTaskRun[];
 }

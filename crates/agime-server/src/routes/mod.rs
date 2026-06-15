@@ -54,7 +54,7 @@ pub fn configure(state: Arc<crate::state::AppState>, secret_key: String) -> Rout
     #[cfg(feature = "desktop_harness_host")]
     let router = router
         .merge(tasks::routes(state.clone()))
-        .merge(routes::router(state.scheduled_task_service()));
+        .nest("/scheduled-tasks", routes::router(state.clone()));
 
     router
 }

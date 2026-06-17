@@ -33,6 +33,31 @@ import {
   describeHarnessEnvelope,
   harnessEnvelopeKind,
 } from '../utils/harnessControl';
+import { getConfigCompat } from '../utils/envCompat';
+import i18n from '../i18n';
+
+/**
+ * Read a positive-integer stream tuning value from config (AGIME_/GOOSE_
+ * prefixed), falling back to `fallback` when unset, non-numeric, or <= 0.
+ * Config values may arrive as strings (env vars) or numbers (appConfig), so we
+ * coerce and validate rather than trusting the raw type.
+ */
+function streamTuningMs(key: string, fallback: number): number {
+  const raw = getConfigCompat(key);
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// First-byte timeout: reply() resolved but the stream never produced its first
+// frame (the exact failure where a provider/gateway accepts a tool-bearing
+// streaming request and then returns nothing).
+const FIRST_BYTE_TIMEOUT_MS = streamTuningMs('STREAM_FIRST_BYTE_TIMEOUT_MS', 60_000);
+// Idle timeout: frames were flowing then stopped for too long. Reset on every
+// frame so legitimately long answers are never killed.
+const IDLE_TIMEOUT_MS = streamTuningMs('STREAM_IDLE_TIMEOUT_MS', 120_000);
+// Bound the underlying SSE client's reconnect attempts; without this it retries
+// connection failures forever with exponential backoff, swallowing the error.
+const MAX_RETRY_ATTEMPTS = streamTuningMs('STREAM_MAX_RETRY_ATTEMPTS', 2);
 
 export interface StreamState {
   messages: Message[];
@@ -196,6 +221,7 @@ class ChatStreamManager {
         },
         throwOnError: true,
         signal: abortController.signal,
+        sseMaxRetryAttempts: MAX_RETRY_ATTEMPTS,
       });
 
       await this.processStream(sessionId, stream, messages);
@@ -249,12 +275,36 @@ class ChatStreamManager {
   ): Promise<void> {
     let currentMessages = initialMessages;
 
+    // Guard against a provider that accepts the request but never streams (or
+    // stalls mid-stream): without this the `for await` below blocks forever,
+    // the chatState stays Streaming, and the UI spins indefinitely with no
+    // error. We arm a first-byte timeout before the loop and re-arm a (longer)
+    // idle timeout on every frame, so legitimately long answers keep the
+    // stream alive while a true stall is aborted and surfaced to the user.
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    const armTimeout = (ms: number, messageKey: 'firstByte' | 'idle') => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
+      timeoutTimer = setTimeout(() => {
+        // Cancel the underlying HTTP/SSE connection, then surface the timeout
+        // through the normal error path (resets to Idle, clears the spinner,
+        // shows a toast, deletes the controller).
+        this.abortControllers.get(sessionId)?.abort();
+        this.handleError(sessionId, i18n.t(`chat:timeout.${messageKey}`));
+      }, ms);
+    };
+
     try {
+      armTimeout(FIRST_BYTE_TIMEOUT_MS, 'firstByte');
       for await (const event of stream) {
         // Check if aborted
         if (!this.abortControllers.has(sessionId)) {
           return;
         }
+
+        // A frame arrived — reset the idle watchdog.
+        armTimeout(IDLE_TIMEOUT_MS, 'idle');
 
         switch (event.type) {
           case 'Message': {
@@ -367,6 +417,10 @@ class ChatStreamManager {
     } catch (error) {
       if (error instanceof Error && error.name !== 'AbortError') {
         this.handleError(sessionId, 'Stream error: ' + errorMessage(error));
+      }
+    } finally {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
       }
     }
   }

@@ -42,6 +42,12 @@ import { Recipe } from '../recipe';
 const CurrentModelContext = createContext<{ model: string; mode: string } | null>(null);
 export const useCurrentModelInfo = () => useContext(CurrentModelContext);
 
+// After this many seconds of an active (non-idle) chat state with no new
+// frame, show a gentle "taking longer than usual" hint above the spinner.
+// Kept below the stream first-byte timeout so the hint appears before the
+// stream is aborted outright.
+const SLOW_RESPONSE_HINT_SECONDS = 30;
+
 interface BaseChatProps {
   setChat: (chat: ChatType) => void;
   onMessageSubmit?: (message: string) => void;
@@ -127,6 +133,23 @@ function BaseChatContent({
       }, [])
       .reverse();
   }, [messages]);
+
+  // Surface a gentle "taking longer than usual" hint when an active turn shows
+  // no progress for a while. Resets whenever progress is observed (new
+  // frames change messages.length / harnessStatus) or the turn ends (Idle),
+  // so it only appears during a genuine stall, ahead of the hard timeout.
+  const [showSlowHint, setShowSlowHint] = useState(false);
+  useEffect(() => {
+    setShowSlowHint(false);
+    if (chatState === ChatState.Idle) {
+      return;
+    }
+    const timer = setTimeout(
+      () => setShowSlowHint(true),
+      SLOW_RESPONSE_HINT_SECONDS * 1000
+    );
+    return () => clearTimeout(timer);
+  }, [chatState, messages.length, harnessStatus]);
 
   useEffect(() => {
     if (!session || hasAutoSubmittedRef.current) {
@@ -398,9 +421,11 @@ function BaseChatContent({
               <LoadingAgime
                 chatState={chatState}
                 message={
-                  (messages.length > 0
-                    ? getThinkingMessage(messages[messages.length - 1])
-                    : undefined) ?? harnessStatus
+                  showSlowHint
+                    ? t('timeout.slowResponse')
+                    : (messages.length > 0
+                        ? getThinkingMessage(messages[messages.length - 1])
+                        : undefined) ?? harnessStatus
                 }
               />
             </div>

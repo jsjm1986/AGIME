@@ -178,6 +178,11 @@
     "waiting": "AGIME is waiting…",
     "compacting": "AGIME is compacting the conversation..."
   },
+  "timeout": {
+    "firstByte": "AGIME hasn't responded yet — the connection timed out. Please try again, or switch to a model that supports the requested tools.",
+    "idle": "AGIME stopped responding — the request was aborted after a long pause. Please try again.",
+    "slowResponse": "Taking longer than usual… you can keep waiting or press Stop to retry."
+  },
   "copyCode": "Copy code",
   "retrySavingImage": "Retry saving image",
   "mention": {

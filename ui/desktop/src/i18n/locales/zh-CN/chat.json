@@ -178,6 +178,11 @@
     "waiting": "AGIME 正在等待…",
     "compacting": "AGIME 正在压缩对话..."
   },
+  "timeout": {
+    "firstByte": "AGIME 长时间未响应，连接已超时。请重试，或改用支持当前所需工具的模型。",
+    "idle": "AGIME 停止响应，长时间无数据，请求已中止。请重试。",
+    "slowResponse": "响应时间偏长……可继续等待，或点击停止后重试。"
+  },
   "copyCode": "复制代码",
   "retrySavingImage": "重试保存图片",
   "mention": {

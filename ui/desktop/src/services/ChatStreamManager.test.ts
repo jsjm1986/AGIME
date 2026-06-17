@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Message, MessageEvent } from '../api';
 
 const replyMock = vi.fn();
@@ -13,7 +13,10 @@ vi.mock('react-toastify', () => ({
   toast: { error: vi.fn() },
 }));
 
+import { toast } from 'react-toastify';
 import { chatStreamManager, StreamState } from './ChatStreamManager';
+import { ChatState } from '../types/chatState';
+
 
 function controlEnvelope(channel: string, event: Record<string, unknown>) {
   return {
@@ -145,5 +148,114 @@ describe('ChatStreamManager', () => {
     const finalState = chatStreamManager.getState(sessionId);
     expect(finalState?.messages.length).toBe(1);
     expect(finalState?.messages[0].id).toBe('compacted');
+  });
+});
+
+describe('ChatStreamManager stream timeouts', () => {
+  beforeEach(() => {
+    replyMock.mockReset();
+    resumeAgentMock.mockReset();
+    (toast.error as ReturnType<typeof vi.fn>).mockClear();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A stream that yields the provided events then hangs forever on its next
+  // pull — models a provider that accepts the request and then stalls.
+  function hangingStreamAfter(events: MessageEvent[]): AsyncIterable<MessageEvent> {
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const e of events) {
+          yield e;
+        }
+        await new Promise<never>(() => {});
+      },
+    };
+  }
+
+  function startHangingStream(sessionId: string, events: MessageEvent[]) {
+    chatStreamManager.cleanup(sessionId);
+    let capturedSignal: AbortSignal | undefined;
+    replyMock.mockImplementationOnce((opts: { signal?: AbortSignal }) => {
+      capturedSignal = opts.signal;
+      return Promise.resolve({ stream: hangingStreamAfter(events) });
+    });
+    // Do not await: startStream resolves only once the stream ends, which a
+    // hanging stream never does without the timeout firing.
+    void chatStreamManager.startStream(sessionId, []);
+    return () => capturedSignal;
+  }
+
+  it('aborts and surfaces an error when no first byte arrives', async () => {
+    const sessionId = 'sess-first-byte-timeout';
+    const getSignal = startHangingStream(sessionId, []);
+
+    // Let startStream reach the for-await and arm the first-byte timer.
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(getSignal()?.aborted).toBe(true);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    const finalState = chatStreamManager.getState(sessionId);
+    expect(finalState?.chatState).toBe(ChatState.Idle);
+    expect(finalState?.error).toBeTruthy();
+  });
+
+  it('aborts on idle timeout after frames stop flowing', async () => {
+    const sessionId = 'sess-idle-timeout';
+    const getSignal = startHangingStream(sessionId, [
+      {
+        type: 'Message',
+        message: textMessage('m1', 'partial'),
+        token_state: undefined,
+      } as unknown as MessageEvent,
+    ]);
+
+    // The single frame resets the watchdog to the idle window; advance past it.
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(getSignal()?.aborted).toBe(true);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(chatStreamManager.getState(sessionId)?.chatState).toBe(ChatState.Idle);
+  });
+
+  it('does not fire a timeout for a normally completing stream', async () => {
+    const sessionId = 'sess-no-false-timeout';
+    chatStreamManager.cleanup(sessionId);
+    replyMock.mockResolvedValueOnce({
+      stream: streamOf([
+        {
+          type: 'Message',
+          message: textMessage('m1', 'hi'),
+          token_state: undefined,
+        } as unknown as MessageEvent,
+        { type: 'Finish' } as unknown as MessageEvent,
+      ]),
+    });
+
+    await chatStreamManager.startStream(sessionId, []);
+    // Advance well past both timeout windows; nothing should fire.
+    await vi.advanceTimersByTimeAsync(200_000);
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(chatStreamManager.getState(sessionId)?.chatState).toBe(ChatState.Idle);
+  });
+
+  it('passes a bounded sseMaxRetryAttempts to reply', async () => {
+    const sessionId = 'sess-retry-bound';
+    chatStreamManager.cleanup(sessionId);
+    replyMock.mockResolvedValueOnce({
+      stream: streamOf([{ type: 'Finish' } as unknown as MessageEvent]),
+    });
+
+    await chatStreamManager.startStream(sessionId, []);
+
+    const callArgs = replyMock.mock.calls[0][0] as {
+      sseMaxRetryAttempts?: number;
+    };
+    expect(typeof callArgs.sseMaxRetryAttempts).toBe('number');
+    expect(callArgs.sseMaxRetryAttempts).toBeGreaterThan(0);
   });
 });

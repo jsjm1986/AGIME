@@ -50,6 +50,7 @@ use agime::session::{SessionManager, SessionType};
 use anyhow::{Context, Result};
 use futures::stream::{BoxStream, StreamExt};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
@@ -101,6 +102,36 @@ fn resolve_budget(raw: Option<&str>, default: u32) -> Option<u32> {
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .unwrap_or(default);
     (value > 0).then_some(value)
+}
+
+/// Default desktop SSE idle ceiling. If the core harness streams no event for
+/// this long, the reply route aborts the turn and surfaces an error instead of
+/// spinning forever (a provider/gateway can accept a tool-bearing streaming
+/// request and then return nothing). Generous on purpose: it must clear a slow
+/// first token and quiet stretches during long local tool execution. Override
+/// with `AGIME_DESKTOP_STREAM_IDLE_TIMEOUT_SECS`; `0` disables the ceiling.
+pub const DEFAULT_STREAM_IDLE_TIMEOUT_SECS: u64 = 180;
+
+/// Read the desktop SSE idle ceiling (seconds) from the environment, falling
+/// back to [`DEFAULT_STREAM_IDLE_TIMEOUT_SECS`]. `0` (from either source)
+/// disables the ceiling.
+pub fn stream_idle_timeout_secs_from_env() -> u64 {
+    resolve_stream_idle_timeout(
+        std::env::var("AGIME_DESKTOP_STREAM_IDLE_TIMEOUT_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// Pure idle-timeout resolution, split out so it can be unit-tested without
+/// mutating process-wide environment state. An unparseable value falls back to
+/// the default so a typo can't silently disable the ceiling; an explicit `0`
+/// disables it.
+fn resolve_stream_idle_timeout(raw: Option<&str>) -> u64 {
+    match raw.map(str::trim) {
+        Some(s) if !s.is_empty() => s.parse::<u64>().unwrap_or(DEFAULT_STREAM_IDLE_TIMEOUT_SECS),
+        _ => DEFAULT_STREAM_IDLE_TIMEOUT_SECS,
+    }
 }
 
 /// Env flag (set-if-unset to `1` for desktop in `commands/agent.rs`) that
@@ -203,6 +234,35 @@ impl DesktopHarnessHost {
         cancel_token: Option<CancellationToken>,
         control_tx: mpsc::Sender<HarnessControlEnvelope>,
     ) -> Result<BoxStream<'static, Result<AgentEvent>>> {
+        // The handle-less variant: callers that don't need to forcibly reclaim
+        // the background harness task ignore the JoinHandle (the task ends on
+        // its own when the agent stream completes or the cancel token fires).
+        let (stream, _handle) = self
+            .execute_chat_host_with_mirror_handle(
+                agent,
+                user_message,
+                session_config,
+                cancel_token,
+                control_tx,
+            )
+            .await?;
+        Ok(stream)
+    }
+
+    /// Same as [`Self::execute_chat_host_with_mirror`] but also returns the
+    /// `JoinHandle` of the background task driving `run_harness_host`. The
+    /// desktop reply route uses this to `abort()` a turn that has stalled past
+    /// the idle ceiling, immediately dropping the hung core future (which is
+    /// parked on the provider SSE body) and releasing its connection. Callers
+    /// that don't need that reclaim should use the handle-less variant.
+    pub async fn execute_chat_host_with_mirror_handle(
+        &self,
+        agent: Arc<Agent>,
+        user_message: Message,
+        session_config: SessionConfig,
+        cancel_token: Option<CancellationToken>,
+        control_tx: mpsc::Sender<HarnessControlEnvelope>,
+    ) -> Result<(BoxStream<'static, Result<AgentEvent>>, JoinHandle<()>)> {
         let logical_session_id = session_config.id.clone();
 
         let logical_session = SessionManager::get_session(&logical_session_id, true)
@@ -299,8 +359,9 @@ impl DesktopHarnessHost {
         // finishes (success or error), the event_tx held inside the
         // event_sink Arc is dropped by the host's cleanup, which closes
         // the channel and lets the stream we hand back to the caller end
-        // cleanly.
-        drop(tokio::spawn(async move {
+        // cleanly. The returned handle lets the caller abort the task if the
+        // stream stalls past its idle ceiling.
+        let handle = tokio::spawn(async move {
             match run_harness_host(request, dependencies).await {
                 Ok(result) => {
                     tracing::info!(
@@ -313,10 +374,10 @@ impl DesktopHarnessHost {
                     tracing::warn!("DesktopHarnessHost: run_harness_host failed: {}", err);
                 }
             }
-        }));
+        });
 
         let stream = ReceiverStream::new(event_rx).map(Ok::<AgentEvent, anyhow::Error>);
-        Ok(stream.boxed())
+        Ok((stream.boxed(), handle))
     }
 }
 
@@ -337,9 +398,9 @@ fn collect_text(message: &Message) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        delegation_guidance_extras, resolve_budget, DEFAULT_PARALLELISM_BUDGET,
-        DEFAULT_SWARM_BUDGET, DELEGATION_GUIDANCE_RESTRAINT, DELEGATION_GUIDANCE_SUBAGENT,
-        DELEGATION_GUIDANCE_SWARM,
+        delegation_guidance_extras, resolve_budget, resolve_stream_idle_timeout,
+        DEFAULT_PARALLELISM_BUDGET, DEFAULT_STREAM_IDLE_TIMEOUT_SECS, DEFAULT_SWARM_BUDGET,
+        DELEGATION_GUIDANCE_RESTRAINT, DELEGATION_GUIDANCE_SUBAGENT, DELEGATION_GUIDANCE_SWARM,
     };
 
     #[test]
@@ -367,6 +428,39 @@ mod tests {
             Some(2)
         );
         assert_eq!(resolve_budget(Some(""), DEFAULT_SWARM_BUDGET), Some(2));
+    }
+
+    #[test]
+    fn resolve_idle_timeout_uses_default_when_unset() {
+        assert_eq!(
+            resolve_stream_idle_timeout(None),
+            DEFAULT_STREAM_IDLE_TIMEOUT_SECS
+        );
+    }
+
+    #[test]
+    fn resolve_idle_timeout_zero_disables() {
+        // An explicit 0 is honored (disables the ceiling), not treated as garbage.
+        assert_eq!(resolve_stream_idle_timeout(Some("0")), 0);
+    }
+
+    #[test]
+    fn resolve_idle_timeout_parses_override() {
+        assert_eq!(resolve_stream_idle_timeout(Some("30")), 30);
+        assert_eq!(resolve_stream_idle_timeout(Some("  300  ")), 300);
+    }
+
+    #[test]
+    fn resolve_idle_timeout_falls_back_on_garbage() {
+        // A typo must fall back to the default, never silently disable the ceiling.
+        assert_eq!(
+            resolve_stream_idle_timeout(Some("abc")),
+            DEFAULT_STREAM_IDLE_TIMEOUT_SECS
+        );
+        assert_eq!(
+            resolve_stream_idle_timeout(Some("")),
+            DEFAULT_STREAM_IDLE_TIMEOUT_SECS
+        );
     }
 
     #[test]

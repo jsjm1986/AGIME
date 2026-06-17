@@ -505,6 +505,12 @@ pub async fn reply(
             }
         };
 
+        // Harness task handle, populated only on the desktop_harness_host
+        // path, so the idle-timeout branch can abort a stalled core turn and
+        // release its provider connection. Unused on the fallback build.
+        #[cfg(feature = "desktop_harness_host")]
+        let mut harness_handle: Option<tokio::task::JoinHandle<()>> = None;
+
         let stream_result = {
             #[cfg(feature = "desktop_harness_host")]
             {
@@ -567,14 +573,25 @@ pub async fn reply(
                     }
                 }));
 
-                host.execute_chat_host_with_mirror(
-                    agent.clone(),
-                    user_message.clone(),
-                    session_config,
-                    Some(task_cancel.clone()),
-                    control_tx,
-                )
-                .await
+                let mirrored = host
+                    .execute_chat_host_with_mirror_handle(
+                        agent.clone(),
+                        user_message.clone(),
+                        session_config,
+                        Some(task_cancel.clone()),
+                        control_tx,
+                    )
+                    .await;
+                // Keep `stream_result` the same `Result<BoxStream>` shape as the
+                // fallback arm; stash the harness JoinHandle separately so the
+                // idle-timeout path below can abort a stalled core turn.
+                match mirrored {
+                    Ok((stream, handle)) => {
+                        harness_handle = Some(handle);
+                        Ok(stream)
+                    }
+                    Err(e) => Err(e),
+                }
             }
             #[cfg(not(feature = "desktop_harness_host"))]
             {
@@ -642,6 +659,21 @@ pub async fn reply(
         let mut all_messages = messages.clone();
         let mut first_message_sent = false;
 
+        // Desktop SSE idle watchdog: if the core harness streams no event for
+        // `idle_ceiling`, abort the turn and surface an error instead of
+        // spinning forever (a provider can accept a tool-bearing streaming
+        // request and then return nothing). Reset on every event so long
+        // answers and long local tool runs are never killed. `0s` disables it.
+        #[cfg(feature = "desktop_harness_host")]
+        let idle_ceiling =
+            Duration::from_secs(crate::desktop_harness_host::stream_idle_timeout_secs_from_env());
+        #[cfg(not(feature = "desktop_harness_host"))]
+        let idle_ceiling = Duration::from_secs(0);
+        let mut last_activity = std::time::Instant::now();
+        // Set when we break due to an error we already surfaced, so the normal
+        // post-loop `Finish` event is suppressed.
+        let mut errored = false;
+
         let mut heartbeat_interval = tokio::time::interval(Duration::from_millis(500));
         loop {
             tokio::select! {
@@ -653,6 +685,13 @@ pub async fn reply(
                     stream_event(MessageEvent::Ping, &tx, &cancel_token).await;
                 }
                 response = timeout(Duration::from_millis(500), stream.next()) => {
+                    // Any `Ok(_)` means the upstream future resolved (event,
+                    // stream error, or clean end) — i.e. the core harness is
+                    // alive — so reset the idle watchdog. Only `Err(_)` (the
+                    // 500ms poll timeout) leaves it ticking.
+                    if response.is_ok() {
+                        last_activity = std::time::Instant::now();
+                    }
                     match response {
                         Ok(Some(Ok(AgentEvent::Message(message)))) => {
                             if !first_message_sent {
@@ -701,6 +740,31 @@ pub async fn reply(
                         }
                         Err(_) => {
                             if tx.is_closed() {
+                                break;
+                            }
+                            if !idle_ceiling.is_zero() && last_activity.elapsed() >= idle_ceiling {
+                                tracing::warn!(
+                                    "desktop SSE idle timeout after {:?}; aborting stalled turn",
+                                    idle_ceiling
+                                );
+                                stream_event(
+                                    MessageEvent::Error {
+                                        error: "The model stopped responding (stream idle timeout). The request was aborted — please try again.".to_string(),
+                                    },
+                                    &tx,
+                                    &cancel_token,
+                                )
+                                .await;
+                                errored = true;
+                                // Signal the core turn to cancel, then forcibly
+                                // abort its background task so the hung future
+                                // (parked on the provider SSE body) is dropped
+                                // and its connection released.
+                                task_cancel.cancel();
+                                #[cfg(feature = "desktop_harness_host")]
+                                if let Some(handle) = harness_handle.as_ref() {
+                                    handle.abort();
+                                }
                                 break;
                             }
                             continue;
@@ -762,15 +826,20 @@ pub async fn reply(
 
         let final_token_state = get_token_state(&session_id).await;
 
-        let _ = stream_event(
-            MessageEvent::Finish {
-                reason: "stop".to_string(),
-                token_state: final_token_state,
-            },
-            &task_tx,
-            &cancel_token,
-        )
-        .await;
+        // Skip the normal Finish event if we already surfaced an error (e.g.
+        // idle timeout); the client treats Error as terminal, and a trailing
+        // Finish would be redundant/confusing.
+        if !errored {
+            let _ = stream_event(
+                MessageEvent::Finish {
+                    reason: "stop".to_string(),
+                    token_state: final_token_state,
+                },
+                &task_tx,
+                &cancel_token,
+            )
+            .await;
+        }
     }));
     Ok(SseResponse::new(stream))
 }

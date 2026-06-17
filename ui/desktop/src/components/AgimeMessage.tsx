@@ -22,6 +22,7 @@ import MessageCopyLink from './MessageCopyLink';
 import { cn } from '../utils';
 import { identifyConsecutiveToolCalls, shouldHideTimestamp } from '../utils/toolCallChaining';
 import { useThinkingVisibility } from '../contexts/ThinkingVisibilityContext';
+import { classifyProviderError } from '../utils/providerErrorHints';
 
 // Extract thinking content from message (Claude Extended Thinking)
 function getThinkingContent(message: Message): ThinkingContent | undefined {
@@ -137,6 +138,11 @@ export default function AgimeMessage({
   const displayText =
     imagePaths.length > 0 ? removeImagePathsFromText(visibleText, imagePaths) : visibleText;
 
+  // Detect known provider/model error text (rate limit, auth, context, timeout)
+  // surfaced verbatim in English, so we can show a localized, actionable hint
+  // above the raw message instead of leaving users to decode it.
+  const providerErrorHint = classifyProviderError(displayText);
+
   const timestamp = useMemo(
     () => formatMessageTimestamp(message.created, i18n.language),
     [message.created]
@@ -231,6 +237,16 @@ export default function AgimeMessage({
 
         {displayText && (
           <div className="flex flex-col group">
+            {providerErrorHint && (
+              <div className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                <div className="text-sm font-medium text-amber-600 dark:text-amber-400">
+                  {t(`errors:providerHints.${providerErrorHint}.title`)}
+                </div>
+                <div className="mt-0.5 text-xs text-text-muted">
+                  {t(`errors:providerHints.${providerErrorHint}.hint`)}
+                </div>
+              </div>
+            )}
             <div ref={contentRef} className="w-full">
               <MarkdownContent content={displayText} />
             </div>

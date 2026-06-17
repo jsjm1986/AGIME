@@ -32,5 +32,23 @@
   "reload": "Reload",
   "unknownError": "Unknown error",
   "pastedImage": "Pasted image",
-  "loading": "Loading..."
+  "loading": "Loading...",
+  "providerHints": {
+    "rateLimit": {
+      "title": "API rate limit or quota reached",
+      "hint": "The model provider rejected the request because too many requests were sent or the account's quota/credits are used up. Wait for the limit to reset, check your provider quota, or switch to a model with available capacity."
+    },
+    "auth": {
+      "title": "Authentication failed",
+      "hint": "The model provider rejected the credentials. Check that the API key is correct and still valid in Settings."
+    },
+    "contextLimit": {
+      "title": "Conversation too long for the model",
+      "hint": "The request exceeded the model's context window. Compact the conversation or start a new session, then try again."
+    },
+    "timeout": {
+      "title": "Provider timed out or is unreachable",
+      "hint": "The model provider didn't respond in time or the connection failed. Check your network and try again in a moment."
+    }
+  }
 }

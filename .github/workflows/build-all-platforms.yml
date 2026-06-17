@@ -162,6 +162,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -296,6 +297,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -374,6 +376,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -437,6 +440,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -513,6 +517,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -590,6 +595,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -666,6 +672,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -730,6 +737,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -807,6 +815,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -895,6 +904,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -973,6 +983,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -1046,6 +1057,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -1118,6 +1130,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -1196,6 +1209,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
@@ -1269,6 +1283,7 @@ jobs:
 
       - name: Update version (if specified)
         working-directory: ui/desktop
+        shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then

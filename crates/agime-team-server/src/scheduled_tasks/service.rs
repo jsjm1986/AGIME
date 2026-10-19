@@ -787,8 +787,10 @@ mod mongo_scheduler_regressions {
             .await
             .unwrap()
             .unwrap();
-        assert!(task.get("lease_owner").is_none()
-            || matches!(task.get("lease_owner"), Some(bson::Bson::Null)));
+        assert!(
+            task.get("lease_owner").is_none()
+                || matches!(task.get("lease_owner"), Some(bson::Bson::Null))
+        );
         db.db().drop(None).await.unwrap();
     }
 

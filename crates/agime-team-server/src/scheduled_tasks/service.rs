@@ -675,11 +675,11 @@ impl ScheduledTaskService {
     }
 }
 
+
 #[cfg(test)]
 mod mongo_scheduler_regressions {
     use super::*;
     use mongodb::bson::{doc, Document};
-    use serde_json::json;
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -697,7 +697,7 @@ mod mongo_scheduler_regressions {
     }
 
     fn task_document(task_id: &str, next_fire_at: bson::DateTime) -> Document {
-        bson::to_document(&json!({
+        doc! {
             "task_id": task_id, "team_id": "regression-team", "channel_id": "regression-channel",
             "owner_user_id": "regression-user", "agent_id": "regression-agent",
             "title": "lease regression", "prompt": "deterministic scheduler regression",
@@ -710,7 +710,7 @@ mod mongo_scheduler_regressions {
             "next_fire_at": next_fire_at, "missed_fire_count": 0,
             "lease_owner": null, "lease_expires_at": null,
             "created_at": next_fire_at, "updated_at": next_fire_at
-        })).expect("task fixture must serialize")
+        }
     }
 
     #[tokio::test]

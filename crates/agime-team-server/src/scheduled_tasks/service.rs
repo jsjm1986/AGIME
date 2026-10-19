@@ -675,8 +675,6 @@ impl ScheduledTaskService {
     }
 }
 
-
-
 #[cfg(test)]
 mod mongo_scheduler_regressions {
     use super::*;

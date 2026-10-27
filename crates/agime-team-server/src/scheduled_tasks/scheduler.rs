@@ -922,7 +922,8 @@ pub async fn start_task_run(
     let renewal_owner = lease_owner.clone();
     tokio::spawn(async move {
         let service = ScheduledTaskService::new(renewal_db);
-        let mut interval = tokio::time::interval(Duration::from_secs((LEASE_SECS / 3).max(1) as u64));
+        let mut interval =
+            tokio::time::interval(Duration::from_secs((LEASE_SECS / 3).max(1) as u64));
         loop {
             tokio::select! {
                 _ = lease_renewal_stop_for_task.cancelled() => break,

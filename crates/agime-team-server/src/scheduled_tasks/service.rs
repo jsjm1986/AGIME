@@ -431,11 +431,7 @@ impl ScheduledTaskService {
                 doc! {
                     "task_id": &task.task_id,
                     "team_id": &task.team_id,
-                    "$or": [
-                        { "lease_owner": release_owner },
-                        { "lease_owner": Bson::Null },
-                        { "lease_owner": { "$exists": false } }
-                    ],
+                    "lease_owner": release_owner,
                 },
                 doc! {
                     "$set": {
@@ -534,6 +530,36 @@ impl ScheduledTaskService {
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn renew_lease(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        lease_owner: &str,
+        lease_secs: i64,
+    ) -> Result<bool> {
+        let result = self
+            .tasks()
+            .update_one(
+                doc! {
+                    "team_id": team_id,
+                    "task_id": task_id,
+                    "lease_owner": lease_owner,
+                    "status": "active",
+                },
+                doc! {
+                    "$set": {
+                        "lease_expires_at": bson::DateTime::from_chrono(
+                            Utc::now() + chrono::Duration::seconds(lease_secs),
+                        ),
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(result.modified_count == 1)
     }
 
     pub async fn claim_due_tasks(

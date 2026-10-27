@@ -914,6 +914,51 @@ pub async fn start_task_run(
     let task_snapshot = task.clone();
     let run_id = run.run_id.clone();
     let trigger_source = trigger_source.to_string();
+    let lease_renewal_stop = CancellationToken::new();
+    let lease_renewal_stop_for_task = lease_renewal_stop.clone();
+    let renewal_db = db.clone();
+    let renewal_team_id = task.team_id.clone();
+    let renewal_task_id = task.task_id.clone();
+    let renewal_owner = lease_owner.clone();
+    tokio::spawn(async move {
+        let service = ScheduledTaskService::new(renewal_db);
+        let mut interval =
+            tokio::time::interval(Duration::from_secs((LEASE_SECS / 3).max(1) as u64));
+        loop {
+            tokio::select! {
+                _ = lease_renewal_stop_for_task.cancelled() => break,
+                _ = interval.tick() => {
+                    match service
+                        .renew_lease(
+                            &renewal_team_id,
+                            &renewal_task_id,
+                            &renewal_owner,
+                            LEASE_SECS,
+                        )
+                        .await
+                    {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            tracing::warn!(
+                                "scheduled task lease was lost during execution (task={}, owner={})",
+                                renewal_task_id,
+                                renewal_owner
+                            );
+                            break;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                "scheduled task lease renewal failed (task={}, owner={}): {}",
+                                renewal_task_id,
+                                renewal_owner,
+                                error
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    });
     tokio::spawn(async move {
         let exec_result = executor
             .execute_channel_message(request, cancel_token)
@@ -942,6 +987,7 @@ pub async fn start_task_run(
         let summary = session
             .as_ref()
             .and_then(|item| item.last_message_preview.clone());
+        lease_renewal_stop.cancel();
         let (status, outcome_reason, warning_count, summary, error) = classify_run_completion(
             &task_snapshot,
             status_text,

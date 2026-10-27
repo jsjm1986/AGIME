@@ -56,6 +56,18 @@ jobs:
     name: Build and Test Rust Project
     runs-on: ubuntu-latest
     needs: changes
+    env:
+      AGIME_TEST_MONGO_URI: mongodb://127.0.0.1:27017
+    services:
+      mongodb:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     steps:
       - name: Checkout Code
@@ -75,6 +87,7 @@ jobs:
         run: |
           gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
           export CARGO_INCREMENTAL=0
+          cargo test -p agime-team-server mongo_scheduler_regressions
           cargo test -- --skip scenario_tests::scenarios::tests
           cargo test --jobs 1 scenario_tests::scenarios::tests
         working-directory: crates

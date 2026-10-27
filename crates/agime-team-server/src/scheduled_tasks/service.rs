@@ -431,11 +431,7 @@ impl ScheduledTaskService {
                 doc! {
                     "task_id": &task.task_id,
                     "team_id": &task.team_id,
-                    "$or": [
-                        { "lease_owner": release_owner },
-                        { "lease_owner": Bson::Null },
-                        { "lease_owner": { "$exists": false } }
-                    ],
+                    "lease_owner": release_owner,
                 },
                 doc! {
                     "$set": {
@@ -534,6 +530,36 @@ impl ScheduledTaskService {
             )
             .await?;
         Ok(())
+    }
+
+    pub async fn renew_lease(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        lease_owner: &str,
+        lease_secs: i64,
+    ) -> Result<bool> {
+        let result = self
+            .tasks()
+            .update_one(
+                doc! {
+                    "team_id": team_id,
+                    "task_id": task_id,
+                    "lease_owner": lease_owner,
+                    "status": "active",
+                },
+                doc! {
+                    "$set": {
+                        "lease_expires_at": bson::DateTime::from_chrono(
+                            Utc::now() + chrono::Duration::seconds(lease_secs),
+                        ),
+                        "updated_at": bson::DateTime::now(),
+                    }
+                },
+                None,
+            )
+            .await?;
+        Ok(result.modified_count == 1)
     }
 
     pub async fn claim_due_tasks(
@@ -672,5 +698,175 @@ impl ScheduledTaskService {
             expired.push(task);
         }
         Ok(expired)
+    }
+}
+
+#[cfg(test)]
+mod mongo_scheduler_regressions {
+    use super::*;
+    use mongodb::bson::{doc, Document};
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    fn mongo_uri() -> String {
+        std::env::var("AGIME_TEST_MONGO_URI")
+            .unwrap_or_else(|_| "mongodb://127.0.0.1:27017".to_string())
+    }
+
+    async fn test_database() -> Arc<MongoDb> {
+        let uri = mongo_uri();
+        let db_name = format!("agime_scheduler_regression_{}", Uuid::new_v4().simple());
+        MongoDb::connect(&uri, &db_name)
+            .await
+            .map(Arc::new)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "MongoDB regression tests require a reachable disposable MongoDB at {uri}: {error}"
+                )
+            })
+    }
+
+    fn task_document(task_id: &str, next_fire_at: bson::DateTime) -> Document {
+        doc! {
+            "task_id": task_id,
+            "team_id": "regression-team",
+            "channel_id": "regression-channel",
+            "owner_user_id": "regression-user",
+            "agent_id": "regression-agent",
+            "title": "lease regression",
+            "prompt": "deterministic scheduler regression",
+            "task_kind": "one_shot",
+            "task_profile": "workspace_task",
+            "payload_kind": "system_summary",
+            "session_binding": "isolated_task",
+            "delivery_plan": "channel_only",
+            "execution_contract": {
+                "output_mode": "summary_only",
+                "must_return_final_text": true,
+                "allow_partial_result": true,
+                "publish_behavior": "none",
+                "source_scope": "workspace_only",
+                "required_sections": []
+            },
+            "delivery_tier": "durable",
+            "timezone": "UTC",
+            "status": "active",
+            "next_fire_at": next_fire_at,
+            "missed_fire_count": 0,
+            "lease_owner": null,
+            "lease_expires_at": null,
+            "created_at": next_fire_at,
+            "updated_at": next_fire_at
+        }
+    }
+
+    #[tokio::test]
+    async fn claim_is_atomic_and_stale_release_is_fenced() {
+        let db = test_database().await;
+        let service = ScheduledTaskService::new(db.clone());
+        let now = bson::DateTime::from_chrono(Utc::now() - chrono::Duration::seconds(1));
+        let task_id = format!("task-{}", Uuid::new_v4());
+        db.collection::<Document>("chat_channels")
+            .insert_one(doc! { "channel_id": "regression-channel" }, None)
+            .await
+            .unwrap();
+        db.collection::<Document>("scheduled_tasks")
+            .insert_one(task_document(&task_id, now), None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service
+                .claim_due_tasks(Utc::now(), "owner-a", 120, 1)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(service
+            .claim_due_tasks(Utc::now(), "owner-b", 120, 1)
+            .await
+            .unwrap()
+            .is_empty());
+
+        service
+            .release_lease("regression-team", &task_id, "owner-b")
+            .await
+            .unwrap();
+        let task = db
+            .collection::<Document>("scheduled_tasks")
+            .find_one(doc! { "task_id": &task_id }, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.get_str("lease_owner").unwrap(), "owner-a");
+
+        service
+            .release_lease("regression-team", &task_id, "owner-a")
+            .await
+            .unwrap();
+        let task = db
+            .collection::<Document>("scheduled_tasks")
+            .find_one(doc! { "task_id": &task_id }, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            task.get("lease_owner").is_none()
+                || matches!(task.get("lease_owner"), Some(bson::Bson::Null))
+        );
+        db.db().drop(None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_completion_cannot_clear_current_lease() {
+        let db = test_database().await;
+        let service = ScheduledTaskService::new(db.clone());
+        let now = bson::DateTime::from_chrono(Utc::now() - chrono::Duration::seconds(1));
+        let task_id = format!("task-{}", Uuid::new_v4());
+        db.collection::<Document>("chat_channels")
+            .insert_one(doc! { "channel_id": "regression-channel" }, None)
+            .await
+            .unwrap();
+        db.collection::<Document>("scheduled_tasks")
+            .insert_one(task_document(&task_id, now), None)
+            .await
+            .unwrap();
+
+        let task = service
+            .claim_due_tasks(Utc::now(), "owner-a", 120, 1)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        let run = service
+            .create_run(&task, "scheduler", "message-1", "session-1", None)
+            .await
+            .unwrap();
+        service
+            .complete_run(
+                &task,
+                &run.run_id,
+                ScheduledTaskRunStatus::Completed,
+                Some(ScheduledTaskRunOutcomeReason::Completed),
+                0,
+                Some("done".to_string()),
+                None,
+                None,
+                None,
+                "owner-b",
+            )
+            .await
+            .unwrap();
+
+        let task = db
+            .collection::<Document>("scheduled_tasks")
+            .find_one(doc! { "task_id": &task_id }, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.get_str("lease_owner").unwrap(), "owner-a");
+        assert_eq!(task.get_str("status").unwrap(), "active");
+        db.db().drop(None).await.unwrap();
     }
 }
